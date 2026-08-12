@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AVM Recorder</string>
+    <string name="fgs_channel_name">AVM Recorder background service</string>
+    <string name="fgs_notification_title">AVM Recorder is active</string>
+    <string name="fgs_notification_text">Background recording service is running</string>
+</resources>

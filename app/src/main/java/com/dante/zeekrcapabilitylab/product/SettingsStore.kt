@@ -1,0 +1,226 @@
+package com.dante.zeekrcapabilitylab.product
+
+import android.content.Context
+import android.content.SharedPreferences
+
+/**
+ * Product-level recorder and four-lane calibration settings for the V2 UI.
+ * Persisted in SharedPreferences; every getter falls back to safe defaults so a
+ * corrupted/partial prefs file can never produce an invalid recorder config.
+ */
+class SettingsStore private constructor(private val prefs: SharedPreferences) {
+
+    companion object {
+        private const val PREFS = "zeekr_product_settings_v2"
+
+        const val SEGMENT_1_MIN = 60
+        const val SEGMENT_2_MIN = 120
+        const val SEGMENT_3_MIN = 180
+
+        const val STORAGE_5_GB = 5L * 1024L * 1024L * 1024L
+        const val STORAGE_10_GB = 10L * 1024L * 1024L * 1024L
+        const val STORAGE_15_GB = 15L * 1024L * 1024L * 1024L
+        const val STORAGE_30_GB = 30L * 1024L * 1024L * 1024L
+
+        const val RESERVE_10_GB = 10L * 1024L * 1024L * 1024L
+        const val RESERVE_20_GB = 20L * 1024L * 1024L * 1024L
+        const val RESERVE_30_GB = 30L * 1024L * 1024L * 1024L
+
+        const val KEY_SEGMENT_SECONDS = "segment_seconds"
+        const val KEY_STORAGE_LIMIT_BYTES = "storage_limit_bytes"
+        const val KEY_MIN_FREE_BYTES = "min_free_bytes"
+        const val KEY_AUTO_CLEANUP = "auto_cleanup"
+        const val KEY_PREVIEW_WHILE_RECORDING = "preview_while_recording_beta2"
+        const val KEY_AUTO_START_RECORDING = "auto_start_recording"
+        const val KEY_LANE_ORDER = "lane_order"
+        const val KEY_LANE_ROTATIONS = "lane_rotations"
+        const val KEY_LANE_LABELS = "lane_labels"
+        const val KEY_CALIBRATED = "lane_calibrated"
+        const val KEY_LENS_MODE = "four_lane_lens_mode"
+        const val KEY_CORRECTION_FOV = "fisheye_correction_fov"
+        const val KEY_CORRECTION_ZOOM = "fisheye_correction_zoom"
+        const val KEY_CORRECTION_CENTER_X = "fisheye_correction_center_x"
+        const val KEY_CORRECTION_CENTER_Y = "fisheye_correction_center_y"
+
+        val SEGMENT_OPTIONS = listOf(SEGMENT_1_MIN, SEGMENT_2_MIN, SEGMENT_3_MIN)
+        val STORAGE_OPTIONS = listOf(STORAGE_5_GB, STORAGE_10_GB, STORAGE_15_GB, STORAGE_30_GB)
+        val RESERVE_OPTIONS = listOf(RESERVE_10_GB, RESERVE_20_GB, RESERVE_30_GB)
+
+        private val DEFAULT_LABELS_ZH = listOf("视角1", "视角2", "视角3", "视角4")
+        private val DEFAULT_LABELS_EN = listOf("View 1", "View 2", "View 3", "View 4")
+        private val CALIBRATED_LABELS_ZH = listOf("前", "后", "左", "右")
+        private val CALIBRATED_LABELS_EN = listOf("Front", "Rear", "Left", "Right")
+
+        @Volatile
+        private var instance: SettingsStore? = null
+
+        fun init(context: Context): SettingsStore {
+            return instance ?: synchronized(this) {
+                instance ?: SettingsStore(
+                    context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE),
+                ).also { instance = it }
+            }
+        }
+
+        fun get(context: Context): SettingsStore = init(context)
+    }
+
+    val segmentSeconds: Int
+        get() = prefs.getInt(KEY_SEGMENT_SECONDS, SEGMENT_1_MIN)
+            .let { if (it in SEGMENT_OPTIONS) it else SEGMENT_1_MIN }
+
+    val storageLimitBytes: Long
+        get() = prefs.getLong(KEY_STORAGE_LIMIT_BYTES, STORAGE_15_GB)
+            .let { if (it in STORAGE_OPTIONS) it else STORAGE_15_GB }
+
+    val minFreeBytes: Long
+        get() = prefs.getLong(KEY_MIN_FREE_BYTES, RESERVE_20_GB)
+            .let { if (it in RESERVE_OPTIONS) it else RESERVE_20_GB }
+
+    val autoCleanupEnabled: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CLEANUP, true)
+
+    val previewWhileRecordingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PREVIEW_WHILE_RECORDING, true)
+
+    val autoStartRecordingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_START_RECORDING, false)
+
+    /** Display order: slot i shows source lane [laneOrder[i]] (1-based). */
+    val laneOrder: List<Int>
+        get() {
+            val raw = prefs.getString(KEY_LANE_ORDER, null)
+                ?.split(",")
+                ?.mapNotNull { it.trim().toIntOrNull() }
+            val valid = raw != null && raw.size == 4 && raw.toSet() == setOf(1, 2, 3, 4)
+            return if (valid) raw else listOf(1, 2, 3, 4)
+        }
+
+    /** Per-slot rotation (0/90/180/270). Stored in the same display order as [laneOrder]. */
+    val laneRotations: List<Int>
+        get() {
+            val raw = prefs.getString(KEY_LANE_ROTATIONS, null)
+                ?.split(",")
+                ?.mapNotNull { it.trim().toIntOrNull() }
+            val valid = raw != null && raw.size == 4 && raw.all { it % 90 == 0 }
+            return if (valid) raw.map { ((it % 360) + 360) % 360 } else listOf(0, 0, 0, 0)
+        }
+
+    /** Per-slot labels. Before calibration the generic 视角1-4 names are used. */
+    val laneLabels: List<String>
+        get() {
+            val raw = prefs.getString(KEY_LANE_LABELS, null)
+                ?.split("\u001F")
+            if (raw != null && raw.size == 4 && raw.all { it.isNotBlank() }) return raw
+            val chinese = AppLanguage.usesChinese()
+            return if (calibrated) {
+                if (chinese) CALIBRATED_LABELS_ZH else CALIBRATED_LABELS_EN
+            } else {
+                if (chinese) DEFAULT_LABELS_ZH else DEFAULT_LABELS_EN
+            }
+        }
+
+    val calibrated: Boolean
+        get() = prefs.getBoolean(KEY_CALIBRATED, false)
+
+    /** Product display preference only; recorded MP4 data is never altered. */
+    val lensMode: FourLaneLensMode
+        get() = prefs.getString(KEY_LENS_MODE, null)
+            ?.let { stored ->
+                runCatching { FourLaneLensMode.valueOf(stored) }.getOrNull()
+            }
+            ?: FourLaneLensMode.FISHEYE
+
+    val fisheyeCorrection: FisheyeCorrectionConfig
+        get() = FisheyeCorrectionConfig(
+            targetFovDegrees = prefs.getFloat(
+                KEY_CORRECTION_FOV,
+                FisheyeCorrectionConfig.DEFAULT_FOV_DEGREES,
+            ),
+            cropZoom = prefs.getFloat(
+                KEY_CORRECTION_ZOOM,
+                FisheyeCorrectionConfig.DEFAULT_CROP_ZOOM,
+            ),
+            centerX = prefs.getFloat(
+                KEY_CORRECTION_CENTER_X,
+                FisheyeCorrectionConfig.DEFAULT_CENTER_X,
+            ),
+            centerY = prefs.getFloat(
+                KEY_CORRECTION_CENTER_Y,
+                FisheyeCorrectionConfig.DEFAULT_CENTER_Y,
+            ),
+        ).sanitized()
+
+    fun setSegmentSeconds(value: Int) {
+        if (value in SEGMENT_OPTIONS) prefs.edit().putInt(KEY_SEGMENT_SECONDS, value).apply()
+    }
+
+    fun setStorageLimitBytes(value: Long) {
+        if (value in STORAGE_OPTIONS) prefs.edit().putLong(KEY_STORAGE_LIMIT_BYTES, value).apply()
+    }
+
+    fun setMinFreeBytes(value: Long) {
+        if (value in RESERVE_OPTIONS) prefs.edit().putLong(KEY_MIN_FREE_BYTES, value).apply()
+    }
+
+    fun setAutoCleanupEnabled(value: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_CLEANUP, value).apply()
+    }
+
+    fun setPreviewWhileRecordingEnabled(value: Boolean) {
+        prefs.edit().putBoolean(KEY_PREVIEW_WHILE_RECORDING, value).apply()
+    }
+
+    fun setAutoStartRecordingEnabled(value: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_START_RECORDING, value).apply()
+    }
+
+    fun setLensMode(value: FourLaneLensMode) {
+        prefs.edit().putString(KEY_LENS_MODE, value.name).apply()
+    }
+
+    fun setFisheyeCorrection(value: FisheyeCorrectionConfig) {
+        val safe = value.sanitized()
+        prefs.edit()
+            .putFloat(KEY_CORRECTION_FOV, safe.targetFovDegrees)
+            .putFloat(KEY_CORRECTION_ZOOM, safe.cropZoom)
+            .putFloat(KEY_CORRECTION_CENTER_X, safe.centerX)
+            .putFloat(KEY_CORRECTION_CENTER_Y, safe.centerY)
+            .apply()
+    }
+
+    fun resetFisheyeCorrection() {
+        prefs.edit()
+            .remove(KEY_CORRECTION_FOV)
+            .remove(KEY_CORRECTION_ZOOM)
+            .remove(KEY_CORRECTION_CENTER_X)
+            .remove(KEY_CORRECTION_CENTER_Y)
+            .apply()
+    }
+
+    /** Saves an explicit order/labels/rotations tuple and marks calibration done. */
+    fun saveCalibration(order: List<Int>, labels: List<String>, rotations: List<Int>) {
+        if (order.size != 4 || order.toSet() != setOf(1, 2, 3, 4)) return
+        if (labels.size != 4 || labels.any { it.isBlank() }) return
+        if (rotations.size != 4 || rotations.any { it % 90 != 0 }) return
+        prefs.edit()
+            .putString(KEY_LANE_ORDER, order.joinToString(","))
+            .putString(KEY_LANE_LABELS, labels.joinToString("\u001F"))
+            .putString(KEY_LANE_ROTATIONS, rotations.joinToString(","))
+            .putBoolean(KEY_CALIBRATED, true)
+            .apply()
+    }
+
+    fun resetCalibration() {
+        prefs.edit()
+            .remove(KEY_LANE_ORDER)
+            .remove(KEY_LANE_ROTATIONS)
+            .remove(KEY_LANE_LABELS)
+            .putBoolean(KEY_CALIBRATED, false)
+            .apply()
+    }
+
+    /** Display label for display slot 0..3. */
+    fun laneLabel(slot: Int): String =
+        laneLabels.getOrElse(slot) { "视角${slot + 1}" }
+}

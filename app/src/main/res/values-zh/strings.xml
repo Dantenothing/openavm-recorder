@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AVM Recorder</string>
+    <string name="fgs_channel_name">AVM Recorder 后台服务</string>
+    <string name="fgs_notification_title">AVM Recorder 正在运行</string>
+    <string name="fgs_notification_text">后台录像服务正在运行</string>
+</resources>
