@@ -595,9 +595,7 @@ class RecorderSession(
                     return
                 }
                 val outputs = if (preview != null) listOf(surface, preview) else listOf(surface)
-                device.createCaptureSession(
-                    outputs,
-                    object : CameraCaptureSession.StateCallback() {
+                val sessionCallback = object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
                             if (!ownsSetup(generation, partial, recorder)) {
                                 closeQuietlySession(session)
@@ -683,11 +681,33 @@ class RecorderSession(
                                 failSegmentStart(generation, partial, "RECORD_SESSION_CONFIGURE_FAILED")
                             }
                         }
-                    },
-                    cameraHandler,
-                )
+                    }
+                // An abandoned preview Surface (its TextureView was destroyed
+                // after a tab switch) makes createCaptureSession throw
+                // synchronously even though Surface.isValid still reported
+                // true. That must degrade to recording-only, never kill the
+                // segment.
+                try {
+                    device.createCaptureSession(outputs, sessionCallback, cameraHandler)
+                } catch (t: Throwable) {
+                    if (preview != null) {
+                        fallbackToRecorderOnly(
+                            generation = generation,
+                            partial = partial,
+                            recorder = recorder,
+                            reason = t.message ?: "PREVIEW_SESSION_CREATE_FAILED",
+                        ) { configureSession(includePreview = false) }
+                    } else {
+                        failSegmentStart(generation, partial, t.message ?: "capture session create failed")
+                    }
+                }
             }
-            configureSession(includePreview = recordingPreviewSurface != null)
+            configureSession(
+                includePreview = SegmentPreviewPolicy.includeInNewSession(
+                    previewConfigured = recordingPreviewSurface != null,
+                    previewDesired = previewOutputDesired,
+                ),
+            )
         } catch (t: Throwable) {
             failSegmentStart(generation, partial, t.message ?: "recorder prepare failed")
         }

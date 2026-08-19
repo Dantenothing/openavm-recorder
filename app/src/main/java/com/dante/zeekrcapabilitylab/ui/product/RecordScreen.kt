@@ -134,7 +134,17 @@ fun RecordScreen() {
     val serviceRunning = CameraRecordingService.isRunning()
 
     DisposableEffect(previewController) {
-        onDispose { previewController.release() }
+        previewController.onRecorderPreviewSurfaceDestroyed = {
+            CameraRecordingService.setPreviewOutputEnabled(context, false)
+        }
+        onDispose {
+            // The screen leaving composition tears the TextureView down, so the
+            // recorder must stop targeting the handed-off Surface; harmless
+            // no-op when the service is idle. Ordering with the texture
+            // callback is not guaranteed, so both paths disable defensively.
+            CameraRecordingService.setPreviewOutputEnabled(context, false)
+            previewController.release()
+        }
     }
 
     LaunchedEffect(

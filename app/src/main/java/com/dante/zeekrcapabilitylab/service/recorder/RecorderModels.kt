@@ -199,6 +199,18 @@ object SegmentGuardPolicy {
     ): Boolean = generation == currentGeneration && currentPartial === partial
 }
 
+/**
+ * A NEW capture session may include the recording preview output only while a
+ * preview surface is configured AND the preview is currently desired. Building
+ * a session around a surface the UI no longer wants (its TextureView may
+ * already be destroyed, which Surface.isValid does not reliably report) fails
+ * with "Surface was abandoned" at the next segment boundary.
+ */
+object SegmentPreviewPolicy {
+    fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean): Boolean =
+        previewConfigured && previewDesired
+}
+
 /** Bookmark protection must survive sidecar enrichment: merge existing + snapshot flags. */
 object SidecarProtectionPolicy {
     fun effectiveProtected(existingProtected: Boolean?, snapshotProtected: Boolean): Boolean =

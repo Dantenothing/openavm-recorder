@@ -70,6 +70,13 @@ class SafeManualPreviewController(context: Context) {
     private var openWatchdog: Runnable? = null
     private var sessionWatchdog: Runnable? = null
 
+    /**
+     * Invoked when a TextureView whose SurfaceTexture was handed to the
+     * recorder is destroyed (for example on a tab switch). The recorder must
+     * stop targeting that Surface before its next capture request or segment.
+     */
+    var onRecorderPreviewSurfaceDestroyed: (() -> Unit)? = null
+
     /** Attaches the proven ordinary TextureView path. Does not auto-start Camera2. */
     fun attach(view: TextureView) {
         if (released) return
@@ -91,9 +98,11 @@ class SafeManualPreviewController(context: Context) {
 
             override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
                 if (textureView === view) {
+                    val recorderLosesPreview = recorderSurfaceHandedOff
                     recorderSurfaceHandedOff = false
                     stopPreview()
                     textureView = null
+                    if (recorderLosesPreview) onRecorderPreviewSurfaceDestroyed?.invoke()
                 }
                 return true
             }
