@@ -27,6 +27,9 @@ object CrashHandler {
                     throwable.message ?: throwable.javaClass.name,
                     throwable,
                 )
+                // Event writes are asynchronous; give the writer a bounded chance
+                // to persist the final events before the process dies.
+                EventLogger.flushBlocking(500L)
             } catch (t: Throwable) {
                 // Never interfere with the crash flow.
             } finally {
