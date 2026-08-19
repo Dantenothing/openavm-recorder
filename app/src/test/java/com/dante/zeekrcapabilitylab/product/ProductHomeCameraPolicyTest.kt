@@ -39,7 +39,24 @@ class ProductHomeCameraPolicyTest {
             ),
         )
         assertTrue(ProductHomeCameraPolicy.cameraAccessAllowed(ProductHomeCameraPolicy.TRIGGER_AUTO_PREVIEW))
+        assertFalse(
+            ProductHomeCameraPolicy.cameraAccessAllowed(
+                ProductHomeCameraPolicy.TRIGGER_AUTO_START_RECORDING,
+            ),
+        )
         assertFalse(ProductHomeCameraPolicy.cameraAccessAllowed(""))
+    }
+
+    @Test
+    fun openingTheAppNeverStartsARecordingSession() {
+        val recordScreen =
+            File("src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt").readText()
+        val settingsScreen =
+            File("src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt").readText()
+
+        assertFalse(recordScreen.contains("autoStartRecordingEnabled"))
+        assertFalse(recordScreen.contains("TRIGGER_AUTO_START_RECORDING"))
+        assertFalse(settingsScreen.contains("setAutoStartRecordingEnabled"))
     }
 
     @Test

@@ -72,8 +72,8 @@ private const val DEFAULT_ESTIMATED_BITRATE_BPS = 28_000_000L
 private const val FOUR_GRID_ASPECT_RATIO = 1f
 
 /**
- * Recorder config is computed only for an explicit user start or the persisted
- * opt-in auto-start setting. It is never computed directly during composition.
+ * Recorder config is computed only for an explicit user start. It is never
+ * computed directly during composition.
  */
 private sealed interface RecordConfigState {
     data object Idle : RecordConfigState
@@ -117,7 +117,6 @@ fun RecordScreen() {
     var configState by remember { mutableStateOf<RecordConfigState>(RecordConfigState.Idle) }
     var previewEnabled by remember { mutableStateOf(false) }
     var startupPermissionPrompted by rememberSaveable { mutableStateOf(false) }
-    var autoStartAttempted by rememberSaveable { mutableStateOf(false) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -134,7 +133,13 @@ fun RecordScreen() {
     val serviceRunning = CameraRecordingService.isRunning()
 
     DisposableEffect(previewController) {
-        onDispose { previewController.release() }
+        previewController.onRecorderPreviewSurfaceDestroyed = {
+            CameraRecordingService.setPreviewOutputEnabled(context, false)
+        }
+        onDispose {
+            CameraRecordingService.setPreviewOutputEnabled(context, false)
+            previewController.release()
+        }
     }
 
     LaunchedEffect(
@@ -176,7 +181,6 @@ fun RecordScreen() {
         configState !is RecordConfigState.Loading
     val canStop = RecorderCommandPolicy.canStop(recorderState.status, serviceRunning)
     val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning)
-    val canRetry = RecorderCommandPolicy.canRetry(recorderState.status, serviceRunning)
 
     val estimatedBitrateBps = recorderState.profile?.bitrateBps
         ?.takeIf { it > 0 }
@@ -256,18 +260,10 @@ fun RecordScreen() {
         }
     }
 
-    LaunchedEffect(cameraPermission, canStart, autoStartAttempted) {
+    LaunchedEffect(cameraPermission) {
         if (!cameraPermission && !startupPermissionPrompted) {
             startupPermissionPrompted = true
             cameraLauncher.launch(Manifest.permission.CAMERA)
-        } else if (
-            cameraPermission &&
-            canStart &&
-            !autoStartAttempted &&
-            settings.autoStartRecordingEnabled
-        ) {
-            autoStartAttempted = true
-            startRecording(ProductHomeCameraPolicy.TRIGGER_AUTO_START_RECORDING)
         }
     }
 
@@ -423,11 +419,6 @@ fun RecordScreen() {
                             )
                             recorderState.lastError?.let {
                                 Text(it, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        if (canRetry) {
-                            OutlinedButton(onClick = { CameraRecordingService.retry(context) }) {
-                                Text(Utils.t("Retry", "重试"))
                             }
                         }
                     }

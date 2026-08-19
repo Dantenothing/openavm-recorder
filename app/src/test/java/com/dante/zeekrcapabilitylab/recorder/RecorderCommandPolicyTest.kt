@@ -39,7 +39,7 @@ class RecorderCommandPolicyTest {
 
     @Test
     fun retryIsOnlyForCameraUnavailable() {
-        assertTrue(RecorderCommandPolicy.canRetry(RecorderStatus.CAMERA_UNAVAILABLE, serviceRunning = true))
+        assertFalse(RecorderCommandPolicy.canRetry(RecorderStatus.CAMERA_UNAVAILABLE, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canRetry(RecorderStatus.ERROR, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canRetry(RecorderStatus.RECORDING, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canRetry(RecorderStatus.CAMERA_UNAVAILABLE, serviceRunning = false))

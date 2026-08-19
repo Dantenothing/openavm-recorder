@@ -73,6 +73,7 @@ fun EventsScreen() {
     var playFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
 
     fun refresh() {
         scope.launch(Dispatchers.IO) {
@@ -167,6 +168,25 @@ fun EventsScreen() {
         }
     }
 
+    fun deleteAllRecordings() {
+        val visibleFiles = segments.map { it.file }
+        scope.launch(Dispatchers.IO) {
+            visibleFiles.forEach(thumbnailCache::remove)
+            val result = RecorderLibrary.deleteAllManagedByUser(segmentsDir)
+            withContext(Dispatchers.Main) {
+                playFile = null
+                covers = emptyMap()
+                statusText = Utils.t(
+                    "Deleted ${result.deleted} recordings" +
+                        if (result.blocked > 0) "; kept ${result.blocked} active or transfer-locked recordings" else "",
+                    "已删除 ${result.deleted} 段录像" +
+                        if (result.blocked > 0) "；${result.blocked} 段正在播放或传输锁定的录像已保留" else "",
+                )
+            }
+            refresh()
+        }
+    }
+
     LaunchedEffect(Unit) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
@@ -203,7 +223,18 @@ fun EventsScreen() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { confirmDeleteAll = true },
+                            enabled = segments.isNotEmpty(),
+                        ) {
+                            Text(
+                                Utils.t("Clear all", "清空全部"),
+                                color = if (segments.isNotEmpty()) MaterialTheme.colorScheme.error else Color.Unspecified,
+                            )
+                        }
+                        OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
+                    }
                 }
                 if (statusText.isNotBlank()) {
                     Text(
@@ -315,6 +346,36 @@ fun EventsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteGroup = null }) { Text(Utils.t("Cancel", "取消")) }
+            },
+        )
+    }
+
+    if (confirmDeleteAll) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            title = { Text(Utils.t("Delete all recordings?", "删除全部录像？")) },
+            text = {
+                Text(
+                    Utils.t(
+                        "This permanently deletes all recordings in the library, including protected recordings. Recordings being played or transferred are kept.",
+                        "这会永久删除记录库中的全部录像，包括已保护录像。正在播放或传输中的录像会被保留。",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDeleteAll = false
+                        deleteAllRecordings()
+                    },
+                ) {
+                    Text(Utils.t("Delete all", "全部删除"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteAll = false }) {
+                    Text(Utils.t("Cancel", "取消"))
+                }
             },
         )
     }

@@ -48,7 +48,6 @@ fun SettingsScreen() {
     var safety by remember { mutableStateOf(settings.minFreeBytes) }
     var autoCleanup by remember { mutableStateOf(settings.autoCleanupEnabled) }
     var previewWhileRecording by remember { mutableStateOf(settings.previewWhileRecordingEnabled) }
-    var autoStartRecording by remember { mutableStateOf(settings.autoStartRecordingEnabled) }
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var correctionTuningVisible by remember { mutableStateOf(false) }
     var versionTapCount by remember { mutableStateOf(0) }
@@ -161,31 +160,6 @@ fun SettingsScreen() {
                         onCheckedChange = {
                             previewWhileRecording = it
                             settings.setPreviewWhileRecordingEnabled(it)
-                        },
-                    )
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(Utils.t("Start recording when app opens", "打开应用时自动开始录像"))
-                        Text(
-                            Utils.t(
-                                "Off by default. Your choice is saved for future app launches.",
-                                "默认关闭；开启后会保存选择，并在以后打开应用时自动录像。",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = autoStartRecording,
-                        onCheckedChange = {
-                            autoStartRecording = it
-                            settings.setAutoStartRecordingEnabled(it)
                         },
                     )
                 }

@@ -105,8 +105,8 @@ object RecorderCommandPolicy {
     fun canStop(status: String, serviceRunning: Boolean): Boolean =
         serviceRunning && status != RecorderStatus.IDLE
 
-    fun canRetry(status: String, serviceRunning: Boolean): Boolean =
-        serviceRunning && status == RecorderStatus.CAMERA_UNAVAILABLE
+    /** Camera/OEM takeover ends this session; a later recording requires a fresh manual Start. */
+    fun canRetry(status: String, serviceRunning: Boolean): Boolean = false
 
     fun canBookmark(serviceRunning: Boolean): Boolean = serviceRunning
 }
@@ -197,6 +197,12 @@ object SegmentGuardPolicy {
         currentPartial: File?,
         partial: File,
     ): Boolean = generation == currentGeneration && currentPartial === partial
+}
+
+/** A new session uses the UI preview only while it both exists and is still desired. */
+object SegmentPreviewPolicy {
+    fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean): Boolean =
+        previewConfigured && previewDesired
 }
 
 /** Bookmark protection must survive sidecar enrichment: merge existing + snapshot flags. */

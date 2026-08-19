@@ -95,6 +95,7 @@ class RecorderSession(
     private var frameStats = SegmentFrameStats()
     private var lastTimestampNs: Long? = null
     private var segmentGeneration = 0L
+    private var finalizeSequence = 0L
     private var openGeneration = 0L
     private var timeoutRunnable: Runnable? = null
     private var openWatchdogRunnable: Runnable? = null
@@ -595,9 +596,7 @@ class RecorderSession(
                     return
                 }
                 val outputs = if (preview != null) listOf(surface, preview) else listOf(surface)
-                device.createCaptureSession(
-                    outputs,
-                    object : CameraCaptureSession.StateCallback() {
+                val sessionCallback = object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
                             if (!ownsSetup(generation, partial, recorder)) {
                                 closeQuietlySession(session)
@@ -683,11 +682,32 @@ class RecorderSession(
                                 failSegmentStart(generation, partial, "RECORD_SESSION_CONFIGURE_FAILED")
                             }
                         }
-                    },
-                    cameraHandler,
-                )
+                    }
+                try {
+                    device.createCaptureSession(outputs, sessionCallback, cameraHandler)
+                } catch (t: Throwable) {
+                    if (preview != null) {
+                        fallbackToRecorderOnly(
+                            generation = generation,
+                            partial = partial,
+                            recorder = recorder,
+                            reason = t.message ?: "PREVIEW_SESSION_CREATE_FAILED",
+                        ) { configureSession(includePreview = false) }
+                    } else {
+                        failSegmentStart(
+                            generation,
+                            partial,
+                            t.message ?: "capture session create failed",
+                        )
+                    }
+                }
             }
-            configureSession(includePreview = recordingPreviewSurface != null)
+            configureSession(
+                includePreview = SegmentPreviewPolicy.includeInNewSession(
+                    previewConfigured = recordingPreviewSurface != null,
+                    previewDesired = previewOutputDesired,
+                ),
+            )
         } catch (t: Throwable) {
             failSegmentStart(generation, partial, t.message ?: "recorder prepare failed")
         }
@@ -914,7 +934,18 @@ class RecorderSession(
     private fun finalizeCurrentSegment(reason: String, forcedError: String?) {
         cancelSetupWatchdog()
         cancelTimeout()
+        val finalizeId = ++finalizeSequence
+        val finalizeEnteredElapsed = SystemClock.elapsedRealtime()
         val partial = currentPartial ?: run {
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_SEGMENT_FINALIZE_SKIPPED",
+                payload = mapOf(
+                    "finalizeId" to finalizeId.toString(),
+                    "reason" to reason,
+                    "forcedError" to (forcedError ?: "-"),
+                ),
+            )
             afterFinalize(reason, success = false, error = forcedError ?: "no active segment")
             return
         }
@@ -931,6 +962,27 @@ class RecorderSession(
         currentIncidentTag = null
         currentConsumesPendingIncident = false
         val wasRecording = recording
+        val bytesBeforeStop = runCatching { partial.length() }.getOrDefault(-1L)
+        val recordingElapsedBeforeStop = actualStartedElapsed?.let {
+            (finalizeEnteredElapsed - it).coerceAtLeast(0L)
+        }
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_SEGMENT_FINALIZE_BEGIN",
+            payload = mapOf(
+                "finalizeId" to finalizeId.toString(),
+                "reason" to reason,
+                "segment" to segmentNumber.toString(),
+                "generation" to segmentGeneration.toString(),
+                "wasRecording" to wasRecording.toString(),
+                "bytesBeforeStop" to bytesBeforeStop.toString(),
+                "recordingElapsedMs" to (recordingElapsedBeforeStop?.toString() ?: "-"),
+                "previewDesired" to previewOutputDesired.toString(),
+                "previewConfigured" to (recordingPreviewSurface != null).toString(),
+                "previewActive" to state.previewActive.toString(),
+                "forcedError" to (forcedError ?: "-"),
+            ),
+        )
         currentPartial = null
         recording = false
         segmentStartedAtEpochMs = null
@@ -940,13 +992,31 @@ class RecorderSession(
         updateState(state.copy(status = RecorderStatus.FINALIZING))
 
         var stopError: String? = forcedError
+        var stopExceptionType: String? = null
+        val stopStartedElapsed = SystemClock.elapsedRealtime()
         if (RecorderTransitionPolicy.shouldInvokeStop(wasRecording)) {
             try {
                 mediaRecorder?.stop()
             } catch (t: Throwable) {
+                stopExceptionType = t.javaClass.name
                 stopError = stopError ?: (t.message ?: "recorder.stop failed")
             }
         }
+        EventLogger.logEvent(
+            category = Categories.SYSTEM,
+            eventName = "RECORDER_MEDIA_RECORDER_STOP_RESULT",
+            payload = mapOf(
+                "finalizeId" to finalizeId.toString(),
+                "invoked" to RecorderTransitionPolicy.shouldInvokeStop(wasRecording).toString(),
+                "durationMs" to (SystemClock.elapsedRealtime() - stopStartedElapsed).toString(),
+                "success" to (stopError == null).toString(),
+                "exceptionType" to (stopExceptionType ?: "-"),
+                "error" to (stopError ?: "-"),
+                "bytesAfterStop" to runCatching { partial.length() }.getOrDefault(-1L).toString(),
+            ),
+            errorType = stopExceptionType,
+            errorMessage = stopError,
+        )
         try {
             mediaRecorder?.reset()
             mediaRecorder?.release()
@@ -1012,12 +1082,14 @@ class RecorderSession(
             if (success) "RECORDER_SEGMENT_STOP" else "RECORDER_SEGMENT_FAILED",
             payload = mapOf(
                 "segment" to snapshot.segmentNumber.toString(),
+                "finalizeId" to finalizeId.toString(),
                 "file" to snapshot.file.name,
                 "result" to snapshot.result,
                 "error" to (snapshot.error ?: "-"),
                 "bytes" to snapshot.fileBytes.toString(),
                 "frames" to snapshot.frameStats.count.toString(),
                 "gapMs" to (snapshot.gapFromPreviousMs?.toString() ?: "-"),
+                "finalizeDurationMs" to (stoppedElapsed - finalizeEnteredElapsed).toString(),
             ),
         )
         runIo { finishSegmentAsync(snapshot, success) }
@@ -1160,17 +1232,18 @@ class RecorderSession(
 
     private fun cameraUnavailable(message: String) {
         closeCamera()
+        cancelRecoveryRetry()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_CAMERA_UNAVAILABLE", message, null)
-        val retryMessage = scheduleRecoveryRetry(message)
         updateState(
             state.copy(
                 status = RecorderStatus.CAMERA_UNAVAILABLE,
                 currentFile = null,
                 segmentStartedAtEpochMs = null,
                 lastError = message,
-                message = retryMessage ?: "Camera unavailable; manual Retry available",
+                message = "Camera unavailable; session ended. Use manual Start for a new session.",
             ),
         )
+        if (!releasing) onStopped()
     }
 
     private fun setError(message: String) {
@@ -1265,13 +1338,88 @@ class RecorderSession(
                 file.delete()
             }
         }
+        scheduleQuarantineRetention()
     }
 
     private fun quarantine(file: File): File? = try {
         val target = File(quarantineDir, file.name)
-        if (file.renameTo(target)) target else null
+        if (file.renameTo(target)) {
+            scheduleQuarantineRetention()
+            target
+        } else {
+            null
+        }
     } catch (t: Throwable) {
         null
+    }
+
+    private fun scheduleQuarantineRetention() {
+        runIo { enforceQuarantineRetention() }
+    }
+
+    /** Keeps recent recorder-owned failure evidence while bounding disk use. */
+    private fun enforceQuarantineRetention() {
+        try {
+            val now = System.currentTimeMillis()
+            val listing = quarantineDir.listFiles().orEmpty()
+            listing
+                .filter {
+                    it.name.endsWith(".tmp") &&
+                        now - it.lastModified() > QuarantineRetentionPolicy.STALE_TMP_AGE_MS
+                }
+                .forEach { it.delete() }
+            val primaries = listing.filter {
+                SegmentNaming.isPartial(it.name) || SegmentNaming.isFinalMp4(it.name)
+            }
+            val pairedSidecarNames = primaries
+                .map { it.name + SegmentNaming.SIDECAR_SUFFIX }
+                .toSet()
+            val orphanSidecars = listing.filter {
+                it.name.endsWith(SegmentNaming.SIDECAR_SUFFIX) && it.name !in pairedSidecarNames
+            }
+            val units = primaries.map { primary ->
+                val sidecar = File(quarantineDir, primary.name + SegmentNaming.SIDECAR_SUFFIX)
+                QuarantinedEvidence(
+                    path = primary.absolutePath,
+                    totalBytes = primary.length() + (if (sidecar.exists()) sidecar.length() else 0L),
+                    lastModifiedMs = primary.lastModified(),
+                )
+            } + orphanSidecars.map { orphan ->
+                QuarantinedEvidence(
+                    path = orphan.absolutePath,
+                    totalBytes = orphan.length(),
+                    lastModifiedMs = orphan.lastModified(),
+                )
+            }
+            val evictions = QuarantineRetentionPolicy.selectEvictions(units, nowMs = now)
+            if (evictions.isEmpty()) return
+            var deletedUnits = 0
+            var freedBytes = 0L
+            evictions.forEach { path ->
+                val primary = File(path)
+                val sidecar = File(primary.absolutePath + SegmentNaming.SIDECAR_SUFFIX)
+                val unitBytes = (if (primary.exists()) primary.length() else 0L) +
+                    (if (sidecar.exists()) sidecar.length() else 0L)
+                if (primary.delete()) {
+                    sidecar.delete()
+                    deletedUnits++
+                    freedBytes += unitBytes
+                }
+            }
+            if (deletedUnits > 0) {
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_QUARANTINE_EVICTED",
+                    payload = mapOf(
+                        "units" to deletedUnits.toString(),
+                        "freedBytes" to freedBytes.toString(),
+                        "remainingUnits" to (units.size - deletedUnits).toString(),
+                    ),
+                )
+            }
+        } catch (t: Throwable) {
+            // Housekeeping retries at the next recorder start or quarantine.
+        }
     }
 
     private fun buildSidecarFromSnapshot(

@@ -59,6 +59,8 @@ class SafeManualPreviewController(context: Context) {
     private var textureView: TextureView? = null
     @Volatile
     private var recorderSurfaceHandedOff = false
+    @Volatile
+    private var configuredTextureBufferSize: Size? = null
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
 
@@ -69,6 +71,9 @@ class SafeManualPreviewController(context: Context) {
     private var previewSurface: Surface? = null
     private var openWatchdog: Runnable? = null
     private var sessionWatchdog: Runnable? = null
+
+    /** Called when the UI destroys a SurfaceTexture already handed to the recorder. */
+    var onRecorderPreviewSurfaceDestroyed: (() -> Unit)? = null
 
     /** Attaches the proven ordinary TextureView path. Does not auto-start Camera2. */
     fun attach(view: TextureView) {
@@ -91,9 +96,12 @@ class SafeManualPreviewController(context: Context) {
 
             override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
                 if (textureView === view) {
+                    val recorderLosesPreview = recorderSurfaceHandedOff
                     recorderSurfaceHandedOff = false
                     stopPreview()
                     textureView = null
+                    configuredTextureBufferSize = null
+                    if (recorderLosesPreview) onRecorderPreviewSurfaceDestroyed?.invoke()
                 }
                 return true
             }
@@ -171,6 +179,13 @@ class SafeManualPreviewController(context: Context) {
     fun acquireRecorderPreviewSurface(): Surface? {
         val view = textureView ?: return null
         val texture = view.surfaceTexture?.takeIf { view.isAvailable } ?: return null
+        val configuredSize = configuredTextureBufferSize
+        if (configuredSize != null) {
+            val configured = runCatching {
+                texture.setDefaultBufferSize(configuredSize.width, configuredSize.height)
+            }.isSuccess
+            if (!configured) return null
+        }
         val surface = runCatching { Surface(texture) }.getOrNull() ?: return null
         if (!surface.isValid) {
             surface.release()
@@ -180,7 +195,20 @@ class SafeManualPreviewController(context: Context) {
         _state.value = ManualPreviewState(
             active = true,
             firstFrame = false,
+            previewSize = configuredSize,
+            forcedBufferSize = configuredSize?.takeIf {
+                it.width == 1280 && it.height == 5140
+            },
             message = "等待录像预览画面…",
+        )
+        EventLogger.logEvent(
+            category = Categories.SYSTEM,
+            eventName = "RECORDER_PREVIEW_SURFACE_HANDOFF",
+            payload = mapOf(
+                "bufferSize" to (configuredSize?.let { "${it.width}x${it.height}" } ?: "unchanged"),
+                "viewSize" to "${view.width}x${view.height}",
+                "surfaceValid" to surface.isValid.toString(),
+            ),
         )
         return surface
     }
@@ -264,6 +292,7 @@ class SafeManualPreviewController(context: Context) {
             val forcedSize = declaredHighResolution?.let { candidate ->
                 try {
                     texture.setDefaultBufferSize(candidate.width, candidate.height)
+                    configuredTextureBufferSize = candidate
                     EventLogger.logEvent(
                         category = Categories.SYSTEM,
                         eventName = "PRODUCT_MANUAL_PREVIEW_HIGH_RES_ATTEMPT",
@@ -594,6 +623,7 @@ class SafeManualPreviewController(context: Context) {
         val view = textureView ?: return
         if (view.surfaceTexture !== texture || view.width <= 0 || view.height <= 0) return
         runCatching { texture.setDefaultBufferSize(view.width, view.height) }
+            .onSuccess { configuredTextureBufferSize = Size(view.width, view.height) }
     }
 
     private fun closeCameraOnWorker() {

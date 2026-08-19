@@ -23,6 +23,12 @@ object RecorderLibrary {
         val reason: String? = null,
     )
 
+    data class BulkDeleteResult(
+        val deleted: Int,
+        val blocked: Int,
+        val sidecarCleanupWarnings: Int,
+    )
+
     fun isManaged(file: File): Boolean {
         if (!file.isFile || !SegmentNaming.isFinalMp4(file.name)) return false
         val sidecarFile = SegmentSidecarIO.sidecarFileFor(file)
@@ -139,6 +145,24 @@ object RecorderLibrary {
      */
     fun deleteManagedByUser(segmentsDir: File, file: File): DeleteResult =
         deleteManagedInternal(segmentsDir, file, allowProtected = true)
+
+    /**
+     * Explicit destructive action from the gallery. It includes protected
+     * recordings after confirmation, but still preserves playback/upload pins
+     * and every file not proven to be owned by this app.
+     */
+    fun deleteAllManagedByUser(segmentsDir: File): BulkDeleteResult {
+        val results = listFinalized(segmentsDir).map { file ->
+            deleteManagedByUser(segmentsDir, file)
+        }
+        return BulkDeleteResult(
+            deleted = results.count { it.deleted },
+            blocked = results.count { !it.deleted },
+            sidecarCleanupWarnings = results.count {
+                it.reason == DELETE_SIDECAR_FAILED
+            },
+        )
+    }
 
     private fun deleteManagedInternal(
         segmentsDir: File,

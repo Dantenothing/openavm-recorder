@@ -20,10 +20,9 @@ object ProductHomeCameraPolicy {
     /** Re-entering the page restores preview after recording/navigation released it. */
     fun shouldAutoAccessCameraOnRevisit(revisitCount: Int): Boolean = revisitCount >= 0
 
-    /** Product startup and the explicit button may record; preview uses the proven path only. */
+    /** Recording is always manual; only the proven preview path may start automatically. */
     fun cameraAccessAllowed(trigger: String): Boolean =
         trigger == TRIGGER_USER_START_RECORDING ||
-            trigger == TRIGGER_AUTO_START_RECORDING ||
             trigger == TRIGGER_USER_START_PREVIEW ||
             trigger == TRIGGER_AUTO_PREVIEW
 }
