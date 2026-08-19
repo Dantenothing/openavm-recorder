@@ -75,6 +75,8 @@ data class RecorderState(
     val segmentStartedAtEpochMs: Long? = null,
     val lastError: String? = null,
     val lastSidecarPath: String? = null,
+    /** Increments only when a completed successful segment becomes library-visible. */
+    val libraryRevision: Long = 0L,
     val message: String? = null,
     val previewRequested: Boolean = false,
     val previewActive: Boolean = false,
@@ -203,6 +205,36 @@ object SegmentGuardPolicy {
 object SegmentPreviewPolicy {
     fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean): Boolean =
         previewConfigured && previewDesired
+}
+
+/** Guards an in-flight preview swap from ever taking ownership of a newer encoder segment. */
+object ActivePreviewReplacementPolicy {
+    fun canRebuild(
+        replacementValid: Boolean,
+        recording: Boolean,
+        cameraReady: Boolean,
+        encoderReady: Boolean,
+    ): Boolean = replacementValid && recording && cameraReady && encoderReady
+
+    fun shouldQueueForNextSegment(status: String, stopping: Boolean, releasing: Boolean): Boolean =
+        !stopping && !releasing && status in setOf(RecorderStatus.STARTING, RecorderStatus.FINALIZING)
+
+    fun ownsCallback(
+        token: Long,
+        currentToken: Long,
+        segmentGeneration: Long,
+        currentSegmentGeneration: Long,
+        recording: Boolean,
+        encoderMatches: Boolean,
+    ): Boolean = token == currentToken &&
+        segmentGeneration == currentSegmentGeneration &&
+        recording && encoderMatches
+}
+
+/** The gallery must never publish provisional or failed recording evidence. */
+object LibraryPublicationPolicy {
+    fun shouldPublish(result: String, provisional: Boolean): Boolean =
+        result == SegmentSidecar.RESULT_SUCCESS && !provisional
 }
 
 /** Bookmark protection must survive sidecar enrichment: merge existing + snapshot flags. */

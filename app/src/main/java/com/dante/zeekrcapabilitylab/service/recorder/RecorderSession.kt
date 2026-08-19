@@ -74,6 +74,7 @@ class RecorderSession(
     private var captureSession: CameraCaptureSession? = null
     private var mediaRecorder: MediaRecorder? = null
     private var recordingPreviewSurface: Surface? = null
+    private var pendingRecordingPreviewSurface: Surface? = null
     private var activeEncoderSurface: Surface? = null
     private var previewOutputDesired = true
     private var currentPartial: File? = null
@@ -95,11 +96,14 @@ class RecorderSession(
     private var frameStats = SegmentFrameStats()
     private var lastTimestampNs: Long? = null
     private var segmentGeneration = 0L
+    private var previewReplacementGeneration = 0L
     private var finalizeSequence = 0L
     private var openGeneration = 0L
     private var timeoutRunnable: Runnable? = null
     private var openWatchdogRunnable: Runnable? = null
     private var setupWatchdogRunnable: Runnable? = null
+    private var previewReplacementWatchdogRunnable: Runnable? = null
+    private var previewReplacementWatchdogToken: Long? = null
     private var recoveryRetryRunnable: Runnable? = null
     private var recoveryRetryAttempt = 0
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
@@ -145,6 +149,7 @@ class RecorderSession(
             this.config = config
             this.previewOutputDesired = true
             releaseRecordingPreviewSurface()
+            releasePendingRecordingPreviewSurface()
             this.recordingPreviewSurface = previewSurface?.takeIf { it.isValid }
             if (this.recordingPreviewSurface == null) runCatching { previewSurface?.release() }
             this.stopping = false
@@ -202,6 +207,9 @@ class RecorderSession(
     fun setPreviewOutputEnabled(enabled: Boolean) {
         postCamera {
             previewOutputDesired = enabled
+            if (!enabled) {
+                updateState(state.copy(previewRequested = false, previewActive = false))
+            }
             val session = captureSession ?: return@postCamera
             val device = cameraDevice ?: return@postCamera
             val encoder = activeEncoderSurface?.takeIf { it.isValid } ?: return@postCamera
@@ -219,7 +227,12 @@ class RecorderSession(
                     createFrameCaptureCallback(segmentGeneration),
                     cameraHandler,
                 )
-                updateState(state.copy(previewActive = preview != null))
+                updateState(
+                    state.copy(
+                        previewRequested = preview != null,
+                        previewActive = preview != null,
+                    ),
+                )
                 EventLogger.logEvent(
                     Categories.SYSTEM,
                     "RECORDER_PREVIEW_TARGET_CHANGED",
@@ -257,6 +270,345 @@ class RecorderSession(
                 )
             }
         }
+    }
+
+    /**
+     * Rebuilds only the Camera2 capture session around the already-running
+     * encoder Surface plus a newly composed UI Surface. MediaRecorder is never
+     * stopped or replaced. Every callback is tied to both replacement and
+     * segment generations so it cannot take over after a one-minute rollover.
+     */
+    fun replacePreviewSurface(replacement: Surface) {
+        postCamera {
+            if (!replacement.isValid || stopping || releasing) {
+                runCatching { replacement.release() }
+                return@postCamera
+            }
+            val device = cameraDevice
+            val encoder = activeEncoderSurface
+            val canRebuild = ActivePreviewReplacementPolicy.canRebuild(
+                replacementValid = replacement.isValid,
+                recording = recording,
+                cameraReady = device != null,
+                encoderReady = encoder?.isValid == true,
+            )
+            if (!canRebuild || device == null || encoder == null) {
+                val queueForNextSegment = ActivePreviewReplacementPolicy.shouldQueueForNextSegment(
+                    status = state.status,
+                    stopping = stopping,
+                    releasing = releasing,
+                )
+                if (queueForNextSegment) {
+                    releasePendingRecordingPreviewSurface()
+                    pendingRecordingPreviewSurface = replacement
+                    previewOutputDesired = true
+                    updateState(
+                        state.copy(
+                            previewRequested = true,
+                            previewActive = false,
+                            message = "Preview will reconnect on the next segment",
+                        ),
+                    )
+                } else {
+                    runCatching { replacement.release() }
+                }
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    if (queueForNextSegment) {
+                        "RECORDER_PREVIEW_REPLACEMENT_QUEUED"
+                    } else {
+                        "RECORDER_PREVIEW_REPLACEMENT_REJECTED"
+                    },
+                    payload = mapOf(
+                        "recording" to recording.toString(),
+                        "cameraReady" to (device != null).toString(),
+                        "encoderReady" to (encoder?.isValid == true).toString(),
+                    ),
+                )
+                return@postCamera
+            }
+
+            val previous = recordingPreviewSurface
+            recordingPreviewSurface = replacement
+            previewOutputDesired = true
+            updateState(
+                state.copy(
+                    previewRequested = true,
+                    previewActive = false,
+                    previewFallbackUsed = false,
+                    message = "Restoring recording preview",
+                ),
+            )
+            val replacementToken = ++previewReplacementGeneration
+            val replacementSegment = segmentGeneration
+            runCatching { captureSession?.stopRepeating() }
+            runCatching { captureSession?.close() }
+            captureSession = null
+            if (previous !== replacement) runCatching { previous?.release() }
+            configureActiveRecordingSession(
+                device = device,
+                encoder = encoder,
+                preview = replacement,
+                replacementToken = replacementToken,
+                replacementSegment = replacementSegment,
+            )
+        }
+    }
+
+    private fun configureActiveRecordingSession(
+        device: CameraDevice,
+        encoder: Surface,
+        preview: Surface?,
+        replacementToken: Long,
+        replacementSegment: Long,
+    ) {
+        if (!ownsActivePreviewReplacement(
+                replacementToken,
+                replacementSegment,
+                encoder,
+            )
+        ) {
+            return
+        }
+        val validPreview = preview?.takeIf { previewOutputDesired && it.isValid }
+        if (preview != null && validPreview == null) {
+            fallbackActivePreviewReplacement(
+                device,
+                encoder,
+                preview,
+                replacementToken,
+                replacementSegment,
+                "REPLACEMENT_SURFACE_INVALID",
+            )
+            return
+        }
+        val outputs = if (validPreview != null) listOf(encoder, validPreview) else listOf(encoder)
+        val callback = object : CameraCaptureSession.StateCallback() {
+            override fun onConfigured(session: CameraCaptureSession) {
+                if (!ownsActivePreviewReplacement(
+                        replacementToken,
+                        replacementSegment,
+                        encoder,
+                    )
+                ) {
+                    closeQuietlySession(session)
+                    return
+                }
+                cancelPreviewReplacementWatchdog(replacementToken)
+                val previewTarget = validPreview?.takeIf {
+                    recordingPreviewSurface === it && previewOutputDesired && it.isValid
+                }
+                if (validPreview != null && previewTarget == null) {
+                    closeQuietlySession(session)
+                    fallbackActivePreviewReplacement(
+                        device,
+                        encoder,
+                        validPreview,
+                        replacementToken,
+                        replacementSegment,
+                        "REPLACEMENT_SURFACE_ABANDONED_DURING_CONFIGURE",
+                    )
+                    return
+                }
+                try {
+                    val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        addTarget(encoder)
+                        previewTarget?.let(::addTarget)
+                    }.build()
+                    session.setRepeatingRequest(
+                        request,
+                        createFrameCaptureCallback(replacementSegment),
+                        cameraHandler,
+                    )
+                    captureSession = session
+                    updateState(
+                        state.copy(
+                            previewRequested = previewTarget != null,
+                            previewActive = previewTarget != null,
+                            previewFallbackUsed = previewTarget == null,
+                            message = if (previewTarget == null) {
+                                "Preview restore failed; recording continues"
+                            } else {
+                                null
+                            },
+                        ),
+                    )
+                    EventLogger.logEvent(
+                        Categories.SYSTEM,
+                        "RECORDER_PREVIEW_REPLACEMENT_ACTIVE",
+                        payload = mapOf(
+                            "replacementToken" to replacementToken.toString(),
+                            "segmentGeneration" to replacementSegment.toString(),
+                            "previewActive" to (previewTarget != null).toString(),
+                        ),
+                    )
+                } catch (t: Throwable) {
+                    closeQuietlySession(session)
+                    if (previewTarget != null) {
+                        fallbackActivePreviewReplacement(
+                            device,
+                            encoder,
+                            previewTarget,
+                            replacementToken,
+                            replacementSegment,
+                            t.message ?: "REPLACEMENT_REPEATING_REQUEST_FAILED",
+                        )
+                    } else {
+                        handleCameraLoss(t.message ?: "ENCODER_SESSION_RESTORE_FAILED")
+                    }
+                }
+            }
+
+            override fun onConfigureFailed(session: CameraCaptureSession) {
+                closeQuietlySession(session)
+                if (!ownsActivePreviewReplacement(
+                        replacementToken,
+                        replacementSegment,
+                        encoder,
+                    )
+                ) {
+                    return
+                }
+                cancelPreviewReplacementWatchdog(replacementToken)
+                if (validPreview != null) {
+                    fallbackActivePreviewReplacement(
+                        device,
+                        encoder,
+                        validPreview,
+                        replacementToken,
+                        replacementSegment,
+                        "REPLACEMENT_SESSION_CONFIGURE_FAILED",
+                    )
+                } else {
+                    handleCameraLoss("ENCODER_SESSION_RESTORE_CONFIGURE_FAILED")
+                }
+            }
+        }
+        schedulePreviewReplacementWatchdog(
+            token = replacementToken,
+            replacementSegment = replacementSegment,
+            device = device,
+            encoder = encoder,
+            attemptedPreview = validPreview != null,
+        )
+        try {
+            device.createCaptureSession(outputs, callback, cameraHandler)
+        } catch (t: Throwable) {
+            cancelPreviewReplacementWatchdog(replacementToken)
+            if (validPreview != null) {
+                fallbackActivePreviewReplacement(
+                    device,
+                    encoder,
+                    validPreview,
+                    replacementToken,
+                    replacementSegment,
+                    t.message ?: "REPLACEMENT_SESSION_CREATE_FAILED",
+                )
+            } else {
+                handleCameraLoss(t.message ?: "ENCODER_SESSION_RESTORE_CREATE_FAILED")
+            }
+        }
+    }
+
+    private fun fallbackActivePreviewReplacement(
+        device: CameraDevice,
+        encoder: Surface,
+        preview: Surface,
+        replacementToken: Long,
+        replacementSegment: Long,
+        reason: String,
+    ) {
+        if (!ownsActivePreviewReplacement(replacementToken, replacementSegment, encoder)) return
+        if (recordingPreviewSurface === preview) releaseRecordingPreviewSurface()
+        updateState(
+            state.copy(
+                previewRequested = false,
+                previewActive = false,
+                previewFallbackUsed = true,
+                message = "Preview restore failed; recording continues",
+            ),
+        )
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_PREVIEW_REPLACEMENT_FALLBACK",
+            payload = mapOf(
+                "reason" to reason,
+                "replacementToken" to replacementToken.toString(),
+                "segmentGeneration" to replacementSegment.toString(),
+            ),
+        )
+        configureActiveRecordingSession(
+            device = device,
+            encoder = encoder,
+            preview = null,
+            replacementToken = replacementToken,
+            replacementSegment = replacementSegment,
+        )
+    }
+
+    private fun ownsActivePreviewReplacement(
+        token: Long,
+        replacementSegment: Long,
+        encoder: Surface,
+    ): Boolean = ActivePreviewReplacementPolicy.ownsCallback(
+        token = token,
+        currentToken = previewReplacementGeneration,
+        segmentGeneration = replacementSegment,
+        currentSegmentGeneration = segmentGeneration,
+        recording = recording && !stopping && !releasing,
+        encoderMatches = activeEncoderSurface === encoder,
+    )
+
+    private fun schedulePreviewReplacementWatchdog(
+        token: Long,
+        replacementSegment: Long,
+        device: CameraDevice,
+        encoder: Surface,
+        attemptedPreview: Boolean,
+    ) {
+        cancelPreviewReplacementWatchdog()
+        val runnable = Runnable {
+            if (!ownsActivePreviewReplacement(token, replacementSegment, encoder)) return@Runnable
+            previewReplacementWatchdogRunnable = null
+            previewReplacementWatchdogToken = null
+            EventLogger.markError(
+                Categories.SYSTEM,
+                "RECORDER_PREVIEW_REPLACEMENT_TIMEOUT",
+                "token=$token segmentGeneration=$replacementSegment preview=$attemptedPreview",
+                null,
+            )
+            if (attemptedPreview) {
+                releaseRecordingPreviewSurface()
+                updateState(
+                    state.copy(
+                        previewRequested = false,
+                        previewActive = false,
+                        previewFallbackUsed = true,
+                        message = "Preview restore timed out; recording continues",
+                    ),
+                )
+                val fallbackToken = ++previewReplacementGeneration
+                configureActiveRecordingSession(
+                    device = device,
+                    encoder = encoder,
+                    preview = null,
+                    replacementToken = fallbackToken,
+                    replacementSegment = replacementSegment,
+                )
+            } else {
+                handleCameraLoss("ENCODER_SESSION_RESTORE_TIMEOUT")
+            }
+        }
+        previewReplacementWatchdogRunnable = runnable
+        previewReplacementWatchdogToken = token
+        cameraHandler?.postDelayed(runnable, PREVIEW_REPLACEMENT_TIMEOUT_MS)
+    }
+
+    private fun cancelPreviewReplacementWatchdog(token: Long? = null) {
+        if (token != null && previewReplacementWatchdogToken != token) return
+        previewReplacementWatchdogRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        previewReplacementWatchdogRunnable = null
+        previewReplacementWatchdogToken = null
     }
 
     fun stop() {
@@ -419,6 +771,7 @@ class RecorderSession(
         }
         closeCamera()
         releaseRecordingPreviewSurface()
+        releasePendingRecordingPreviewSurface()
         wakeLockHolder.releaseAll()
     }
 
@@ -545,6 +898,25 @@ class RecorderSession(
             return
         }
         segmentGeneration++
+        previewReplacementGeneration++
+        cancelPreviewReplacementWatchdog()
+        pendingRecordingPreviewSurface?.let { pending ->
+            pendingRecordingPreviewSurface = null
+            if (pending.isValid) {
+                releaseRecordingPreviewSurface()
+                recordingPreviewSurface = pending
+                previewOutputDesired = true
+                updateState(
+                    state.copy(
+                        previewRequested = true,
+                        previewActive = false,
+                        previewFallbackUsed = false,
+                    ),
+                )
+            } else {
+                runCatching { pending.release() }
+            }
+        }
         val generation = segmentGeneration
         segmentNumber++
         val nowEpoch = System.currentTimeMillis()
@@ -1478,7 +1850,22 @@ class RecorderSession(
                     "result" to sidecar.result,
                 ),
             )
-            cameraHandler?.post { updateState(state.copy(lastSidecarPath = file.absolutePath)) }
+            cameraHandler?.post {
+                val publish = LibraryPublicationPolicy.shouldPublish(
+                    result = sidecar.result,
+                    provisional = sidecar.provisional,
+                )
+                updateState(
+                    state.copy(
+                        lastSidecarPath = file.absolutePath,
+                        libraryRevision = if (publish) {
+                            state.libraryRevision + 1L
+                        } else {
+                            state.libraryRevision
+                        },
+                    ),
+                )
+            }
             file
         } catch (t: Throwable) {
             EventLogger.markError(
@@ -1660,6 +2047,7 @@ class RecorderSession(
     }
 
     private fun closeCamera() {
+        cancelPreviewReplacementWatchdog()
         cameraOpenInFlight = false
         try {
             captureSession?.close()
@@ -1675,6 +2063,12 @@ class RecorderSession(
     private fun releaseRecordingPreviewSurface() {
         val surface = recordingPreviewSurface
         recordingPreviewSurface = null
+        runCatching { surface?.release() }
+    }
+
+    private fun releasePendingRecordingPreviewSurface() {
+        val surface = pendingRecordingPreviewSurface
+        pendingRecordingPreviewSurface = null
         runCatching { surface?.release() }
     }
 
@@ -1765,6 +2159,7 @@ class RecorderSession(
 
     private companion object {
         val RECOVERY_RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L)
+        const val PREVIEW_REPLACEMENT_TIMEOUT_MS = 6_000L
     }
 
     /** Immutable per-segment evidence captured on the camera thread before async work. */

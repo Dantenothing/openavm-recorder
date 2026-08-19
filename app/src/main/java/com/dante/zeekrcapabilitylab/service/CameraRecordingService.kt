@@ -192,6 +192,16 @@ class CameraRecordingService : Service() {
             }
         }
 
+        /** Replaces a destroyed UI preview without restarting MediaRecorder. */
+        fun replacePreviewSurface(surface: Surface) {
+            val active = instance
+            if (active == null) {
+                runCatching { surface.release() }
+                return
+            }
+            active.session.replacePreviewSurface(surface)
+        }
+
         fun isRunning(): Boolean = instance != null
 
         /**

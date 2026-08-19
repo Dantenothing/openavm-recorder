@@ -115,6 +115,10 @@ class ProductHomeCameraPolicyTest {
             controllerSource.contains("texture.setDefaultBufferSize(candidate.width, candidate.height)"),
         )
         assertTrue(
+            "a replacement recorder preview must explicitly restore the encoder profile buffer",
+            controllerSource.contains("texture.setDefaultBufferSize(targetBufferSize.width, targetBufferSize.height)"),
+        )
+        assertTrue(
             "the HD attempt must retain the stable TextureView buffer fallback",
             controllerSource.contains("restoreTextureViewBuffer(texture)"),
         )
@@ -152,6 +156,7 @@ class ProductHomeCameraPolicyTest {
             ),
         )
         assertTrue(source.contains("TRIGGER_AUTO_PREVIEW"))
+        assertTrue(source.contains("replacePreviewSurface"))
         assertTrue(source.contains("HomePreviewPane("))
         assertTrue(source.contains("ProductStatusCard("))
         assertTrue(source.contains(".weight(1.75f)"))
@@ -163,5 +168,23 @@ class ProductHomeCameraPolicyTest {
         assertFalse(source.contains("查看原始长条"))
         assertFalse(source.contains("显示：四格"))
         assertFalse(source.contains("Surface ${'$'}{it.width}"))
+
+        val sessionSource =
+            File("src/main/java/com/dante/zeekrcapabilitylab/service/recorder/RecorderSession.kt")
+                .readText()
+        val replacementPath = sessionSource
+            .substringAfter("fun replacePreviewSurface(replacement: Surface)")
+            .substringBefore("fun stop()")
+        assertTrue(replacementPath.contains("configureActiveRecordingSession"))
+        assertTrue(replacementPath.contains("ActivePreviewReplacementPolicy.ownsCallback"))
+        assertFalse(
+            "preview restoration must never stop the active MediaRecorder",
+            replacementPath.contains("mediaRecorder?.stop()"),
+        )
+
+        val eventsSource =
+            File("src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt").readText()
+        assertTrue(eventsSource.contains("CameraRecordingService.state.collectAsState()"))
+        assertTrue(eventsSource.contains("LaunchedEffect(recorderState.libraryRevision)"))
     }
 }

@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.player.RecordingThumbnailCache
 import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import com.dante.zeekrcapabilitylab.util.Utils
@@ -66,6 +67,7 @@ fun EventsScreen() {
         RecordingThumbnailCache(File(context.cacheDir, "recording-covers"))
     }
     val languageMode by AppLanguage.mode.collectAsState()
+    val recorderState by CameraRecordingService.state.collectAsState()
 
     var segments by remember { mutableStateOf<List<EventGroups.Segment>>(emptyList()) }
     var covers by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
@@ -187,7 +189,7 @@ fun EventsScreen() {
         }
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(recorderState.libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
     val dateGroups = remember(segments, languageMode) { EventGroups.groupByDate(segments) }

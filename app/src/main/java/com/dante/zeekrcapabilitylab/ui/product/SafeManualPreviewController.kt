@@ -75,6 +75,9 @@ class SafeManualPreviewController(context: Context) {
     /** Called when the UI destroys a SurfaceTexture already handed to the recorder. */
     var onRecorderPreviewSurfaceDestroyed: (() -> Unit)? = null
 
+    /** Called when a newly composed TextureView can be handed to an active recorder. */
+    var onRecorderPreviewSurfaceAvailable: (() -> Unit)? = null
+
     /** Attaches the proven ordinary TextureView path. Does not auto-start Camera2. */
     fun attach(view: TextureView) {
         if (released) return
@@ -86,6 +89,7 @@ class SafeManualPreviewController(context: Context) {
                 height: Int,
             ) {
                 if (requested && textureView === view) openIfReady()
+                if (!requested && textureView === view) onRecorderPreviewSurfaceAvailable?.invoke()
             }
 
             override fun onSurfaceTextureSizeChanged(
@@ -98,7 +102,12 @@ class SafeManualPreviewController(context: Context) {
                 if (textureView === view) {
                     val recorderLosesPreview = recorderSurfaceHandedOff
                     recorderSurfaceHandedOff = false
-                    stopPreview()
+                    if (recorderLosesPreview) {
+                        requested = false
+                        _state.value = ManualPreviewState()
+                    } else {
+                        stopPreview()
+                    }
                     textureView = null
                     configuredTextureBufferSize = null
                     if (recorderLosesPreview) onRecorderPreviewSurfaceDestroyed?.invoke()
@@ -129,7 +138,9 @@ class SafeManualPreviewController(context: Context) {
                 }
             }
         }
-        if (requested && view.isAvailable) openIfReady()
+        if (view.isAvailable) {
+            if (requested) openIfReady() else onRecorderPreviewSurfaceAvailable?.invoke()
+        }
     }
 
     fun startPreview() {
@@ -176,15 +187,21 @@ class SafeManualPreviewController(context: Context) {
      * Creates a separate Surface wrapper for the recorder capture session while
      * retaining the same ordinary TextureView/SurfaceTexture input path.
      */
-    fun acquireRecorderPreviewSurface(): Surface? {
+    fun acquireRecorderPreviewSurface(targetBufferSize: Size? = configuredTextureBufferSize): Surface? {
+        if (recorderSurfaceHandedOff) return null
         val view = textureView ?: return null
         val texture = view.surfaceTexture?.takeIf { view.isAvailable } ?: return null
-        val configuredSize = configuredTextureBufferSize
+        val configuredSize = targetBufferSize ?: configuredTextureBufferSize
         if (configuredSize != null) {
             val configured = runCatching {
-                texture.setDefaultBufferSize(configuredSize.width, configuredSize.height)
+                if (targetBufferSize != null) {
+                    texture.setDefaultBufferSize(targetBufferSize.width, targetBufferSize.height)
+                } else {
+                    texture.setDefaultBufferSize(configuredSize.width, configuredSize.height)
+                }
             }.isSuccess
             if (!configured) return null
+            configuredTextureBufferSize = configuredSize
         }
         val surface = runCatching { Surface(texture) }.getOrNull() ?: return null
         if (!surface.isValid) {

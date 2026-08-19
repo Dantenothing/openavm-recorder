@@ -3,6 +3,7 @@ package com.dante.zeekrcapabilitylab.ui.product
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Size
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -131,8 +133,23 @@ fun RecordScreen() {
 
     val recordingActive = RecorderCommandPolicy.isActive(recorderState.status)
     val serviceRunning = CameraRecordingService.isRunning()
+    val latestRecorderState by rememberUpdatedState(recorderState)
+
+    val attachReplacementPreview: () -> Unit = {
+        val current = latestRecorderState
+        val profile = current.profile
+        if (current.status == RecorderStatus.RECORDING &&
+            profile != null && settings.previewWhileRecordingEnabled
+        ) {
+            val surface = previewController.acquireRecorderPreviewSurface(
+                Size(profile.size.width, profile.size.height),
+            )
+            if (surface != null) CameraRecordingService.replacePreviewSurface(surface)
+        }
+    }
 
     DisposableEffect(previewController) {
+        previewController.onRecorderPreviewSurfaceAvailable = attachReplacementPreview
         previewController.onRecorderPreviewSurfaceDestroyed = {
             CameraRecordingService.setPreviewOutputEnabled(context, false)
         }
@@ -164,6 +181,12 @@ fun RecordScreen() {
                 previewEnabled = true
                 previewController.startPreview()
             }
+        }
+    }
+
+    LaunchedEffect(recorderState.status, recorderState.profile, recorderState.previewActive) {
+        if (recorderState.status == RecorderStatus.RECORDING && !recorderState.previewActive) {
+            attachReplacementPreview()
         }
     }
 
@@ -245,6 +268,8 @@ fun RecordScreen() {
                     val ready = configState as? RecordConfigState.Ready
                     if (ready != null) {
                         val recorderPreviewSurface = if (settings.previewWhileRecordingEnabled) {
+                            // Initial handoff keeps the buffer size already
+                            // proven by idle preview (including its fallback).
                             previewController.acquireRecorderPreviewSurface()
                         } else {
                             null
@@ -278,8 +303,6 @@ fun RecordScreen() {
             state = previewState,
             previewEnabled = previewEnabled,
             recordingActive = recordingActive,
-            recorderPreviewRequested = recorderState.previewRequested,
-            recorderPreviewFallbackUsed = recorderState.previewFallbackUsed,
             settings = settings,
             modifier = Modifier
                 .weight(1.75f)
@@ -474,8 +497,6 @@ private fun HomePreviewPane(
     state: ManualPreviewState,
     previewEnabled: Boolean,
     recordingActive: Boolean,
-    recorderPreviewRequested: Boolean,
-    recorderPreviewFallbackUsed: Boolean,
     settings: SettingsStore,
     modifier: Modifier = Modifier,
 ) {
@@ -486,9 +507,14 @@ private fun HomePreviewPane(
     ) {
         val previewSide = minOf(maxWidth, maxHeight)
         Box(Modifier.size(previewSide)) {
-            val showLivePreview = previewEnabled && (
-                !recordingActive || (recorderPreviewRequested && !recorderPreviewFallbackUsed)
-                )
+            // Keep a TextureView host composed while recording so returning to
+            // this page can supply a replacement Surface. It may remain black
+            // briefly while the camera thread safely rebuilds its session.
+            val showLivePreview = if (recordingActive) {
+                settings.previewWhileRecordingEnabled
+            } else {
+                previewEnabled
+            }
             if (showLivePreview) {
                 ManualPreviewPanel(
                     controller = controller,
