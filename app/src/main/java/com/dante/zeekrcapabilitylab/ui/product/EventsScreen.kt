@@ -75,6 +75,7 @@ fun EventsScreen() {
     var playFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
+    var confirmDeleteUnprotected by remember { mutableStateOf(false) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
 
     fun refresh() {
@@ -189,6 +190,26 @@ fun EventsScreen() {
         }
     }
 
+    fun deleteUnprotectedRecordings() {
+        val unprotectedFiles = segments.filterNot { it.sidecar.protected }.map { it.file }
+        scope.launch(Dispatchers.IO) {
+            val result = RecorderLibrary.deleteAllUnprotected(segmentsDir)
+            val deletedFiles = unprotectedFiles.filterNot { it.exists() }
+            deletedFiles.forEach(thumbnailCache::remove)
+            withContext(Dispatchers.Main) {
+                if (playFile?.let(deletedFiles::contains) == true) playFile = null
+                covers = covers - deletedFiles.mapTo(mutableSetOf()) { it.name }
+                statusText = Utils.t(
+                    "Deleted ${result.deleted} unprotected recordings" +
+                        if (result.blocked > 0) "; kept ${result.blocked} protected or locked recordings" else "",
+                    "已删除 ${result.deleted} 段未保护录像" +
+                        if (result.blocked > 0) "；${result.blocked} 段受保护或锁定中的录像已保留" else "",
+                )
+            }
+            refresh()
+        }
+    }
+
     LaunchedEffect(recorderState.libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
@@ -226,6 +247,12 @@ fun EventsScreen() {
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { confirmDeleteUnprotected = true },
+                            enabled = segments.any { !it.sidecar.protected },
+                        ) {
+                            Text(Utils.t("Delete unprotected", "只删未保护"))
+                        }
                         OutlinedButton(
                             onClick = { confirmDeleteAll = true },
                             enabled = segments.isNotEmpty(),
@@ -348,6 +375,36 @@ fun EventsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteGroup = null }) { Text(Utils.t("Cancel", "取消")) }
+            },
+        )
+    }
+
+    if (confirmDeleteUnprotected) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteUnprotected = false },
+            title = { Text(Utils.t("Delete unprotected recordings?", "删除未保护录像？")) },
+            text = {
+                Text(
+                    Utils.t(
+                        "This permanently deletes all unprotected recordings. Protected recordings and recordings being played or transferred are kept.",
+                        "这会永久删除全部未保护录像。已保护、正在播放或正在传输的录像会被保留。",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDeleteUnprotected = false
+                        deleteUnprotectedRecordings()
+                    },
+                ) {
+                    Text(Utils.t("Delete unprotected", "删除未保护"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteUnprotected = false }) {
+                    Text(Utils.t("Cancel", "取消"))
+                }
             },
         )
     }

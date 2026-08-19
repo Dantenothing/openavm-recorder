@@ -20,6 +20,7 @@ import android.os.SystemClock
 import android.view.Surface
 import com.dante.zeekrcapabilitylab.ZeekrApp
 import com.dante.zeekrcapabilitylab.data.Categories
+import com.dante.zeekrcapabilitylab.data.Severity
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
@@ -109,6 +110,26 @@ class RecorderSession(
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
     private val pendingSidecarFiles: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private var state = RecorderState()
+    private var cameraDiagnosticsRegistered = false
+    private var diagnosticsActiveCameraId: String? = null
+    private val cameraAvailabilityCallback = object : CameraManager.AvailabilityCallback() {
+        override fun onCameraAvailable(cameraId: String) {
+            logCameraAvailability(cameraId, available = true)
+        }
+
+        override fun onCameraUnavailable(cameraId: String) {
+            logCameraAvailability(cameraId, available = false)
+        }
+
+        override fun onCameraAccessPrioritiesChanged() {
+            if (!cameraDiagnosticsRegistered) return
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_ACCESS_PRIORITIES_CHANGED",
+                payload = cameraDiagnosticStatePayload(),
+            )
+        }
+    }
 
     init {
         updateState(state)
@@ -194,6 +215,7 @@ class RecorderSession(
                     "processStartId" to processStartId,
                 ),
             )
+            startCameraConflictDiagnostics(config)
             startInFlight = true
             openCamera(config.cameraId)
         }
@@ -623,6 +645,7 @@ class RecorderSession(
                 finalizeCurrentSegment("STOP", null)
             } else {
                 closeCamera()
+                stopCameraConflictDiagnostics()
                 updateState(
                     state.copy(
                         status = RecorderStatus.STOPPED,
@@ -707,6 +730,7 @@ class RecorderSession(
                 "RECORDER_RETRY",
                 payload = mapOf("cameraId" to cfg.cameraId, "profile" to cfg.profile.key),
             )
+            startCameraConflictDiagnostics(cfg)
             startInFlight = true
             openCamera(cfg.cameraId)
         }
@@ -770,6 +794,7 @@ class RecorderSession(
             finalizeCurrentSegment("STOP", null)
         }
         closeCamera()
+        stopCameraConflictDiagnostics()
         releaseRecordingPreviewSurface()
         releasePendingRecordingPreviewSurface()
         wakeLockHolder.releaseAll()
@@ -796,6 +821,137 @@ class RecorderSession(
             // Recorder is releasing; the segment was already isolated by finalize.
         }
     }
+
+    private fun startCameraConflictDiagnostics(config: RecorderConfig) {
+        if (cameraDiagnosticsRegistered) return
+        diagnosticsActiveCameraId = config.cameraId
+        logCameraConcurrencySnapshot(config)
+        val handler = cameraHandler
+        if (handler == null) {
+            diagnosticsActiveCameraId = null
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_DIAGNOSTICS_REGISTRATION",
+                severity = Severity.WARN,
+                payload = mapOf("result" to "NO_CAMERA_HANDLER"),
+            )
+            return
+        }
+        cameraDiagnosticsRegistered = true
+        val failure = runCatching {
+            manager.registerAvailabilityCallback(cameraAvailabilityCallback, handler)
+        }.exceptionOrNull()
+        if (failure != null) {
+            cameraDiagnosticsRegistered = false
+            diagnosticsActiveCameraId = null
+        }
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_DIAGNOSTICS_REGISTRATION",
+            severity = if (failure == null) Severity.INFO else Severity.WARN,
+            payload = mapOf(
+                "result" to if (failure == null) "REGISTERED" else "ERROR",
+                "error" to (failure?.javaClass?.simpleName ?: "-"),
+            ),
+        )
+    }
+
+    private fun stopCameraConflictDiagnostics() {
+        if (!cameraDiagnosticsRegistered) {
+            diagnosticsActiveCameraId = null
+            return
+        }
+        val payload = cameraDiagnosticStatePayload().toMutableMap()
+        cameraDiagnosticsRegistered = false
+        val failure = runCatching {
+            manager.unregisterAvailabilityCallback(cameraAvailabilityCallback)
+        }.exceptionOrNull()
+        payload["result"] = if (failure == null) "UNREGISTERED" else "ERROR"
+        payload["error"] = failure?.javaClass?.simpleName ?: "-"
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_DIAGNOSTICS_UNREGISTERED",
+            severity = if (failure == null) Severity.INFO else Severity.WARN,
+            payload = payload,
+        )
+        diagnosticsActiveCameraId = null
+    }
+
+    private fun logCameraConcurrencySnapshot(config: RecorderConfig) {
+        val cameraIdsResult = runCatching { manager.cameraIdList.toList() }
+        val cameraIds = cameraIdsResult.getOrDefault(emptyList())
+        val concurrentResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                manager.concurrentCameraIds.mapTo(linkedSetOf()) { it.toSet() }
+            }
+        } else {
+            null
+        }
+        val concurrentSets = concurrentResult?.getOrNull()
+        val concurrentQuery = when {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> "UNSUPPORTED_API"
+            concurrentResult?.isSuccess == true -> "OK"
+            else -> "ERROR:${concurrentResult?.exceptionOrNull()?.javaClass?.simpleName ?: "unknown"}"
+        }
+        val physicalIdsByCamera = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            cameraIds.associateWith { cameraId ->
+                runCatching {
+                    manager.getCameraCharacteristics(cameraId).physicalCameraIds.toSet()
+                }.getOrDefault(emptySet())
+            }
+        } else {
+            emptyMap()
+        }
+        fun pairSupport(first: String, second: String): String =
+            concurrentSets?.let {
+                CameraConflictDiagnostics.supportsPair(it, first, second).toString()
+            } ?: "UNKNOWN"
+
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_CONCURRENCY_SNAPSHOT",
+            payload = mapOf(
+                "sdk" to Build.VERSION.SDK_INT.toString(),
+                "activeCameraId" to config.cameraId,
+                "profile" to config.profile.key,
+                "cameraIdsQuery" to if (cameraIdsResult.isSuccess) "OK" else "ERROR",
+                "cameraIds" to CameraConflictDiagnostics.encodeCameraIds(cameraIds),
+                "concurrentQuery" to concurrentQuery,
+                "concurrentSets" to (
+                    concurrentSets?.let(CameraConflictDiagnostics::encodeConcurrentSets)
+                        ?: "UNKNOWN"
+                    ),
+                "supports0+1" to pairSupport("0", "1"),
+                "supports0+2" to pairSupport("0", "2"),
+                "supports1+2" to pairSupport("1", "2"),
+                "physicalIds" to CameraConflictDiagnostics.encodePhysicalIds(physicalIdsByCamera),
+            ),
+        )
+    }
+
+    private fun logCameraAvailability(cameraId: String, available: Boolean) {
+        if (!cameraDiagnosticsRegistered ||
+            !CameraConflictDiagnostics.shouldLogAvailability(cameraId, diagnosticsActiveCameraId)
+        ) {
+            return
+        }
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_AVAILABILITY",
+            payload = cameraDiagnosticStatePayload() + mapOf(
+                "cameraId" to cameraId,
+                "available" to available.toString(),
+            ),
+        )
+    }
+
+    private fun cameraDiagnosticStatePayload(): Map<String, String> = mapOf(
+        "activeCameraId" to (diagnosticsActiveCameraId ?: "-"),
+        "recorderStatus" to state.status.toString(),
+        "recording" to recording.toString(),
+        "appForeground" to ZeekrApp.isForeground.value.toString(),
+        "segment" to segmentNumber.toString(),
+    )
 
     private fun openCamera(cameraId: String) {
         val cfg = config ?: run {
@@ -1556,6 +1712,7 @@ class RecorderSession(
     private fun afterFinalize(reason: String, success: Boolean, error: String?) {
         if (reason == "STOP" || stopping) {
             closeCamera()
+            stopCameraConflictDiagnostics()
             updateState(
                 state.copy(
                     status = RecorderStatus.STOPPED,
@@ -1604,6 +1761,7 @@ class RecorderSession(
 
     private fun cameraUnavailable(message: String) {
         closeCamera()
+        stopCameraConflictDiagnostics()
         cancelRecoveryRetry()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_CAMERA_UNAVAILABLE", message, null)
         updateState(
@@ -1619,6 +1777,7 @@ class RecorderSession(
     }
 
     private fun setError(message: String) {
+        stopCameraConflictDiagnostics()
         cancelRecoveryRetry()
         updateState(
             state.copy(
@@ -1633,6 +1792,7 @@ class RecorderSession(
     private fun storageBlocked(reason: String) {
         cancelRecoveryRetry()
         closeCamera()
+        stopCameraConflictDiagnostics()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_STORAGE_BLOCKED", reason, null)
         updateState(
             state.copy(

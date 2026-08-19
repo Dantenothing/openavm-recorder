@@ -164,6 +164,23 @@ object RecorderLibrary {
         )
     }
 
+    /**
+     * Safe gallery cleanup: removes only finalized, unbookmarked recordings.
+     * Protected recordings, playback/upload pins and unknown files are kept.
+     */
+    fun deleteAllUnprotected(segmentsDir: File): BulkDeleteResult {
+        val results = listFinalized(segmentsDir).map { file ->
+            deleteManaged(segmentsDir, file)
+        }
+        return BulkDeleteResult(
+            deleted = results.count { it.deleted },
+            blocked = results.count { !it.deleted },
+            sidecarCleanupWarnings = results.count {
+                it.reason == DELETE_SIDECAR_FAILED
+            },
+        )
+    }
+
     private fun deleteManagedInternal(
         segmentsDir: File,
         file: File,
