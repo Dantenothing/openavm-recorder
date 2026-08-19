@@ -1265,13 +1265,97 @@ class RecorderSession(
                 file.delete()
             }
         }
+        // Bounds backlogs from installs that predate retention, even when this
+        // start found no new leftovers to move.
+        scheduleQuarantineRetention()
     }
 
     private fun quarantine(file: File): File? = try {
         val target = File(quarantineDir, file.name)
-        if (file.renameTo(target)) target else null
+        if (file.renameTo(target)) {
+            scheduleQuarantineRetention()
+            target
+        } else {
+            null
+        }
     } catch (t: Throwable) {
         null
+    }
+
+    private fun scheduleQuarantineRetention() {
+        runIo { enforceQuarantineRetention() }
+    }
+
+    /**
+     * IO-thread housekeeping: quarantined evidence is kept for diagnostics but
+     * bounded by [QuarantineRetentionPolicy]. A unit is a primary file plus its
+     * sidecar; unknown files are never touched, and the newest unit always
+     * survives. Stale sidecar `.tmp` leftovers are removed once they are old
+     * enough that no writer can still own them.
+     */
+    private fun enforceQuarantineRetention() {
+        try {
+            val now = System.currentTimeMillis()
+            val listing = quarantineDir.listFiles().orEmpty()
+            listing
+                .filter {
+                    it.name.endsWith(".tmp") &&
+                        now - it.lastModified() > QuarantineRetentionPolicy.STALE_TMP_AGE_MS
+                }
+                .forEach { it.delete() }
+            val primaries = listing.filter {
+                SegmentNaming.isPartial(it.name) || SegmentNaming.isFinalMp4(it.name)
+            }
+            val pairedSidecarNames = primaries
+                .map { it.name + SegmentNaming.SIDECAR_SUFFIX }
+                .toSet()
+            val orphanSidecars = listing.filter {
+                it.name.endsWith(SegmentNaming.SIDECAR_SUFFIX) && it.name !in pairedSidecarNames
+            }
+            val units = primaries.map { primary ->
+                val sidecar = File(quarantineDir, primary.name + SegmentNaming.SIDECAR_SUFFIX)
+                QuarantinedEvidence(
+                    path = primary.absolutePath,
+                    totalBytes = primary.length() + (if (sidecar.exists()) sidecar.length() else 0L),
+                    lastModifiedMs = primary.lastModified(),
+                )
+            } + orphanSidecars.map { orphan ->
+                QuarantinedEvidence(
+                    path = orphan.absolutePath,
+                    totalBytes = orphan.length(),
+                    lastModifiedMs = orphan.lastModified(),
+                )
+            }
+            val evictions = QuarantineRetentionPolicy.selectEvictions(units, nowMs = now)
+            if (evictions.isEmpty()) return
+            var deletedUnits = 0
+            var freedBytes = 0L
+            evictions.forEach { path ->
+                val primary = File(path)
+                val sidecar = File(primary.absolutePath + SegmentNaming.SIDECAR_SUFFIX)
+                val unitBytes = (if (primary.exists()) primary.length() else 0L) +
+                    (if (sidecar.exists()) sidecar.length() else 0L)
+                if (primary.delete()) {
+                    sidecar.delete()
+                    deletedUnits++
+                    freedBytes += unitBytes
+                }
+            }
+            if (deletedUnits > 0) {
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_QUARANTINE_EVICTED",
+                    payload = mapOf(
+                        "units" to deletedUnits.toString(),
+                        "freedBytes" to freedBytes.toString(),
+                        "remainingUnits" to (units.size - deletedUnits).toString(),
+                    ),
+                )
+            }
+        } catch (t: Throwable) {
+            // Housekeeping must never crash the recorder; retry happens on the
+            // next quarantine or recorder start.
+        }
     }
 
     private fun buildSidecarFromSnapshot(
