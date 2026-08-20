@@ -259,7 +259,8 @@ fun SettingsScreen() {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    Utils.t("Version", "版本") + " ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    Utils.t("Version", "版本") +
+                        " ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ${BuildConfig.GIT_SHA}",
                     modifier = Modifier.clickable {
                         versionTapCount++
                         if (versionTapCount >= 5) correctionTuningVisible = true

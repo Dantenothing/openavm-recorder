@@ -5,6 +5,13 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val buildGitSha = runCatching {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=7", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+}.getOrDefault("unknown")
+
 android {
     namespace = "com.dante.zeekrcapabilitylab"
     compileSdk = 36
@@ -13,8 +20,9 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.1-rc3"
+        versionCode = 9
+        versionName = "0.1.1-rc4"
+        buildConfigField("String", "GIT_SHA", "\"$buildGitSha\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
