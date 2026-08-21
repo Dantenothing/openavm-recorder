@@ -35,7 +35,13 @@ import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.util.Utils
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.LaunchedEffect
+import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
+import com.dante.zeekrcapabilitylab.product.RecordingCameraPolicy
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen() {
@@ -51,6 +57,16 @@ fun SettingsScreen() {
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var correctionTuningVisible by remember { mutableStateOf(false) }
     var versionTapCount by remember { mutableStateOf(0) }
+    var recordingCamera by remember { mutableStateOf(settings.recordingCameraId) }
+    var cameraOptions by remember {
+        mutableStateOf<List<ProductRecorderConfigFactory.RecordingCameraOption>>(emptyList())
+    }
+
+    LaunchedEffect(Unit) {
+        cameraOptions = withContext(Dispatchers.IO) {
+            ProductRecorderConfigFactory.listRecordingCameraOptions(context)
+        }
+    }
 
     Column(
         Modifier
@@ -94,6 +110,32 @@ fun SettingsScreen() {
             Column(Modifier.padding(16.dp)) {
                 Text(Utils.t("Recording", "录像参数"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
+                val cameraChoiceIds = listOf(RecordingCameraPolicy.AUTO) + cameraOptions.map { it.cameraId }
+                OptionRow(
+                    label = Utils.t("Recording camera", "录制摄像头"),
+                    options = listOf(Utils.t("Auto", "自动")) + cameraOptions.map { option ->
+                        val size = "${option.profile.size.width}x${option.profile.size.height}"
+                        if (option.isFourLaneComposite) {
+                            Utils.t("Cam ${option.cameraId} · $size (surround)", "摄像头${option.cameraId} · $size（全景）")
+                        } else {
+                            Utils.t("Cam ${option.cameraId} · $size", "摄像头${option.cameraId} · $size")
+                        }
+                    },
+                    selectedIndex = cameraChoiceIds.indexOf(recordingCamera).coerceAtLeast(0),
+                    onSelect = { index ->
+                        recordingCamera = cameraChoiceIds[index]
+                        settings.setRecordingCameraId(recordingCamera)
+                    },
+                )
+                Text(
+                    Utils.t(
+                        "Applies from the next recording start. The four-lane view is designed for the surround composite stream.",
+                        "下次开始录像时生效。四格画面针对全景合成流设计。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
                 OptionRow(
                     label = Utils.t("Segment length", "分段长度"),
                     options = SettingsStore.SEGMENT_OPTIONS.map { Utils.t("${it / 60} min", "${it / 60} 分钟") },
@@ -308,7 +350,10 @@ private fun OptionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, modifier = Modifier.width(130.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             options.forEachIndexed { index, option ->
                 OutlinedButton(onClick = { onSelect(index) }) {
                     Text(

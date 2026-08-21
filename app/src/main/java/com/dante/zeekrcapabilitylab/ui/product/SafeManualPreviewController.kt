@@ -16,6 +16,8 @@ import android.view.Surface
 import android.view.TextureView
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
+import com.dante.zeekrcapabilitylab.product.SettingsStore
+import com.dante.zeekrcapabilitylab.product.RecordingCameraPolicy
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.product.CompositePreviewSizePolicy
 import java.util.concurrent.atomic.AtomicLong
@@ -289,7 +291,10 @@ class SafeManualPreviewController(context: Context) {
         }
         try {
             val ids = manager.cameraIdList.toList()
-            val cameraId = ids.firstOrNull { it == "2" } ?: ids.firstOrNull()
+            val cameraId = RecordingCameraPolicy.choose(
+                requestedId = SettingsStore.get(appContext).recordingCameraId,
+                usableIds = ids,
+            )?.cameraId
             if (cameraId == null) {
                 fail("没有可用摄像头")
                 return

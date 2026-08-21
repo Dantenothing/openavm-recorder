@@ -32,6 +32,7 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_AUTO_CLEANUP = "auto_cleanup"
         const val KEY_PREVIEW_WHILE_RECORDING = "preview_while_recording_beta2"
         const val KEY_AUTO_START_RECORDING = "auto_start_recording"
+        const val KEY_RECORDING_CAMERA_ID = "recording_camera_id"
         const val KEY_LANE_ORDER = "lane_order"
         const val KEY_LANE_ROTATIONS = "lane_rotations"
         const val KEY_LANE_LABELS = "lane_labels"
@@ -85,6 +86,16 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     val autoStartRecordingEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_RECORDING, false)
+
+    /**
+     * [RecordingCameraPolicy.AUTO] or an explicit camera id. Hardware validity
+     * cannot be checked here; [RecordingCameraPolicy] falls back to auto (and
+     * the recorder logs it) when a stored id is no longer usable.
+     */
+    val recordingCameraId: String
+        get() = prefs.getString(KEY_RECORDING_CAMERA_ID, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: RecordingCameraPolicy.AUTO
 
     /** Display order: slot i shows source lane [laneOrder[i]] (1-based). */
     val laneOrder: List<Int>
@@ -173,6 +184,12 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     fun setAutoStartRecordingEnabled(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTO_START_RECORDING, value).apply()
+    }
+
+    fun setRecordingCameraId(value: String) {
+        val safe = value.trim()
+        if (safe.isEmpty()) return
+        prefs.edit().putString(KEY_RECORDING_CAMERA_ID, safe).apply()
     }
 
     fun setLensMode(value: FourLaneLensMode) {
