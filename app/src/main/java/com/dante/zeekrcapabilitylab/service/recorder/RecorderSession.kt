@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.view.Surface
+import com.dante.zeekrcapabilitylab.BuildConfig
 import com.dante.zeekrcapabilitylab.ZeekrApp
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.data.Severity
@@ -100,36 +101,20 @@ class RecorderSession(
     private var previewReplacementGeneration = 0L
     private var finalizeSequence = 0L
     private var openGeneration = 0L
+    private var manualSessionGeneration = 0L
     private var timeoutRunnable: Runnable? = null
     private var openWatchdogRunnable: Runnable? = null
     private var setupWatchdogRunnable: Runnable? = null
     private var previewReplacementWatchdogRunnable: Runnable? = null
     private var previewReplacementWatchdogToken: Long? = null
-    private var recoveryRetryRunnable: Runnable? = null
-    private var recoveryRetryAttempt = 0
+    private val cameraRecovery = CameraRecoveryStateMachine()
+    private var cameraRecoveryTimerRunnable: Runnable? = null
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
     private val pendingSidecarFiles: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private var state = RecorderState()
     private var cameraDiagnosticsRegistered = false
     private var diagnosticsActiveCameraId: String? = null
-    private val cameraAvailabilityCallback = object : CameraManager.AvailabilityCallback() {
-        override fun onCameraAvailable(cameraId: String) {
-            logCameraAvailability(cameraId, available = true)
-        }
-
-        override fun onCameraUnavailable(cameraId: String) {
-            logCameraAvailability(cameraId, available = false)
-        }
-
-        override fun onCameraAccessPrioritiesChanged() {
-            if (!cameraDiagnosticsRegistered) return
-            EventLogger.logEvent(
-                Categories.SYSTEM,
-                "RECORDER_CAMERA_ACCESS_PRIORITIES_CHANGED",
-                payload = cameraDiagnosticStatePayload(),
-            )
-        }
-    }
+    private var cameraAvailabilityCallback: CameraManager.AvailabilityCallback? = null
 
     init {
         updateState(state)
@@ -180,11 +165,12 @@ class RecorderSession(
             this.currentConsumesPendingIncident = false
             this.segmentNumber = 0
             this.previousSegmentStoppedElapsedMs = null
+            manualSessionGeneration++
+            cameraRecovery.beginManualSession(manualSessionGeneration, config.cameraId)
             cancelOpenWatchdog()
             cancelSetupWatchdog()
             cancelTimeout()
-            cancelRecoveryRetry()
-            recoveryRetryAttempt = 0
+            cancelCameraRecoveryTimer()
             quarantineLeftoverPartials()
             updateState(
                 state.copy(
@@ -639,10 +625,13 @@ class RecorderSession(
         postCamera {
             stopping = true
             startInFlight = false
+            cameraRecovery.cancelManualSession(manualSessionGeneration)
+            manualSessionGeneration++
+            openGeneration++
             cancelOpenWatchdog()
             cancelSetupWatchdog()
             cancelTimeout()
-            cancelRecoveryRetry()
+            cancelCameraRecoveryTimer()
             if (currentPartial != null) {
                 finalizeCurrentSegment("STOP", null)
             } else {
@@ -705,36 +694,14 @@ class RecorderSession(
 
     fun retry() {
         postCamera {
-            val cfg = config ?: return@postCamera
-            if (state.status != RecorderStatus.CAMERA_UNAVAILABLE ||
-                startInFlight || cameraOpenInFlight || recording
-            ) {
-                EventLogger.logEvent(
-                    Categories.SYSTEM,
-                    "RECORDER_RETRY_IGNORED",
-                    payload = mapOf(
-                        "status" to state.status,
-                        "expected" to RecorderStatus.CAMERA_UNAVAILABLE,
-                    ),
-                )
-                return@postCamera
-            }
-            if (cameraDevice != null) closeCamera()
-            stopping = false
-            cancelOpenWatchdog()
-            cancelSetupWatchdog()
-            cancelTimeout()
-            cancelRecoveryRetry()
-            recoveryRetryAttempt = 0
-            updateState(state.copy(status = RecorderStatus.STARTING, lastError = null, message = "Retrying"))
             EventLogger.logEvent(
                 Categories.SYSTEM,
-                "RECORDER_RETRY",
-                payload = mapOf("cameraId" to cfg.cameraId, "profile" to cfg.profile.key),
+                "RECORDER_RETRY_IGNORED",
+                payload = mapOf(
+                    "status" to state.status,
+                    "reason" to "A new manual Start is required after a terminal Session",
+                ),
             )
-            startCameraConflictDiagnostics(cfg)
-            startInFlight = true
-            openCamera(cfg.cameraId)
         }
     }
 
@@ -788,10 +755,13 @@ class RecorderSession(
         releasing = true
         stopping = true
         startInFlight = false
+        cameraRecovery.cancelManualSession(manualSessionGeneration)
+        manualSessionGeneration++
+        openGeneration++
         cancelOpenWatchdog()
         cancelSetupWatchdog()
         cancelTimeout()
-        cancelRecoveryRetry()
+        cancelCameraRecoveryTimer()
         if (currentPartial != null) {
             finalizeCurrentSegment("STOP", null)
         }
@@ -839,12 +809,34 @@ class RecorderSession(
             )
             return
         }
-        cameraDiagnosticsRegistered = true
+        val callbackGeneration = manualSessionGeneration
+        val callback = object : CameraManager.AvailabilityCallback() {
+            override fun onCameraAvailable(cameraId: String) {
+                logCameraAvailability(cameraId, available = true)
+                handleTargetCameraAvailability(callbackGeneration, cameraId, available = true)
+            }
+
+            override fun onCameraUnavailable(cameraId: String) {
+                logCameraAvailability(cameraId, available = false)
+                handleTargetCameraAvailability(callbackGeneration, cameraId, available = false)
+            }
+
+            override fun onCameraAccessPrioritiesChanged() {
+                if (!cameraDiagnosticsRegistered || callbackGeneration != manualSessionGeneration) return
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_CAMERA_ACCESS_PRIORITIES_CHANGED",
+                    payload = cameraDiagnosticStatePayload(),
+                )
+            }
+        }
+        cameraAvailabilityCallback = callback
         val failure = runCatching {
-            manager.registerAvailabilityCallback(cameraAvailabilityCallback, handler)
+            manager.registerAvailabilityCallback(callback, handler)
         }.exceptionOrNull()
+        cameraDiagnosticsRegistered = failure == null
         if (failure != null) {
-            cameraDiagnosticsRegistered = false
+            cameraAvailabilityCallback = null
             diagnosticsActiveCameraId = null
         }
         EventLogger.logEvent(
@@ -859,15 +851,17 @@ class RecorderSession(
     }
 
     private fun stopCameraConflictDiagnostics() {
+        val callback = cameraAvailabilityCallback
+        cameraAvailabilityCallback = null
         if (!cameraDiagnosticsRegistered) {
             diagnosticsActiveCameraId = null
             return
         }
         val payload = cameraDiagnosticStatePayload().toMutableMap()
         cameraDiagnosticsRegistered = false
-        val failure = runCatching {
-            manager.unregisterAvailabilityCallback(cameraAvailabilityCallback)
-        }.exceptionOrNull()
+        val failure = callback?.let {
+            runCatching { manager.unregisterAvailabilityCallback(it) }.exceptionOrNull()
+        }
         payload["result"] = if (failure == null) "UNREGISTERED" else "ERROR"
         payload["error"] = failure?.javaClass?.simpleName ?: "-"
         EventLogger.logEvent(
@@ -953,6 +947,9 @@ class RecorderSession(
         "recording" to recording.toString(),
         "appForeground" to ZeekrApp.isForeground.value.toString(),
         "segment" to segmentNumber.toString(),
+        "manualSessionGeneration" to manualSessionGeneration.toString(),
+        "recoveryPhase" to cameraRecovery.snapshot.phase.toString(),
+        "recoveryAttempts" to cameraRecovery.snapshot.attemptsMade.toString(),
     )
 
     private fun openCamera(cameraId: String) {
@@ -977,14 +974,18 @@ class RecorderSession(
         cameraOpenInFlight = true
         openGeneration++
         val generation = openGeneration
+        val sessionToken = manualSessionGeneration
         scheduleOpenWatchdog(generation)
         try {
-            manager.openCamera(cameraId, createStateCallback(generation), cameraHandler)
+            manager.openCamera(cameraId, createStateCallback(generation, sessionToken), cameraHandler)
         } catch (e: CameraAccessException) {
             cancelOpenWatchdog()
             cameraOpenInFlight = false
             startInFlight = false
-            cameraUnavailable(cameraAccessMessage(e))
+            cameraUnavailable(
+                cameraAccessMessage(e),
+                recoverableContention = isRecoverableCameraAccessReason(e.reason),
+            )
         } catch (t: Throwable) {
             cancelOpenWatchdog()
             cameraOpenInFlight = false
@@ -998,19 +999,20 @@ class RecorderSession(
      * Only the callback whose token still matches may own/tear down shared state;
      * a stale callback only closes its own camera.
      */
-    private fun createStateCallback(generation: Long): CameraDevice.StateCallback =
+    private fun createStateCallback(
+        generation: Long,
+        sessionToken: Long,
+    ): CameraDevice.StateCallback =
         object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 // Stale callbacks must mutate no shared state: check the token first.
-                if (generation != openGeneration) {
+                if (generation != openGeneration || sessionToken != manualSessionGeneration) {
                     closeQuietly(camera)
                     return
                 }
                 cameraOpenInFlight = false
                 startInFlight = false
                 cancelOpenWatchdog()
-                cancelRecoveryRetry()
-                recoveryRetryAttempt = 0
                 if (stopping || releasing || config == null) {
                     closeQuietly(camera)
                     return
@@ -1020,7 +1022,7 @@ class RecorderSession(
             }
 
             override fun onDisconnected(camera: CameraDevice) {
-                if (generation != openGeneration) {
+                if (generation != openGeneration || sessionToken != manualSessionGeneration) {
                     closeQuietly(camera)
                     return
                 }
@@ -1030,11 +1032,11 @@ class RecorderSession(
                 if (cameraDevice === camera) cameraDevice = null
                 closeQuietly(camera)
                 EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CAMERA_DISCONNECTED")
-                handleCameraLoss("CAMERA_DISCONNECTED")
+                handleCameraLoss("CAMERA_DISCONNECTED", recoverableContention = true)
             }
 
             override fun onError(camera: CameraDevice, errorCode: Int) {
-                if (generation != openGeneration) {
+                if (generation != openGeneration || sessionToken != manualSessionGeneration) {
                     closeQuietly(camera)
                     return
                 }
@@ -1042,7 +1044,10 @@ class RecorderSession(
                 closeQuietly(camera)
                 val message = cameraDeviceErrorMessage(errorCode)
                 EventLogger.markError(Categories.SYSTEM, "RECORDER_CAMERA_ERROR", message, null)
-                handleCameraLoss(message)
+                handleCameraLoss(
+                    message,
+                    recoverableContention = isRecoverableCameraDeviceError(errorCode),
+                )
             }
         }
 
@@ -1050,6 +1055,7 @@ class RecorderSession(
         val cfg = config ?: return
         if (stopping || releasing) return
         val device = cameraDevice ?: return
+        val sessionToken = manualSessionGeneration
         val decision = prepareStorage(cfg)
         if (!decision.proceed) {
             storageBlocked(decision.reason ?: "STORAGE_BLOCKED")
@@ -1117,7 +1123,7 @@ class RecorderSession(
             captureSession?.close()
             captureSession = null
             fun configureSession(includePreview: Boolean) {
-                if (!ownsSetup(generation, partial, recorder)) return
+                if (!ownsSetup(generation, partial, recorder, sessionToken)) return
                 val preview = recordingPreviewSurface?.takeIf { includePreview && it.isValid }
                 if (includePreview && preview == null) {
                     releaseRecordingPreviewSurface()
@@ -1128,7 +1134,7 @@ class RecorderSession(
                 val outputs = if (preview != null) listOf(surface, preview) else listOf(surface)
                 val sessionCallback = object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
-                            if (!ownsSetup(generation, partial, recorder)) {
+                            if (!ownsSetup(generation, partial, recorder, sessionToken)) {
                                 closeQuietlySession(session)
                                 return
                             }
@@ -1152,6 +1158,7 @@ class RecorderSession(
                                         generation = generation,
                                         partial = partial,
                                         recorder = recorder,
+                                        sessionToken = sessionToken,
                                         reason = t.message ?: "PREVIEW_REPEATING_REQUEST_FAILED",
                                     ) { configureSession(includePreview = false) }
                                 } else {
@@ -1165,6 +1172,10 @@ class RecorderSession(
                                 recording = true
                                 segmentRecordingStartedAtEpochMs = System.currentTimeMillis()
                                 segmentRecordingStartedAtElapsedMs = SystemClock.elapsedRealtime()
+                                val recoveryOutcome = cameraRecovery.markRecordingStarted(
+                                    sessionToken,
+                                    segmentRecordingStartedAtElapsedMs!!,
+                                )
                                 updateState(
                                     state.copy(
                                         status = RecorderStatus.RECORDING,
@@ -1172,7 +1183,13 @@ class RecorderSession(
                                         currentFile = partial.name,
                                         segmentStartedAtEpochMs = segmentRecordingStartedAtEpochMs,
                                         lastError = null,
-                                        message = null,
+                                        message = if (
+                                            recoveryOutcome == CameraRecoveryStateMachine.RecordingStartOutcome.RESUMED
+                                        ) {
+                                            "Recording resumed"
+                                        } else {
+                                            null
+                                        },
                                         previewActive = previewTarget != null,
                                     ),
                                 )
@@ -1187,6 +1204,16 @@ class RecorderSession(
                                         "previewActive" to (previewTarget != null).toString(),
                                     ),
                                 )
+                                if (recoveryOutcome == CameraRecoveryStateMachine.RecordingStartOutcome.RESUMED) {
+                                    EventLogger.logEvent(
+                                        Categories.SYSTEM,
+                                        "RECORDER_CAMERA_RECOVERY_SUCCEEDED",
+                                        payload = recoveryDiagnosticPayload() + mapOf(
+                                            "segment" to segmentNumber.toString(),
+                                        ),
+                                    )
+                                }
+                                scheduleCameraRecoveryTimer()
                                 scheduleTimeout(generation, cfg.segmentSeconds * 1000L)
                             } catch (t: Throwable) {
                                 failSegmentStart(generation, partial, t.message ?: "recorder.start failed")
@@ -1194,7 +1221,7 @@ class RecorderSession(
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
-                            if (!ownsSetup(generation, partial, recorder)) {
+                            if (!ownsSetup(generation, partial, recorder, sessionToken)) {
                                 quarantine(partial)
                                 closeQuietlySession(session)
                                 return
@@ -1205,6 +1232,7 @@ class RecorderSession(
                                     generation = generation,
                                     partial = partial,
                                     recorder = recorder,
+                                    sessionToken = sessionToken,
                                     reason = "PREVIEW_RECORD_SESSION_CONFIGURE_FAILED",
                                 ) { configureSession(includePreview = false) }
                             } else {
@@ -1221,6 +1249,7 @@ class RecorderSession(
                             generation = generation,
                             partial = partial,
                             recorder = recorder,
+                            sessionToken = sessionToken,
                             reason = t.message ?: "PREVIEW_SESSION_CREATE_FAILED",
                         ) { configureSession(includePreview = false) }
                     } else {
@@ -1247,10 +1276,11 @@ class RecorderSession(
         generation: Long,
         partial: File,
         recorder: MediaRecorder,
+        sessionToken: Long,
         reason: String,
         retryRecorderOnly: () -> Unit,
     ) {
-        if (!ownsSetup(generation, partial, recorder)) return
+        if (!ownsSetup(generation, partial, recorder, sessionToken)) return
         releaseRecordingPreviewSurface()
         updateState(
             state.copy(
@@ -1272,7 +1302,9 @@ class RecorderSession(
         generation: Long,
         partial: File,
         localRecorder: MediaRecorder,
+        sessionToken: Long,
     ): Boolean = SegmentGuardPolicy.ownsSetup(generation, segmentGeneration, currentPartial, partial) &&
+        sessionToken == manualSessionGeneration &&
         !stopping && !releasing &&
         mediaRecorder === localRecorder
 
@@ -1736,7 +1768,15 @@ class RecorderSession(
         }
         if (reason == "CAMERA_LOSS") {
             closeCamera()
-            cameraUnavailable(error ?: "CAMERA_LOSS")
+            enterCameraRecoveryWaiting(error ?: "CAMERA_LOSS")
+            return
+        }
+        if (reason == "RECOVERY_ATTEMPT_CONTENTION" || reason == "RECOVERY_ATTEMPT_TERMINAL") {
+            closeCamera()
+            cameraUnavailable(
+                error ?: reason,
+                recoverableContention = reason == "RECOVERY_ATTEMPT_CONTENTION",
+            )
             return
         }
         if (!success) {
@@ -1752,28 +1792,152 @@ class RecorderSession(
         }
     }
 
-    private fun handleCameraLoss(message: String) {
+    private fun handleCameraLoss(
+        message: String,
+        recoverableContention: Boolean = false,
+    ) {
         cancelOpenWatchdog()
         cancelSetupWatchdog()
         cancelTimeout()
         startInFlight = false
         cameraOpenInFlight = false
-        EventLogger.markError(Categories.SYSTEM, "RECORDER_CAMERA_LOSS", message, null)
+        val token = manualSessionGeneration
+        val wasResuming = cameraRecovery.snapshot.phase == CameraRecoveryPhase.RESUMING
+        if (wasResuming) {
+            EventLogger.markError(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_RECOVERY_ATTEMPT_LOST",
+                message,
+                null,
+            )
+            if (SegmentGuardPolicy.shouldFinalizeOnLoss(currentPartial != null)) {
+                finalizeCurrentSegment(
+                    if (recoverableContention) {
+                        "RECOVERY_ATTEMPT_CONTENTION"
+                    } else {
+                        "RECOVERY_ATTEMPT_TERMINAL"
+                    },
+                    message,
+                )
+            } else {
+                closeCamera()
+                cameraUnavailable(message, recoverableContention)
+            }
+            return
+        }
+        val recoveryArmed = BuildConfig.CAMERA_INTERRUPTION_RECOVERY_ENABLED &&
+            recoverableContention &&
+            cameraRecovery.beginRecoverableLoss(token, message, SystemClock.elapsedRealtime())
+        EventLogger.logEvent(
+            category = Categories.SYSTEM,
+            eventName = "RECORDER_CAMERA_LOSS",
+            severity = Severity.ERROR,
+            payload = recoveryDiagnosticPayload() + mapOf(
+                "recoverableContention" to recoverableContention.toString(),
+                "recoveryArmed" to recoveryArmed.toString(),
+            ),
+            errorMessage = message,
+        )
         // PREPARING segments (currentPartial != null, recording == false) must also be
         // finalized/quarantined so a late onConfigured cannot start a dead recorder.
         if (SegmentGuardPolicy.shouldFinalizeOnLoss(currentPartial != null)) {
             finalizeCurrentSegment("CAMERA_LOSS", message)
         } else {
             closeCamera()
-            cameraUnavailable(message)
+            if (recoveryArmed) {
+                enterCameraRecoveryWaiting(message)
+            } else {
+                terminateCameraUnavailable(message)
+            }
         }
     }
 
-    private fun cameraUnavailable(message: String) {
+    private fun cameraUnavailable(
+        message: String,
+        recoverableContention: Boolean = false,
+    ) {
         closeCamera()
-        stopCameraConflictDiagnostics()
-        cancelRecoveryRetry()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_CAMERA_UNAVAILABLE", message, null)
+        if (BuildConfig.CAMERA_INTERRUPTION_RECOVERY_ENABLED &&
+            cameraRecovery.snapshot.phase == CameraRecoveryPhase.RESUMING
+        ) {
+            val action = cameraRecovery.attemptFailed(
+                manualSessionGeneration,
+                recoverable = recoverableContention,
+                reason = message,
+                nowMs = SystemClock.elapsedRealtime(),
+            )
+            if (action !is CameraRecoveryAction.Abandon &&
+                cameraRecovery.snapshot.phase == CameraRecoveryPhase.WAITING_CAMERA
+            ) {
+                updateState(
+                    state.copy(
+                        status = RecorderStatus.WAITING_CAMERA,
+                        currentFile = null,
+                        segmentStartedAtEpochMs = null,
+                        lastError = message,
+                        message = "Camera still busy; waiting before the next bounded attempt.",
+                        previewRequested = false,
+                        previewActive = false,
+                    ),
+                )
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_CAMERA_RECOVERY_RETRY_SCHEDULED",
+                    payload = recoveryDiagnosticPayload() + mapOf("reason" to message),
+                )
+                applyCameraRecoveryAction(action)
+                return
+            }
+            if (action is CameraRecoveryAction.Abandon) {
+                terminateCameraUnavailable(action.reason)
+                return
+            }
+        }
+        terminateCameraUnavailable(message)
+    }
+
+    private fun enterCameraRecoveryWaiting(message: String) {
+        val action = cameraRecovery.finalizeCompleted(
+            manualSessionGeneration,
+            SystemClock.elapsedRealtime(),
+        )
+        if (action is CameraRecoveryAction.Abandon ||
+            cameraRecovery.snapshot.phase != CameraRecoveryPhase.WAITING_CAMERA
+        ) {
+            terminateCameraUnavailable(
+                (action as? CameraRecoveryAction.Abandon)?.reason ?: message,
+            )
+            return
+        }
+        closeCamera()
+        releaseRecordingPreviewSurface()
+        releasePendingRecordingPreviewSurface()
+        updateState(
+            state.copy(
+                status = RecorderStatus.WAITING_CAMERA,
+                currentFile = null,
+                segmentStartedAtEpochMs = null,
+                lastError = message,
+                message = "Camera taken by another app; waiting to resume this Session.",
+                previewRequested = false,
+                previewActive = false,
+                previewFallbackUsed = false,
+            ),
+        )
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_RECOVERY_WAITING",
+            payload = recoveryDiagnosticPayload() + mapOf("reason" to message),
+        )
+        applyCameraRecoveryAction(action)
+    }
+
+    private fun terminateCameraUnavailable(message: String) {
+        closeCamera()
+        cancelCameraRecoveryTimer()
+        cameraRecovery.terminateManualSession(manualSessionGeneration, message)
+        stopCameraConflictDiagnostics()
         updateState(
             state.copy(
                 status = RecorderStatus.CAMERA_UNAVAILABLE,
@@ -1786,9 +1950,125 @@ class RecorderSession(
         if (!releasing) onStopped()
     }
 
+    private fun handleTargetCameraAvailability(
+        callbackGeneration: Long,
+        cameraId: String,
+        available: Boolean,
+    ) {
+        if (!BuildConfig.CAMERA_INTERRUPTION_RECOVERY_ENABLED ||
+            callbackGeneration != manualSessionGeneration
+        ) {
+            return
+        }
+        val action = cameraRecovery.onAvailability(
+            generation = callbackGeneration,
+            cameraId = cameraId,
+            available = available,
+            nowMs = SystemClock.elapsedRealtime(),
+        )
+        if (cameraId == cameraRecovery.snapshot.targetCameraId) {
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_RECOVERY_AVAILABILITY_TRACKED",
+                payload = recoveryDiagnosticPayload() + mapOf(
+                    "available" to available.toString(),
+                ),
+            )
+        }
+        applyCameraRecoveryAction(action)
+    }
+
+    private fun applyCameraRecoveryAction(action: CameraRecoveryAction) {
+        when (action) {
+            CameraRecoveryAction.None -> scheduleCameraRecoveryTimer()
+            is CameraRecoveryAction.Attempt -> beginCameraRecoveryAttempt(action)
+            is CameraRecoveryAction.Abandon -> terminateCameraUnavailable(action.reason)
+        }
+    }
+
+    private fun beginCameraRecoveryAttempt(action: CameraRecoveryAction.Attempt) {
+        val cfg = config
+        val expectedCameraId = cameraRecovery.snapshot.targetCameraId
+        if (action.generation != manualSessionGeneration || stopping || releasing ||
+            cfg == null || cfg.cameraId != expectedCameraId || recording || startInFlight ||
+            cameraOpenInFlight || cameraRecovery.snapshot.phase != CameraRecoveryPhase.RESUMING
+        ) {
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_RECOVERY_ATTEMPT_REJECTED",
+                severity = Severity.WARN,
+                payload = recoveryDiagnosticPayload(),
+            )
+            if (action.generation == manualSessionGeneration && !stopping && !releasing) {
+                terminateCameraUnavailable("RECOVERY_STATE_INVALID")
+            }
+            return
+        }
+        cancelCameraRecoveryTimer()
+        closeCamera()
+        updateState(
+            state.copy(
+                status = RecorderStatus.RESUMING,
+                currentFile = null,
+                segmentStartedAtEpochMs = null,
+                lastError = null,
+                message = "Reopening the same camera (${action.attemptNumber}/${cameraRecovery.maxAttempts})",
+                previewRequested = false,
+                previewActive = false,
+            ),
+        )
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_RECOVERY_ATTEMPT",
+            payload = recoveryDiagnosticPayload() + mapOf(
+                "attempt" to action.attemptNumber.toString(),
+                "cameraId" to cfg.cameraId,
+            ),
+        )
+        startInFlight = true
+        openCamera(cfg.cameraId)
+    }
+
+    private fun scheduleCameraRecoveryTimer() {
+        cancelCameraRecoveryTimer()
+        val wakeAtMs = cameraRecovery.nextWakeAtMs() ?: return
+        val token = manualSessionGeneration
+        val delayMs = (wakeAtMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        val runnable = Runnable {
+            cameraRecoveryTimerRunnable = null
+            if (token != manualSessionGeneration || stopping || releasing) return@Runnable
+            val action = cameraRecovery.onTimer(token, SystemClock.elapsedRealtime())
+            applyCameraRecoveryAction(action)
+        }
+        cameraRecoveryTimerRunnable = runnable
+        cameraHandler?.postDelayed(runnable, delayMs)
+    }
+
+    private fun cancelCameraRecoveryTimer() {
+        cameraRecoveryTimerRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        cameraRecoveryTimerRunnable = null
+    }
+
+    private fun recoveryDiagnosticPayload(): Map<String, String> {
+        val recovery = cameraRecovery.snapshot
+        return mapOf(
+            "generation" to recovery.generation.toString(),
+            "targetCameraId" to (recovery.targetCameraId ?: "-"),
+            "phase" to recovery.phase.toString(),
+            "availability" to recovery.availability.toString(),
+            "attempts" to recovery.attemptsMade.toString(),
+            "maxAttempts" to cameraRecovery.maxAttempts.toString(),
+            "windowMs" to cameraRecovery.recoveryWindowMs.toString(),
+            "deadlineAtElapsedMs" to (recovery.deadlineAtMs?.toString() ?: "-"),
+            "nextAttemptAtElapsedMs" to (recovery.nextAttemptAtMs?.toString() ?: "-"),
+            "sourceRole" to (config?.source?.sourceRole?.name ?: "-"),
+        )
+    }
+
     private fun setError(message: String) {
         stopCameraConflictDiagnostics()
-        cancelRecoveryRetry()
+        cancelCameraRecoveryTimer()
+        cameraRecovery.terminateManualSession(manualSessionGeneration, message)
         updateState(
             state.copy(
                 status = RecorderStatus.ERROR,
@@ -1800,7 +2080,8 @@ class RecorderSession(
     }
 
     private fun storageBlocked(reason: String) {
-        cancelRecoveryRetry()
+        cancelCameraRecoveryTimer()
+        cameraRecovery.terminateManualSession(manualSessionGeneration, reason)
         closeCamera()
         stopCameraConflictDiagnostics()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_STORAGE_BLOCKED", reason, null)
@@ -2237,56 +2518,16 @@ class RecorderSession(
         runCatching { surface?.release() }
     }
 
-    private fun scheduleRecoveryRetry(reason: String): String? {
-        cancelRecoveryRetry()
-        if (!isRecoverableCameraContention(reason) || stopping || releasing || config == null) return null
-        val attemptIndex = recoveryRetryAttempt
-        if (attemptIndex >= RECOVERY_RETRY_DELAYS_MS.size) return null
-        val delayMs = RECOVERY_RETRY_DELAYS_MS[attemptIndex]
-        val attemptNumber = attemptIndex + 1
-        recoveryRetryAttempt = attemptNumber
-        val runnable = Runnable {
-            recoveryRetryRunnable = null
-            val cfg = config
-            if (cfg == null || stopping || releasing || state.status != RecorderStatus.CAMERA_UNAVAILABLE ||
-                startInFlight || cameraOpenInFlight || recording
-            ) {
-                return@Runnable
-            }
-            closeCamera()
-            updateState(
-                state.copy(
-                    status = RecorderStatus.STARTING,
-                    lastError = null,
-                    message = "Recovering camera ($attemptNumber/${RECOVERY_RETRY_DELAYS_MS.size})",
-                ),
-            )
-            EventLogger.logEvent(
-                Categories.SYSTEM,
-                "RECORDER_CAMERA_AUTO_RETRY",
-                payload = mapOf(
-                    "attempt" to attemptNumber.toString(),
-                    "reason" to reason,
-                    "delayMs" to delayMs.toString(),
-                ),
-            )
-            startInFlight = true
-            openCamera(cfg.cameraId)
-        }
-        recoveryRetryRunnable = runnable
-        cameraHandler?.postDelayed(runnable, delayMs)
-        return "Camera unavailable; retry $attemptNumber/${RECOVERY_RETRY_DELAYS_MS.size} in ${delayMs / 1000L}s"
-    }
+    private fun isRecoverableCameraAccessReason(reason: Int): Boolean = reason in setOf(
+        CameraAccessException.CAMERA_IN_USE,
+        CameraAccessException.MAX_CAMERAS_IN_USE,
+        CameraAccessException.CAMERA_DISCONNECTED,
+    )
 
-    private fun cancelRecoveryRetry() {
-        recoveryRetryRunnable?.let { cameraHandler?.removeCallbacks(it) }
-        recoveryRetryRunnable = null
-    }
-
-    private fun isRecoverableCameraContention(reason: String): Boolean =
-        reason.contains("CAMERA_IN_USE") ||
-            reason.contains("MAX_CAMERAS_IN_USE") ||
-            reason.contains("CAMERA_DISCONNECTED")
+    private fun isRecoverableCameraDeviceError(errorCode: Int): Boolean = errorCode in setOf(
+        CameraDevice.StateCallback.ERROR_CAMERA_IN_USE,
+        CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE,
+    )
 
     private fun closeQuietly(camera: CameraDevice) {
         try {
@@ -2323,7 +2564,6 @@ class RecorderSession(
     }
 
     private companion object {
-        val RECOVERY_RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L)
         const val PREVIEW_REPLACEMENT_TIMEOUT_MS = 6_000L
     }
 

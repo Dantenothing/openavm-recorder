@@ -251,6 +251,8 @@ fun RecordScreen() {
         RecorderStatus.STARTING -> Utils.t("Preparing", "正在准备")
         RecorderStatus.RECORDING -> Utils.t("Recording ${Utils.formatDuration(recordingElapsed)}", "录像中 ${Utils.formatDuration(recordingElapsed)}")
         RecorderStatus.FINALIZING -> Utils.t("Saving", "正在保存")
+        RecorderStatus.WAITING_CAMERA -> Utils.t("Waiting for camera", "正在等待摄像头")
+        RecorderStatus.RESUMING -> Utils.t("Recovering recording", "正在恢复录像")
         RecorderStatus.CAMERA_UNAVAILABLE -> Utils.t("Camera in use", "摄像头占用")
         RecorderStatus.ERROR -> Utils.t("Recording error", "录像异常")
         else -> Utils.t("Standby", "待机")
@@ -259,6 +261,8 @@ fun RecordScreen() {
         RecorderStatus.RECORDING -> Color(0xFFFF6E6E)
         RecorderStatus.STARTING,
         RecorderStatus.FINALIZING,
+        RecorderStatus.WAITING_CAMERA,
+        RecorderStatus.RESUMING,
         RecorderStatus.CAMERA_UNAVAILABLE -> Color(0xFFFFB74D)
         RecorderStatus.ERROR -> MaterialTheme.colorScheme.error
         else -> Color(0xFF66BB6A)
@@ -454,7 +458,20 @@ fun RecordScreen() {
 
             if (recordingActive) {
                 Text(
-                    Utils.t("Writing segment ${recorderState.segmentNumber}", "正在写入第 ${recorderState.segmentNumber} 段"),
+                    when (recorderState.status) {
+                        RecorderStatus.WAITING_CAMERA -> Utils.t(
+                            "The selected camera is busy. This Session will resume automatically when it is released.",
+                            "所选摄像头正被占用，释放后本次 Session 会自动继续。",
+                        )
+                        RecorderStatus.RESUMING -> Utils.t(
+                            "Reopening the same camera and starting a new segment…",
+                            "正在重新打开同一摄像头并创建新分段…",
+                        )
+                        else -> Utils.t(
+                            "Writing segment ${recorderState.segmentNumber}",
+                            "正在写入第 ${recorderState.segmentNumber} 段",
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 5.dp),

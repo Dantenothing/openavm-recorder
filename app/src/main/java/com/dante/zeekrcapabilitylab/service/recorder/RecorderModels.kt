@@ -60,6 +60,8 @@ object RecorderStatus {
     const val STARTING = "STARTING"
     const val RECORDING = "RECORDING"
     const val FINALIZING = "FINALIZING"
+    const val WAITING_CAMERA = "WAITING_CAMERA"
+    const val RESUMING = "RESUMING"
     const val STOPPED = "STOPPED"
     const val CAMERA_UNAVAILABLE = "CAMERA_UNAVAILABLE"
     const val ERROR = "ERROR"
@@ -99,6 +101,8 @@ object RecorderCommandPolicy {
         RecorderStatus.STARTING,
         RecorderStatus.RECORDING,
         RecorderStatus.FINALIZING,
+        RecorderStatus.WAITING_CAMERA,
+        RecorderStatus.RESUMING,
         RecorderStatus.CAMERA_UNAVAILABLE,
         RecorderStatus.ERROR,
     )
@@ -111,7 +115,7 @@ object RecorderCommandPolicy {
     fun canStop(status: String, serviceRunning: Boolean): Boolean =
         serviceRunning && status != RecorderStatus.IDLE
 
-    /** Camera/OEM takeover ends this session; a later recording requires a fresh manual Start. */
+    /** Automatic recovery is internal to an already-running manual Session. */
     fun canRetry(status: String, serviceRunning: Boolean): Boolean = false
 
     fun canBookmark(serviceRunning: Boolean): Boolean = serviceRunning
@@ -262,6 +266,7 @@ object RecorderWakeLockPolicy {
         RecorderStatus.STARTING,
         RecorderStatus.RECORDING,
         RecorderStatus.FINALIZING,
+        RecorderStatus.RESUMING,
     )
 
     fun shouldHold(status: String): Boolean = status in HOLDING_STATUSES

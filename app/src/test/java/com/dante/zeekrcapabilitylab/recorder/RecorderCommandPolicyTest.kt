@@ -18,6 +18,8 @@ class RecorderCommandPolicyTest {
         assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.STARTING, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.RECORDING, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.FINALIZING, serviceRunning = true))
+        assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.WAITING_CAMERA, serviceRunning = true))
+        assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.RESUMING, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.CAMERA_UNAVAILABLE, serviceRunning = true))
         assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.ERROR, serviceRunning = true))
     }
@@ -28,6 +30,8 @@ class RecorderCommandPolicyTest {
             RecorderStatus.STARTING,
             RecorderStatus.RECORDING,
             RecorderStatus.FINALIZING,
+            RecorderStatus.WAITING_CAMERA,
+            RecorderStatus.RESUMING,
             RecorderStatus.CAMERA_UNAVAILABLE,
             RecorderStatus.ERROR,
         )) {
@@ -50,6 +54,8 @@ class RecorderCommandPolicyTest {
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.STARTING))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.RECORDING))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.FINALIZING))
+        assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.WAITING_CAMERA))
+        assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.RESUMING))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.CAMERA_UNAVAILABLE))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.ERROR))
         assertFalse(RecorderCommandPolicy.isActive(RecorderStatus.IDLE))
