@@ -20,8 +20,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.1.1-rc4"
+        versionCode = 14
+        versionName = "0.1.1-rc5"
         buildConfigField("String", "GIT_SHA", "\"$buildGitSha\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

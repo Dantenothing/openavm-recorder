@@ -279,7 +279,7 @@ fun EventsScreen() {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     SectionTitle(Utils.t("Saved events", "已保存事件"), Utils.t("${incidents.size}", "${incidents.size} 个"))
                 }
-                items(incidents, key = { "event:${it.segments.first().file.name}" }) { group ->
+                items(incidents, key = EventGroups::stableIncidentKey) { group ->
                     val first = group.segments.first()
                     LaunchedEffect(first.file.name) { loadCover(first.file) }
                     SavedEventCard(
