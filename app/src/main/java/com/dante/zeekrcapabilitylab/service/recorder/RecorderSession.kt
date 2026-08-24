@@ -191,6 +191,8 @@ class RecorderSession(
                     status = RecorderStatus.STARTING,
                     cameraId = config.cameraId,
                     profile = config.profile,
+                    sourceRole = config.source.sourceRole,
+                    layoutKind = config.source.layoutKind,
                     segmentSeconds = config.segmentSeconds,
                     storageLimitBytes = config.storageLimitBytes,
                     segmentNumber = 0,
@@ -1416,6 +1418,10 @@ class RecorderSession(
             finalPath = null,
             cameraId = cfg.cameraId,
             profile = cfg.profile,
+            sourceRole = cfg.source.sourceRole,
+            layoutKind = cfg.source.layoutKind,
+            mappingRevision = cfg.source.mappingRevision,
+            laneLayout = cfg.source.laneLayout,
             segmentSeconds = cfg.segmentSeconds,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
@@ -1579,6 +1585,10 @@ class RecorderSession(
             finalPath = if (success) finalFile else null,
             cameraId = cfg?.cameraId ?: state.cameraId ?: "?",
             profile = cfg?.profile ?: state.profile,
+            sourceRole = cfg?.source?.sourceRole ?: state.sourceRole ?: RecordingSourceRole.SURROUND,
+            layoutKind = cfg?.source?.layoutKind ?: state.layoutKind ?: RecordingLayoutKind.FOUR_LANE_V1,
+            mappingRevision = cfg?.source?.mappingRevision ?: 0,
+            laneLayout = cfg?.source?.laneLayout,
             segmentSeconds = cfg?.segmentSeconds ?: state.segmentSeconds,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
@@ -1960,18 +1970,13 @@ class RecorderSession(
         actualTrack: ActualTrackInfo?,
         health: FrameHealthReport?,
     ): SegmentSidecar {
-        val settings = SettingsStore.get(context)
-        val layout = SegmentLaneLayoutFactory.forProfile(
-            width = profile.size.width,
-            height = profile.size.height,
-            labels = settings.laneLabels,
-            displayOrder = settings.laneOrder,
-            rotations = settings.laneRotations,
-        )
         return SegmentSidecar(
             file = s.file.absolutePath,
             cameraId = s.cameraId,
             profile = profile,
+            sourceRole = s.sourceRole,
+            layoutKind = s.layoutKind,
+            mappingRevision = s.mappingRevision,
             segmentSeconds = s.segmentSeconds,
             segmentNumber = s.segmentNumber,
             processStartId = s.processStartId,
@@ -1992,7 +1997,7 @@ class RecorderSession(
             actualTrack = actualTrack,
             frameStats = s.frameStats,
             frameHealth = health,
-            laneLayout = layout,
+            laneLayout = s.laneLayout,
         )
     }
 
@@ -2328,6 +2333,10 @@ class RecorderSession(
         val finalPath: File?,
         val cameraId: String,
         val profile: CameraFormatProfile?,
+        val sourceRole: RecordingSourceRole,
+        val layoutKind: RecordingLayoutKind,
+        val mappingRevision: Int,
+        val laneLayout: SegmentLaneLayout?,
         val segmentSeconds: Int,
         val segmentNumber: Int,
         val processStartId: String,

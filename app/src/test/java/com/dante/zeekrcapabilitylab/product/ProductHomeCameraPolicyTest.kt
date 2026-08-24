@@ -150,11 +150,10 @@ class ProductHomeCameraPolicyTest {
             overlaySource.contains("listOf(\"前\", \"后\", \"左\", \"右\")"),
         )
         assertTrue(
-            source.contains(
-                "LaunchedEffect(\n        cameraPermission,\n        recordingActive,\n" +
-                    "        recorderState.previewRequested,\n        recorderState.previewFallbackUsed,",
-            ),
+            source.contains("recorderState.previewFallbackUsed"),
         )
+        assertTrue(source.contains("RecordingSourceSelector("))
+        assertTrue(source.contains("previewController.startPreview(resolvedIdleSource!!)"))
         assertTrue(source.contains("TRIGGER_AUTO_PREVIEW"))
         assertTrue(source.contains("replacePreviewSurface"))
         assertTrue(source.contains("HomePreviewPane("))

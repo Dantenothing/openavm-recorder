@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.File
 import java.security.MessageDigest
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 
 /** Small disk cache; thumbnail extraction is serialized to protect the car decoder. */
 class RecordingThumbnailCache(private val root: File) {
@@ -13,13 +14,24 @@ class RecordingThumbnailCache(private val root: File) {
     }
 
     @Synchronized
-    fun loadOrCreate(video: File, laneSizePx: Int = 160): Bitmap? {
+    fun loadOrCreate(
+        video: File,
+        layoutKind: RecordingLayoutKind = RecordingLayoutKind.FOUR_LANE_V1,
+        laneSizePx: Int = 160,
+    ): Bitmap? {
         if (!video.isFile) return null
-        val target = fileFor(video)
+        val target = fileFor(video, layoutKind)
         BitmapFactory.decodeFile(target.absolutePath)?.let { return it }
         if (target.exists()) target.delete()
 
-        val cover = FourLaneThumbs.extractCover(video, laneSizePx) ?: return null
+        val cover = when (layoutKind) {
+            RecordingLayoutKind.FOUR_LANE_V1 -> FourLaneThumbs.extractCover(video, laneSizePx)
+            RecordingLayoutKind.SINGLE_V1 -> SingleFrameThumbs.extractCover(
+                video,
+                widthPx = laneSizePx * 2,
+                heightPx = laneSizePx * 2,
+            )
+        } ?: return null
         val temp = File(target.absolutePath + ".tmp")
         return try {
             val written = temp.outputStream().buffered().use { output ->
@@ -45,11 +57,17 @@ class RecordingThumbnailCache(private val root: File) {
 
     @Synchronized
     fun remove(video: File) {
-        runCatching { fileFor(video).delete() }
+        RecordingLayoutKind.entries.forEach { layout ->
+            runCatching { fileFor(video, layout).delete() }
+        }
     }
 
-    private fun fileFor(video: File): File {
-        val identity = "${video.absolutePath}|${video.length()}|${video.lastModified()}"
+    private fun fileFor(video: File, layoutKind: RecordingLayoutKind): File {
+        // Keep the established four-lane identity so upgrading does not force
+        // every existing cover to be decoded again. Only single-view covers
+        // need a distinct key because their composition differs.
+        val identity = "${video.absolutePath}|${video.length()}|${video.lastModified()}" +
+            if (layoutKind == RecordingLayoutKind.SINGLE_V1) "|SINGLE_V1" else ""
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(identity.toByteArray())
             .joinToString("") { "%02x".format(it) }

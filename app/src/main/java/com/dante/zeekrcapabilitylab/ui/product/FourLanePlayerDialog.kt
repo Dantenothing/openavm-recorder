@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -62,6 +64,8 @@ import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.service.recorder.PlaybackPinRegistry
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -75,6 +79,14 @@ private data class PlaybackControls(
     val isPlaying: () -> Boolean,
 )
 
+private data class PlaybackSurfaceCallbacks(
+    val onControlsReady: (PlaybackControls?) -> Unit,
+    val onPrepared: (Long) -> Unit,
+    val onFirstFrame: () -> Unit,
+    val onCompleted: () -> Unit,
+    val onError: (String) -> Unit,
+)
+
 /**
  * Product playback surface. It deliberately mirrors the live-preview path:
  * one ordinary TextureView receives the 1280x5140 composite and the shared
@@ -83,6 +95,8 @@ private data class PlaybackControls(
 @Composable
 fun FourLanePlayerDialog(
     file: File,
+    layoutKind: RecordingLayoutKind? = RecordingLayoutKind.FOUR_LANE_V1,
+    sourceRole: RecordingSourceRole? = RecordingSourceRole.SURROUND,
     onPrevious: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
     onSendToPhone: (() -> Unit)? = null,
@@ -96,6 +110,7 @@ fun FourLanePlayerDialog(
         value = withContext(Dispatchers.IO) { PlaybackInspector.inspect(file) }
     }
     val directionLabels = productDirectionLabels()
+    val isFourLane = layoutKind != RecordingLayoutKind.SINGLE_V1
 
     var controls by remember(file) { mutableStateOf<PlaybackControls?>(null) }
     var playing by remember(file) { mutableStateOf(false) }
@@ -114,13 +129,14 @@ fun FourLanePlayerDialog(
     // AndroidView keeps the attached View across recompositions. Reuse that
     // same attached container when previous/next changes the media source.
     val playbackContainer = remember(context) { FourLaneTextureContainer(context) }
+    val singleTextureView = remember(context) { TextureView(context) }
 
     DisposableEffect(file.absolutePath) {
         PlaybackPinRegistry.acquire(file)
         onDispose { PlaybackPinRegistry.release(file) }
     }
 
-    BackHandler(enabled = displayMode.singleLane != null) {
+    BackHandler(enabled = isFourLane && displayMode.singleLane != null) {
         displayMode = FourLaneDisplayMode.FOUR_GRID
         zoom = playbackContainer.resetViewport()
     }
@@ -137,7 +153,7 @@ fun FourLanePlayerDialog(
 
     Dialog(
         onDismissRequest = {
-            if (displayMode.singleLane != null) {
+            if (isFourLane && displayMode.singleLane != null) {
                 displayMode = FourLaneDisplayMode.FOUR_GRID
                 zoom = playbackContainer.resetViewport()
             } else {
@@ -163,7 +179,7 @@ fun FourLanePlayerDialog(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            Utils.t("Playback", "录像回放"),
+                            Utils.t("Playback", "录像回放") + " · " + playbackSourceLabel(sourceRole),
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                         )
@@ -193,6 +209,10 @@ fun FourLanePlayerDialog(
                             (maxWidth - 124.dp).coerceAtLeast(160.dp),
                             maxHeight,
                         )
+                        val singlePreviewWidth = minOf(
+                            (maxWidth - 124.dp).coerceAtLeast(160.dp),
+                            maxHeight * (16f / 9f),
+                        )
                         Row(
                             Modifier.fillMaxSize(),
                             horizontalArrangement = Arrangement.Center,
@@ -205,16 +225,14 @@ fun FourLanePlayerDialog(
                             )
                             Spacer(Modifier.size(10.dp))
                             Box(
-                                Modifier
-                                    .size(previewSide)
+                                (if (isFourLane) {
+                                    Modifier.size(previewSide)
+                                } else {
+                                    Modifier.width(singlePreviewWidth).aspectRatio(16f / 9f)
+                                })
                                     .background(Color.Black, RoundedCornerShape(14.dp)),
                             ) {
-                                FourLanePlaybackSurface(
-                                    file = file,
-                                    container = playbackContainer,
-                                    displayMode = displayMode,
-                                    lensMode = lensMode,
-                                    correctionConfig = settings.fisheyeCorrection,
+                                val playbackCallbacks = PlaybackSurfaceCallbacks(
                                     onControlsReady = { controls = it },
                                     onPrepared = { playerDuration ->
                                         durationMs = playerDuration
@@ -236,31 +254,48 @@ fun FourLanePlayerDialog(
                                         playing = false
                                         status = Utils.t("Unable to play", "无法播放")
                                     },
-                                    modifier = Modifier.fillMaxSize(),
                                 )
-                                FourLaneDirectionOverlay(
-                                    labels = directionLabels,
-                                    displayMode = displayMode,
-                                    interactionEnabled = firstFrame,
-                                    zoom = zoom,
-                                    onLaneTapped = { lane ->
-                                        displayMode = displayMode.toggleLane(lane)
-                                        zoom = playbackContainer.resetViewport()
-                                    },
-                                    onTransformGesture = { zoomChange, panX, panY ->
-                                        zoom = playbackContainer.applyViewportGesture(zoomChange, panX, panY)
-                                    },
-                                )
-                                FourLaneLensToggle(
-                                    mode = lensMode,
-                                    onModeChanged = { selected ->
-                                        lensMode = selected
-                                        settings.setLensMode(selected)
-                                    },
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(8.dp),
-                                )
+                                if (isFourLane) {
+                                    FourLanePlaybackSurface(
+                                        file = file,
+                                        container = playbackContainer,
+                                        displayMode = displayMode,
+                                        lensMode = lensMode,
+                                        correctionConfig = settings.fisheyeCorrection,
+                                        callbacks = playbackCallbacks,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                    FourLaneDirectionOverlay(
+                                        labels = directionLabels,
+                                        displayMode = displayMode,
+                                        interactionEnabled = firstFrame,
+                                        zoom = zoom,
+                                        onLaneTapped = { lane ->
+                                            displayMode = displayMode.toggleLane(lane)
+                                            zoom = playbackContainer.resetViewport()
+                                        },
+                                        onTransformGesture = { zoomChange, panX, panY ->
+                                            zoom = playbackContainer.applyViewportGesture(zoomChange, panX, panY)
+                                        },
+                                    )
+                                    FourLaneLensToggle(
+                                        mode = lensMode,
+                                        onModeChanged = { selected ->
+                                            lensMode = selected
+                                            settings.setLensMode(selected)
+                                        },
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(8.dp),
+                                    )
+                                } else {
+                                    SinglePlaybackSurface(
+                                        file = file,
+                                        textureView = singleTextureView,
+                                        callbacks = playbackCallbacks,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                                 if (!firstFrame && error == null) {
                                     Text(
                                         Utils.t("Loading video…", "正在载入画面…"),
@@ -505,11 +540,7 @@ private fun FourLanePlaybackSurface(
     displayMode: FourLaneDisplayMode,
     lensMode: FourLaneLensMode,
     correctionConfig: FisheyeCorrectionConfig,
-    onControlsReady: (PlaybackControls?) -> Unit,
-    onPrepared: (Long) -> Unit,
-    onFirstFrame: () -> Unit,
-    onCompleted: () -> Unit,
-    onError: (String) -> Unit,
+    callbacks: PlaybackSurfaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
     AndroidView(
@@ -522,13 +553,32 @@ private fun FourLanePlaybackSurface(
         modifier = modifier,
     )
 
-    DisposableEffect(file, container) {
-        val textureView = container.textureView
+    PlaybackMediaBinding(file, container.textureView, callbacks)
+}
+
+@Composable
+private fun SinglePlaybackSurface(
+    file: File,
+    textureView: TextureView,
+    callbacks: PlaybackSurfaceCallbacks,
+    modifier: Modifier = Modifier,
+) {
+    AndroidView(factory = { textureView }, modifier = modifier)
+    PlaybackMediaBinding(file, textureView, callbacks)
+}
+
+@Composable
+private fun PlaybackMediaBinding(
+    file: File,
+    textureView: TextureView,
+    callbacks: PlaybackSurfaceCallbacks,
+) {
+    DisposableEffect(file, textureView) {
         var player: MediaPlayer? = null
         var outputSurface: Surface? = null
 
         fun releasePlayer() {
-            onControlsReady(null)
+            callbacks.onControlsReady(null)
             runCatching { player?.stop() }
             runCatching { player?.release() }
             player = null
@@ -548,7 +598,7 @@ private fun FourLanePlaybackSurface(
                 mediaPlayer.isLooping = false
                 mediaPlayer.setOnPreparedListener {
                     val duration = runCatching { it.duration.toLong() }.getOrDefault(0L)
-                    onControlsReady(
+                    callbacks.onControlsReady(
                         PlaybackControls(
                             toggle = {
                                 runCatching {
@@ -579,22 +629,22 @@ private fun FourLanePlaybackSurface(
                         ),
                     )
                     it.start()
-                    onPrepared(duration)
+                    callbacks.onPrepared(duration)
                 }
                 mediaPlayer.setOnInfoListener { _, what, _ ->
                     if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
-                        onFirstFrame()
+                        callbacks.onFirstFrame()
                     }
                     false
                 }
-                mediaPlayer.setOnCompletionListener { onCompleted() }
+                mediaPlayer.setOnCompletionListener { callbacks.onCompleted() }
                 mediaPlayer.setOnErrorListener { _, _, _ ->
-                    onError(Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
+                    callbacks.onError(Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
                     true
                 }
                 mediaPlayer.prepareAsync()
             } catch (_: Throwable) {
-                onError(Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
+                callbacks.onError(Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
                 releasePlayer()
             }
         }
@@ -652,4 +702,10 @@ private fun formatPlaybackBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
     else -> "$bytes B"
+}
+
+private fun playbackSourceLabel(role: RecordingSourceRole?): String = when (role) {
+    RecordingSourceRole.CABIN -> "Cabin"
+    RecordingSourceRole.IR -> "IR"
+    else -> "360°"
 }

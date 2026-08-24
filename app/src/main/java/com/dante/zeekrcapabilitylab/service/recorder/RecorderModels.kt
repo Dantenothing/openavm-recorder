@@ -12,12 +12,14 @@ import java.io.File
  */
 @Serializable
 data class RecorderConfig(
-    val cameraId: String,
-    val profile: CameraFormatProfile,
+    val source: SessionSourceSnapshot,
     val segmentSeconds: Int,
     val storageLimitBytes: Long,
     val minFreeBytes: Long = 20L * 1024L * 1024L * 1024L,
 ) {
+    val cameraId: String get() = source.cameraId
+    val profile: CameraFormatProfile get() = source.profile
+
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
         if (cameraId.isBlank()) errors += "cameraId must not be blank"
@@ -68,6 +70,8 @@ data class RecorderState(
     val status: String = RecorderStatus.IDLE,
     val cameraId: String? = null,
     val profile: CameraFormatProfile? = null,
+    val sourceRole: RecordingSourceRole? = null,
+    val layoutKind: RecordingLayoutKind? = null,
     val segmentSeconds: Int = 60,
     val storageLimitBytes: Long = 15L * 1024L * 1024L * 1024L,
     val segmentNumber: Int = 0,

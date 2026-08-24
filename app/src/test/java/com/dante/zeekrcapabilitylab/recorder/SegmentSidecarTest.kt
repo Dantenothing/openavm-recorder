@@ -7,6 +7,8 @@ import com.dante.zeekrcapabilitylab.service.recorder.FrameHealthReport
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentFrameStats
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -61,6 +63,9 @@ class SegmentSidecarTest {
         assertEquals(60_003L, decoded?.actualTrack?.durationMs)
         assertEquals(1800L, decoded?.frameStats?.count)
         assertEquals(5, decoded?.frameHealth?.maxHammingDistance)
+        assertEquals(4, decoded?.schemaVersion)
+        assertEquals(RecordingSourceRole.SURROUND, decoded?.sourceRole)
+        assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded?.layoutKind)
     }
 
     @Test
@@ -137,6 +142,28 @@ class SegmentSidecarTest {
         assertEquals(1_700_000_000_000, decoded?.eventRequestedAtEpochMs)
         assertEquals("CURRENT", decoded?.eventRole)
         assertNull(sampleSidecar(mp4).eventId)
+    }
+
+    @Test
+    fun schemaThreeWithoutSourceFieldsRemainsReadable() {
+        val encoded = SegmentSidecarIO.json.encodeToString(
+            SegmentSidecar.serializer(),
+            sampleSidecar(tempMp4()),
+        )
+        val legacy = encoded
+            .replace("\"schemaVersion\": 4", "\"schemaVersion\": 3")
+            .lineSequence()
+            .filterNot { line ->
+                line.contains("\"sourceRole\"") ||
+                    line.contains("\"layoutKind\"") ||
+                    line.contains("\"mappingRevision\"")
+            }
+            .joinToString("\n")
+        val decoded = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), legacy)
+
+        assertEquals(3, decoded.schemaVersion)
+        assertEquals(RecordingSourceRole.SURROUND, decoded.sourceRole)
+        assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded.layoutKind)
     }
 
     private fun tempMp4(): File {

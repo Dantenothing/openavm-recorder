@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -23,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,11 +33,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.BuildConfig
 import com.dante.zeekrcapabilitylab.product.SettingsStore
+import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
+import com.dante.zeekrcapabilitylab.product.RecordingSourcePolicy
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.util.Utils
-import kotlinx.coroutines.flow.MutableStateFlow
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen() {
@@ -51,6 +57,17 @@ fun SettingsScreen() {
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var correctionTuningVisible by remember { mutableStateOf(false) }
     var versionTapCount by remember { mutableStateOf(0) }
+    var mappings by remember {
+        mutableStateOf(RecordingSourceRole.entries.associateWith(settings::cameraMapping))
+    }
+    val cameraIds by produceState(initialValue = emptyList<String>()) {
+        value = withContext(Dispatchers.IO) {
+            ProductRecorderConfigFactory.listRecordingCameraCapabilities(context)
+                .map { it.cameraId }
+                .distinct()
+                .sorted()
+        }
+    }
 
     Column(
         Modifier
@@ -81,6 +98,58 @@ fun SettingsScreen() {
                     Utils.t(
                         "Follow system uses the current head-unit language. The change takes effect immediately.",
                         "“跟随车机”使用当前车机系统语言，切换后立即生效。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    Utils.t("Camera mapping (advanced)", "摄像头映射（高级）"),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    Utils.t(
+                        "The home screen uses logical sources. Change physical Camera IDs only for another vehicle or after an OTA changes the mapping.",
+                        "首页只显示逻辑录像源。仅在其他车型或 OTA 改变 Camera ID 时修改这里。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                RecordingSourceRole.entries.forEach { role ->
+                    val current = mappings.getValue(role)
+                    val values = buildList {
+                        if (role == RecordingSourceRole.SURROUND) add(RecordingSourcePolicy.AUTO)
+                        addAll(cameraIds)
+                        if (current !in this) add(current)
+                    }
+                    OptionRow(
+                        label = sourceRoleLabel(role),
+                        options = values.map { value ->
+                            if (value == RecordingSourcePolicy.AUTO) {
+                                Utils.t("Auto", "自动")
+                            } else {
+                                "Camera $value"
+                            }
+                        },
+                        selectedIndex = values.indexOf(current).coerceAtLeast(0),
+                        onSelect = { index ->
+                            val selected = values[index]
+                            settings.setCameraMapping(role, selected)
+                            mappings = mappings + (role to selected)
+                        },
+                    )
+                }
+                Text(
+                    Utils.t(
+                        "Current verified ZEEKR 7X defaults: 360° Auto/Camera 2, Cabin Camera 1, IR Camera 0. Auto accepts only a four-lane composite camera.",
+                        "当前已验证的极氪 7X 默认值：360° 自动/Camera 2、Cabin Camera 1、IR Camera 0。自动模式只接受四路合成摄像头。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -308,7 +377,10 @@ private fun OptionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, modifier = Modifier.width(130.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             options.forEachIndexed { index, option ->
                 OutlinedButton(onClick = { onSelect(index) }) {
                     Text(
@@ -318,4 +390,10 @@ private fun OptionRow(
             }
         }
     }
+}
+
+private fun sourceRoleLabel(role: RecordingSourceRole): String = when (role) {
+    RecordingSourceRole.SURROUND -> "360°"
+    RecordingSourceRole.CABIN -> "Cabin"
+    RecordingSourceRole.IR -> "IR"
 }

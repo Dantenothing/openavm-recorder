@@ -55,10 +55,16 @@ data class SegmentLaneInfo(
 
 @Serializable
 data class SegmentSidecar(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = 4,
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
+    /** Stable product meaning captured when the Session started. */
+    val sourceRole: RecordingSourceRole = RecordingSourceRole.SURROUND,
+    /** Playback contract captured with the file; never re-derived from current settings. */
+    val layoutKind: RecordingLayoutKind = RecordingLayoutKind.FOUR_LANE_V1,
+    /** Mapping generation used to resolve [sourceRole] to [cameraId]. */
+    val mappingRevision: Int = 0,
     val segmentSeconds: Int,
     val segmentNumber: Int,
     /** Stable ZeekrApp.processStartId ("pid-epoch"), never the per-command service startId. */
@@ -91,7 +97,7 @@ data class SegmentSidecar(
     val actualTrack: ActualTrackInfo? = null,
     val frameStats: SegmentFrameStats? = null,
     val frameHealth: FrameHealthReport? = null,
-    /** V2 product layout; null for recordings made before the V2 UI. */
+    /** Frozen four-lane calibration; null for SINGLE_V1 and legacy recordings. */
     val laneLayout: SegmentLaneLayout? = null,
 ) {
     companion object {

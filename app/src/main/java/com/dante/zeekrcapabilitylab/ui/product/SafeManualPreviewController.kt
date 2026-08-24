@@ -18,6 +18,9 @@ import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.product.CompositePreviewSizePolicy
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
+import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +35,8 @@ data class ManualPreviewState(
     val previewSize: Size? = null,
     val forcedBufferSize: Size? = null,
     val fallbackUsed: Boolean = false,
+    val sourceRole: RecordingSourceRole? = null,
+    val layoutKind: RecordingLayoutKind? = null,
     val message: String = "预览默认关闭",
     val error: String? = null,
 )
@@ -53,6 +58,8 @@ class SafeManualPreviewController(context: Context) {
 
     @Volatile
     private var requested = false
+    @Volatile
+    private var requestedSource: SessionSourceSnapshot? = null
     @Volatile
     private var released = false
     @Volatile
@@ -143,10 +150,16 @@ class SafeManualPreviewController(context: Context) {
         }
     }
 
-    fun startPreview() {
-        if (released || requested) return
+    fun startPreview(source: SessionSourceSnapshot) {
+        if (released) return
+        if (requested && requestedSource == source) return
+        requestedSource = source
         requested = true
-        _state.value = ManualPreviewState(message = "正在安全打开预览…")
+        _state.value = ManualPreviewState(
+            sourceRole = source.sourceRole,
+            layoutKind = source.layoutKind,
+            message = "正在安全打开预览…",
+        )
         openIfReady()
     }
 
@@ -216,6 +229,8 @@ class SafeManualPreviewController(context: Context) {
             forcedBufferSize = configuredSize?.takeIf {
                 it.width == 1280 && it.height == 5140
             },
+            sourceRole = requestedSource?.sourceRole,
+            layoutKind = requestedSource?.layoutKind,
             message = "等待录像预览画面…",
         )
         EventLogger.logEvent(
@@ -239,6 +254,7 @@ class SafeManualPreviewController(context: Context) {
         if (released) return
         released = true
         requested = false
+        requestedSource = null
         recorderSurfaceHandedOff = false
         generation.incrementAndGet()
         val handler = cameraHandler
@@ -282,16 +298,21 @@ class SafeManualPreviewController(context: Context) {
         val view = textureView ?: return
         if (!view.isAvailable) return
         val texture = view.surfaceTexture ?: return
+        val source = requestedSource ?: run {
+            fail("录像源尚未解析")
+            requested = false
+            return
+        }
         val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
         if (manager == null) {
             fail("系统没有 CameraManager")
             return
         }
         try {
-            val ids = manager.cameraIdList.toList()
-            val cameraId = ids.firstOrNull { it == "2" } ?: ids.firstOrNull()
-            if (cameraId == null) {
-                fail("没有可用摄像头")
+            val cameraId = source.cameraId
+            if (cameraId !in manager.cameraIdList) {
+                fail("映射的摄像头 $cameraId 不可用")
+                requested = false
                 return
             }
             val declaredSizes = declaredSurfaceTextureSizes(manager, cameraId)
@@ -301,7 +322,9 @@ class SafeManualPreviewController(context: Context) {
                 requested = false
                 return
             }
-            val declaredHighResolution = if (attemptHighResolution) {
+            val declaredHighResolution = if (
+                attemptHighResolution && source.layoutKind == RecordingLayoutKind.FOUR_LANE_V1
+            ) {
                 chooseDeclaredHighResolution(declaredSizes)
             } else {
                 null
@@ -336,7 +359,11 @@ class SafeManualPreviewController(context: Context) {
                     null
                 }
             }
-            if (attemptHighResolution && declaredHighResolution == null) {
+            if (
+                attemptHighResolution &&
+                source.layoutKind == RecordingLayoutKind.FOUR_LANE_V1 &&
+                declaredHighResolution == null
+            ) {
                 EventLogger.logEvent(
                     category = Categories.SYSTEM,
                     eventName = "PRODUCT_MANUAL_PREVIEW_HIGH_RES_SKIPPED",
@@ -357,6 +384,8 @@ class SafeManualPreviewController(context: Context) {
                 previewSize = previewSize,
                 forcedBufferSize = forcedSize,
                 fallbackUsed = !attemptHighResolution,
+                sourceRole = source.sourceRole,
+                layoutKind = source.layoutKind,
                 message = "正在打开摄像头 $cameraId 的${streamKind}…",
             )
             val handler = cameraHandler ?: return
@@ -480,6 +509,8 @@ class SafeManualPreviewController(context: Context) {
                                 previewSize = forcedSize ?: stableSize,
                                 forcedBufferSize = forcedSize,
                                 fallbackUsed = !highResolutionAttempt,
+                                sourceRole = requestedSource?.sourceRole,
+                                layoutKind = requestedSource?.layoutKind,
                                 message = "${previewStreamKind(stableSize, forcedSize)}已启动，等待首帧…",
                             )
                             EventLogger.logEvent(
@@ -623,6 +654,8 @@ class SafeManualPreviewController(context: Context) {
             cameraId = cameraId,
             previewSize = stableSize,
             fallbackUsed = true,
+            sourceRole = requestedSource?.sourceRole,
+            layoutKind = requestedSource?.layoutKind,
             message = "高清预览不可用，正在恢复兼容模式…",
         )
         cameraHandler?.postDelayed(
