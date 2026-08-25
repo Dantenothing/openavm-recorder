@@ -167,6 +167,14 @@ class RecorderSession(
             this.previousSegmentStoppedElapsedMs = null
             manualSessionGeneration++
             cameraRecovery.beginManualSession(manualSessionGeneration, config.cameraId)
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_RESUME_GATE_ARMED",
+                payload = mapOf(
+                    "generation" to manualSessionGeneration.toString(),
+                    "reason" to "MANUAL_START",
+                ),
+            )
             cancelOpenWatchdog()
             cancelSetupWatchdog()
             cancelTimeout()
@@ -626,6 +634,14 @@ class RecorderSession(
             stopping = true
             startInFlight = false
             cameraRecovery.cancelManualSession(manualSessionGeneration)
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_RESUME_GATE_DISARMED",
+                payload = mapOf(
+                    "generation" to manualSessionGeneration.toString(),
+                    "reason" to "MANUAL_STOP",
+                ),
+            )
             manualSessionGeneration++
             openGeneration++
             cancelOpenWatchdog()
@@ -2062,6 +2078,7 @@ class RecorderSession(
             "deadlineAtElapsedMs" to (recovery.deadlineAtMs?.toString() ?: "-"),
             "nextAttemptAtElapsedMs" to (recovery.nextAttemptAtMs?.toString() ?: "-"),
             "sourceRole" to (config?.source?.sourceRole?.name ?: "-"),
+            "resumeAllowed" to recovery.resumeAllowed.toString(),
         )
     }
 

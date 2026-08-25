@@ -46,6 +46,8 @@ data class CameraRecoverySnapshot(
     val nextAttemptKind: CameraRecoveryScheduleKind? = null,
     val probationUntilMs: Long? = null,
     val lastReason: String? = null,
+    /** Higher-priority Session gate. Only a new manual Start may arm recovery. */
+    val resumeAllowed: Boolean = false,
 )
 
 sealed interface CameraRecoveryAction {
@@ -77,6 +79,7 @@ class CameraRecoveryStateMachine(
             generation = generation,
             targetCameraId = targetCameraId,
             phase = CameraRecoveryPhase.HEALTHY,
+            resumeAllowed = true,
         )
     }
 
@@ -89,6 +92,7 @@ class CameraRecoveryStateMachine(
             nextAttemptKind = null,
             probationUntilMs = null,
             lastReason = "SESSION_CANCELLED",
+            resumeAllowed = false,
         )
     }
 
@@ -100,11 +104,26 @@ class CameraRecoveryStateMachine(
             nextAttemptKind = null,
             probationUntilMs = null,
             lastReason = reason,
+            resumeAllowed = false,
         )
     }
 
+    /** Reserved for a future confirmed VehicleAwayStop policy; does not start/stop recording itself. */
+    fun disarmResume(generation: Long, reason: String): Boolean {
+        if (!isCurrent(generation) || !snapshot.resumeAllowed) return false
+        snapshot = snapshot.copy(
+            resumeAllowed = false,
+            phase = CameraRecoveryPhase.TERMINAL,
+            nextAttemptAtMs = null,
+            nextAttemptKind = null,
+            probationUntilMs = null,
+            lastReason = reason,
+        )
+        return true
+    }
+
     fun markRecordingStarted(generation: Long, nowMs: Long): RecordingStartOutcome {
-        if (!isCurrent(generation) || snapshot.phase == CameraRecoveryPhase.TERMINAL) {
+        if (!isCurrent(generation) || !snapshot.resumeAllowed || snapshot.phase == CameraRecoveryPhase.TERMINAL) {
             return RecordingStartOutcome.STALE
         }
         return if (snapshot.phase == CameraRecoveryPhase.RESUMING) {
@@ -133,7 +152,7 @@ class CameraRecoveryStateMachine(
     }
 
     fun beginRecoverableLoss(generation: Long, reason: String, nowMs: Long): Boolean {
-        if (!isCurrent(generation) || !snapshot.hasRecordedSuccessfully) return false
+        if (!isCurrent(generation) || !snapshot.resumeAllowed || !snapshot.hasRecordedSuccessfully) return false
         if (snapshot.phase !in setOf(CameraRecoveryPhase.HEALTHY, CameraRecoveryPhase.PROBATION)) {
             return false
         }
@@ -157,7 +176,7 @@ class CameraRecoveryStateMachine(
     }
 
     fun finalizeCompleted(generation: Long, nowMs: Long): CameraRecoveryAction {
-        if (!isCurrent(generation) || snapshot.phase != CameraRecoveryPhase.FINALIZING) {
+        if (!isCurrent(generation) || !snapshot.resumeAllowed || snapshot.phase != CameraRecoveryPhase.FINALIZING) {
             return CameraRecoveryAction.None
         }
         if (deadlineReached(nowMs)) return abandon("RECOVERY_WINDOW_EXPIRED")
@@ -180,7 +199,7 @@ class CameraRecoveryStateMachine(
         available: Boolean,
         nowMs: Long,
     ): CameraRecoveryAction {
-        if (!isCurrent(generation) || cameraId != snapshot.targetCameraId ||
+        if (!isCurrent(generation) || !snapshot.resumeAllowed || cameraId != snapshot.targetCameraId ||
             snapshot.phase == CameraRecoveryPhase.TERMINAL
         ) {
             return CameraRecoveryAction.None
@@ -212,7 +231,7 @@ class CameraRecoveryStateMachine(
     }
 
     fun onTimer(generation: Long, nowMs: Long): CameraRecoveryAction {
-        if (!isCurrent(generation) || snapshot.phase == CameraRecoveryPhase.TERMINAL) {
+        if (!isCurrent(generation) || !snapshot.resumeAllowed || snapshot.phase == CameraRecoveryPhase.TERMINAL) {
             return CameraRecoveryAction.None
         }
         if (snapshot.phase == CameraRecoveryPhase.PROBATION) {
@@ -252,7 +271,7 @@ class CameraRecoveryStateMachine(
         reason: String,
         nowMs: Long,
     ): CameraRecoveryAction {
-        if (!isCurrent(generation) || snapshot.phase != CameraRecoveryPhase.RESUMING) {
+        if (!isCurrent(generation) || !snapshot.resumeAllowed || snapshot.phase != CameraRecoveryPhase.RESUMING) {
             return CameraRecoveryAction.None
         }
         if (!recoverable) return abandon(reason)
@@ -288,6 +307,7 @@ class CameraRecoveryStateMachine(
             nextAttemptKind = null,
             probationUntilMs = null,
             lastReason = reason,
+            resumeAllowed = false,
         )
         return CameraRecoveryAction.Abandon(reason)
     }

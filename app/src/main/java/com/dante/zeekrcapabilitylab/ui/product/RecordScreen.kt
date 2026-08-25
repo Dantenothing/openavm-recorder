@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dante.zeekrcapabilitylab.product.ProductHomeCameraPolicy
+import com.dante.zeekrcapabilitylab.product.SurroundPreviewLifecyclePolicy
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
@@ -67,6 +68,9 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.ZeekrApp
+import com.dante.zeekrcapabilitylab.data.Categories
+import com.dante.zeekrcapabilitylab.event.EventLogger
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -96,6 +100,7 @@ fun RecordScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val appForeground by ZeekrApp.isForeground.collectAsState()
     val languageMode by AppLanguage.mode.collectAsState()
     val settings = remember(languageMode) { SettingsStore.get(context) }
     val previewController = remember { SafeManualPreviewController(context.applicationContext) }
@@ -127,6 +132,8 @@ fun RecordScreen() {
     // Deliberately not persisted: every fresh app process returns to 360°.
     var selectedSourceRole by remember { mutableStateOf(RecordingSourceRole.SURROUND) }
     var pendingWarningRole by remember { mutableStateOf<RecordingSourceRole?>(null) }
+    var surroundPreviewGeneration by remember { mutableStateOf(0) }
+    var previousAppForeground by remember { mutableStateOf(appForeground) }
 
     val resolvedIdleSource by produceState<SessionSourceSnapshot?>(
         initialValue = null,
@@ -154,13 +161,20 @@ fun RecordScreen() {
     }
 
     val recordingActive = RecorderCommandPolicy.isActive(recorderState.status)
+    val activeSourceRole = if (recordingActive) {
+        recorderState.sourceRole ?: selectedSourceRole
+    } else {
+        selectedSourceRole
+    }
     val serviceRunning = CameraRecordingService.isRunning()
     val latestRecorderState by rememberUpdatedState(recorderState)
+    val latestAppForeground by rememberUpdatedState(appForeground)
 
     val attachReplacementPreview: () -> Unit = {
         val current = latestRecorderState
         val profile = current.profile
-        if (current.status == RecorderStatus.RECORDING &&
+        val foregroundAllowed = current.sourceRole != RecordingSourceRole.SURROUND || latestAppForeground
+        if (foregroundAllowed && current.status == RecorderStatus.RECORDING &&
             profile != null && settings.previewWhileRecordingEnabled
         ) {
             val surface = previewController.acquireRecorderPreviewSurface(
@@ -168,6 +182,45 @@ fun RecordScreen() {
             )
             if (surface != null) CameraRecordingService.replacePreviewSurface(surface)
         }
+    }
+
+    LaunchedEffect(appForeground) {
+        if (previousAppForeground && !appForeground) {
+            val decision = SurroundPreviewLifecyclePolicy.onAppBackground(
+                sourceRole = activeSourceRole,
+                recordingActive = recordingActive,
+                currentGeneration = surroundPreviewGeneration,
+            )
+            if (decision.invalidateSurface) {
+                if (decision.disableRecorderPreview) {
+                    CameraRecordingService.setPreviewOutputEnabled(context, false)
+                }
+                if (decision.stopIdlePreview) previewController.stopAndAwait()
+                previewController.clearRecorderPreviewHandoff()
+                previewEnabled = false
+                surroundPreviewGeneration = decision.nextGeneration
+                EventLogger.logEvent(
+                    Categories.LIFECYCLE,
+                    "SURROUND_PREVIEW_BACKGROUND_STALE",
+                    payload = mapOf(
+                        "surfaceGeneration" to surroundPreviewGeneration.toString(),
+                        "recorder" to recorderState.status,
+                        "source" to activeSourceRole.name,
+                    ),
+                )
+            }
+        } else if (!previousAppForeground && appForeground && activeSourceRole == RecordingSourceRole.SURROUND) {
+            EventLogger.logEvent(
+                Categories.LIFECYCLE,
+                "SURROUND_PREVIEW_FOREGROUND_REBUILD",
+                payload = mapOf(
+                    "surfaceGeneration" to surroundPreviewGeneration.toString(),
+                    "recorder" to recorderState.status,
+                    "profile" to (recorderState.profile?.key ?: "idle"),
+                ),
+            )
+        }
+        previousAppForeground = appForeground
     }
 
     DisposableEffect(previewController) {
@@ -187,8 +240,14 @@ fun RecordScreen() {
         resolvedIdleSource,
         recorderState.previewRequested,
         recorderState.previewFallbackUsed,
+        appForeground,
+        activeSourceRole,
     ) {
         when {
+            !appForeground && activeSourceRole == RecordingSourceRole.SURROUND -> {
+                previewEnabled = false
+                if (!recordingActive) previewController.stopAndAwait()
+            }
             recordingActive -> {
                 val recorderPreviewVisible = recorderState.previewRequested &&
                     !recorderState.previewFallbackUsed
@@ -213,7 +272,7 @@ fun RecordScreen() {
         }
     }
 
-    LaunchedEffect(recorderState.status, recorderState.profile, recorderState.previewActive) {
+    LaunchedEffect(recorderState.status, recorderState.profile, recorderState.previewActive, appForeground) {
         if (recorderState.status == RecorderStatus.RECORDING && !recorderState.previewActive) {
             attachReplacementPreview()
         }
@@ -349,6 +408,9 @@ fun RecordScreen() {
             recordingActive = recordingActive,
             settings = settings,
             layoutKind = if (recordingActive) recorderState.layoutKind else resolvedIdleSource?.layoutKind,
+            sourceRole = activeSourceRole,
+            appForeground = appForeground,
+            surroundPreviewGeneration = surroundPreviewGeneration,
             modifier = Modifier
                 .weight(1.75f)
                 .fillMaxHeight(),
@@ -616,6 +678,9 @@ private fun HomePreviewPane(
     recordingActive: Boolean,
     settings: SettingsStore,
     layoutKind: RecordingLayoutKind?,
+    sourceRole: RecordingSourceRole,
+    appForeground: Boolean,
+    surroundPreviewGeneration: Int,
     modifier: Modifier = Modifier,
 ) {
     var lensMode by remember(settings) { mutableStateOf(settings.lensMode) }
@@ -632,7 +697,7 @@ private fun HomePreviewPane(
                 settings.previewWhileRecordingEnabled
             } else {
                 previewEnabled
-            }
+            } && (sourceRole != RecordingSourceRole.SURROUND || appForeground)
             if (showLivePreview && layoutKind == RecordingLayoutKind.SINGLE_V1) {
                 SinglePreviewPanel(
                     controller = controller,
@@ -644,6 +709,7 @@ private fun HomePreviewPane(
                     controller = controller,
                     state = state,
                     lensMode = lensMode,
+                    surfaceGeneration = surroundPreviewGeneration,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else if (layoutKind == RecordingLayoutKind.SINGLE_V1) {
@@ -792,13 +858,14 @@ private fun ManualPreviewPanel(
     controller: SafeManualPreviewController,
     state: ManualPreviewState,
     lensMode: FourLaneLensMode,
+    surfaceGeneration: Int,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val correctionConfig = SettingsStore.get(context).fisheyeCorrection
-    val previewView = remember(controller) { FourLaneTextureContainer(context) }
-    var displayMode by remember(controller) { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
-    var zoom by remember(controller) { mutableStateOf(1f) }
+    val previewView = remember(controller, surfaceGeneration) { FourLaneTextureContainer(context) }
+    var displayMode by remember(controller, surfaceGeneration) { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
+    var zoom by remember(controller, surfaceGeneration) { mutableStateOf(1f) }
 
     LaunchedEffect(state.active) {
         if (!state.active) {

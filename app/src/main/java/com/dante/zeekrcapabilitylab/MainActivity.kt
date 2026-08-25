@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.dante.zeekrcapabilitylab.ui.product.ProductMainScreen
+import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
 import com.dante.zeekrcapabilitylab.ui.theme.ZeekrCapabilityLabTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         _currentState.value = "CREATED"
+        VehicleAwayProbe.recordActivityState("CREATED")
         setContent {
             ZeekrCapabilityLabTheme {
                 ProductMainScreen()
@@ -29,25 +31,30 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         _currentState.value = "STARTED"
+        VehicleAwayProbe.recordActivityState("STARTED")
     }
 
     override fun onResume() {
         super.onResume()
         _currentState.value = "RESUMED"
+        VehicleAwayProbe.recordActivityState("RESUMED")
     }
 
     override fun onPause() {
         super.onPause()
         _currentState.value = "PAUSED"
+        VehicleAwayProbe.recordActivityState("PAUSED")
     }
 
     override fun onStop() {
         super.onStop()
         _currentState.value = "STOPPED"
+        VehicleAwayProbe.recordActivityState("STOPPED")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         _currentState.value = "DESTROYED"
+        VehicleAwayProbe.recordActivityState("DESTROYED")
     }
 }

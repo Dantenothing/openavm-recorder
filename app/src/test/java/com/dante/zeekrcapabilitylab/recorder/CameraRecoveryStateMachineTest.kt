@@ -248,4 +248,32 @@ class CameraRecoveryStateMachineTest {
         )
         assertEquals(CameraRecoveryPhase.TERMINAL, machine.snapshot.phase)
     }
+
+    @Test
+    fun higherPriorityGateCancelsWaitingRecoveryAndIgnoresAvailability() {
+        val machine = recordingMachine()
+        machine.beginRecoverableLoss(generation, "CAMERA_DISCONNECTED", 2_000L)
+        machine.finalizeCompleted(generation, 2_100L)
+
+        assertTrue(machine.disarmResume(generation, "VEHICLE_AWAY"))
+        assertFalse(machine.snapshot.resumeAllowed)
+        assertEquals(CameraRecoveryPhase.TERMINAL, machine.snapshot.phase)
+        assertEquals(
+            CameraRecoveryAction.None,
+            machine.onAvailability(generation, "2", available = true, nowMs = 2_200L),
+        )
+        assertEquals(CameraRecoveryAction.None, machine.onTimer(generation, 4_000L))
+    }
+
+    @Test
+    fun newManualSessionIsTheOnlyWayToRearmResumeGate() {
+        val machine = recordingMachine()
+        machine.disarmResume(generation, "VEHICLE_AWAY")
+
+        machine.beginManualSession(generation + 1L, "2")
+
+        assertTrue(machine.snapshot.resumeAllowed)
+        assertEquals(CameraRecoveryPhase.HEALTHY, machine.snapshot.phase)
+        assertEquals(generation + 1L, machine.snapshot.generation)
+    }
 }
