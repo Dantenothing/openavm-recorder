@@ -12,6 +12,7 @@ class PowerDiagnosticCodecTest {
         val payload = evidence.qrPayload(900)
 
         assertTrue(payload.startsWith("AVMP1|"))
+        assertTrue(payload.contains("|test=VEHICLE_AWAY|"))
         assertTrue(payload.toByteArray(Charsets.UTF_8).size <= 900)
         assertTrue(payload.endsWith("tr=1"))
     }
@@ -43,6 +44,7 @@ class PowerDiagnosticCodecTest {
         wakeLock = true,
         exitReason = "NONE",
         events = events,
+        testType = "VEHICLE_AWAY",
     )
 
     private fun event(number: Int) = ProbeEvent(

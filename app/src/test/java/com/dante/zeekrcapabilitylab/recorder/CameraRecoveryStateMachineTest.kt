@@ -276,4 +276,24 @@ class CameraRecoveryStateMachineTest {
         assertEquals(CameraRecoveryPhase.HEALTHY, machine.snapshot.phase)
         assertEquals(generation + 1L, machine.snapshot.generation)
     }
+
+    @Test
+    fun vehicleAwayDisarmMakesLateSuccessfulReopenStale() {
+        val machine = recordingMachine()
+        machine.beginRecoverableLoss(generation, "CAMERA_DISCONNECTED", 2_000L)
+        machine.onAvailability(generation, "2", available = true, nowMs = 2_100L)
+        machine.finalizeCompleted(generation, 2_200L)
+        assertEquals(
+            CameraRecoveryAction.Attempt(generation, 1),
+            machine.onTimer(generation, 3_700L),
+        )
+
+        assertTrue(machine.disarmResume(generation, "VEHICLE_AWAY_CONFIRMED"))
+
+        assertEquals(
+            CameraRecoveryStateMachine.RecordingStartOutcome.STALE,
+            machine.markRecordingStarted(generation, 4_000L),
+        )
+        assertEquals(CameraRecoveryPhase.TERMINAL, machine.snapshot.phase)
+    }
 }

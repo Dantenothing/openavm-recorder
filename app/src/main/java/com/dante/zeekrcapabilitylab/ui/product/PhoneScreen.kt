@@ -62,7 +62,7 @@ fun PhoneScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("离车与预览诊断", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("本页只记录证据，不会自动停止或恢复录像。测试前点“开始新测试”，回来后刷新并拍下二维码。")
+        Text("请选择测试类型。锁车离开确认约 30 秒后会保存当前段并结束 Session；解锁后不会自动恢复。")
 
         evidence?.let { current ->
             Card(Modifier.fillMaxWidth()) {
@@ -88,21 +88,33 @@ fun PhoneScreen() {
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Button(onClick = {
-                VehicleAwayProbe.startTestMarker()
+                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_NORMAL_BACKGROUND)
                 refresh()
-            }) { Text("开始新测试") }
-            OutlinedButton(onClick = ::refresh) { Text("刷新证据") }
+            }, modifier = Modifier.weight(1f)) { Text("正常后台") }
+            Button(onClick = {
+                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_OEM_CAMERA)
+                refresh()
+            }, modifier = Modifier.weight(1f)) { Text("OEM Camera") }
+            Button(onClick = {
+                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_VEHICLE_AWAY)
+                refresh()
+            }, modifier = Modifier.weight(1f)) { Text("锁车离开") }
         }
+
+        OutlinedButton(onClick = ::refresh) { Text("刷新证据") }
 
         Card(Modifier.fillMaxWidth()) {
             Text(
-                "第一轮锁车测试不会自动停止录像。请先做未录像锁车，再做录像锁车；录像测试需由你在 10–15 分钟后手动结束。",
+                "锁车测试预期：约 30 秒后 Session 自动结束并释放 Camera/WakeLock。回来后应保持待机，必须再次手动 Start。",
                 Modifier.padding(18.dp),
             )
         }
-        Text("手机连接功能仍在开发中，本页只是 alpha7 的临时诊断入口。")
+        Text("手机连接功能仍在开发中，本页只是 alpha8 的临时诊断入口。")
     }
 }
 

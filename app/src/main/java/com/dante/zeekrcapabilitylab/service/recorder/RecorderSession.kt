@@ -109,6 +109,8 @@ class RecorderSession(
     private var previewReplacementWatchdogToken: Long? = null
     private val cameraRecovery = CameraRecoveryStateMachine()
     private var cameraRecoveryTimerRunnable: Runnable? = null
+    private val vehicleAway = VehicleAwayStateMachine()
+    private var vehicleAwayTimerRunnable: Runnable? = null
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
     private val pendingSidecarFiles: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private var state = RecorderState()
@@ -167,6 +169,7 @@ class RecorderSession(
             this.previousSegmentStoppedElapsedMs = null
             manualSessionGeneration++
             cameraRecovery.beginManualSession(manualSessionGeneration, config.cameraId)
+            vehicleAway.beginManualSession(manualSessionGeneration)
             EventLogger.logEvent(
                 Categories.SYSTEM,
                 "RECORDER_CAMERA_RESUME_GATE_ARMED",
@@ -179,6 +182,7 @@ class RecorderSession(
             cancelSetupWatchdog()
             cancelTimeout()
             cancelCameraRecoveryTimer()
+            cancelVehicleAwayTimer()
             quarantineLeftoverPartials()
             updateState(
                 state.copy(
@@ -631,37 +635,100 @@ class RecorderSession(
 
     fun stop() {
         postCamera {
-            stopping = true
-            startInFlight = false
-            cameraRecovery.cancelManualSession(manualSessionGeneration)
-            EventLogger.logEvent(
-                Categories.SYSTEM,
-                "RECORDER_CAMERA_RESUME_GATE_DISARMED",
-                payload = mapOf(
-                    "generation" to manualSessionGeneration.toString(),
-                    "reason" to "MANUAL_STOP",
+            stopSessionOnCameraThread(
+                finalizeReason = "STOP",
+                authorityReason = "MANUAL_STOP",
+                forcedError = null,
+                vehicleAwayConfirmed = false,
+            )
+        }
+    }
+
+    private fun stopSessionOnCameraThread(
+        finalizeReason: String,
+        authorityReason: String,
+        forcedError: String?,
+        vehicleAwayConfirmed: Boolean,
+    ) {
+        if (stopping) return
+        val generation = manualSessionGeneration
+        stopping = true
+        startInFlight = false
+
+        // Session authority is invalidated before Camera/MediaRecorder teardown.
+        // Every recovery callback below is generation-bound and therefore stale.
+        if (vehicleAwayConfirmed) {
+            cameraRecovery.disarmResume(generation, authorityReason)
+        } else {
+            cameraRecovery.cancelManualSession(generation)
+        }
+        vehicleAway.endSession(generation, authorityReason)
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_RESUME_GATE_DISARMED",
+            payload = mapOf(
+                "generation" to generation.toString(),
+                "reason" to authorityReason,
+            ),
+        )
+        manualSessionGeneration++
+        openGeneration++
+        cancelOpenWatchdog()
+        cancelSetupWatchdog()
+        cancelTimeout()
+        cancelCameraRecoveryTimer()
+        cancelVehicleAwayTimer()
+        cancelPreviewReplacementWatchdog()
+        if (currentPartial != null) {
+            finalizeCurrentSegment(finalizeReason, forcedError)
+        } else {
+            closeCamera()
+            stopCameraConflictDiagnostics()
+            updateState(
+                state.copy(
+                    status = RecorderStatus.STOPPED,
+                    currentFile = null,
+                    segmentStartedAtEpochMs = null,
+                    message = null,
                 ),
             )
-            manualSessionGeneration++
-            openGeneration++
-            cancelOpenWatchdog()
-            cancelSetupWatchdog()
-            cancelTimeout()
-            cancelCameraRecoveryTimer()
-            if (currentPartial != null) {
-                finalizeCurrentSegment("STOP", null)
-            } else {
-                closeCamera()
-                stopCameraConflictDiagnostics()
-                updateState(
-                    state.copy(
-                        status = RecorderStatus.STOPPED,
-                        currentFile = null,
-                        segmentStartedAtEpochMs = null,
-                    ),
-                )
-                if (!releasing) onStopped()
-            }
+            if (!releasing) onStopped()
+        }
+    }
+
+    fun onAppForegroundChanged(foreground: Boolean) {
+        postCamera {
+            applyVehicleAwayAction(
+                vehicleAway.onAppForeground(
+                    manualSessionGeneration,
+                    foreground,
+                    SystemClock.elapsedRealtime(),
+                ),
+            )
+        }
+    }
+
+    fun onScreenPowerChanged(screenOn: Boolean) {
+        postCamera {
+            applyVehicleAwayAction(
+                vehicleAway.onScreenPower(
+                    manualSessionGeneration,
+                    screenOn,
+                    SystemClock.elapsedRealtime(),
+                ),
+            )
+        }
+    }
+
+    fun onMainDisplayPowerChanged(displayOn: Boolean) {
+        postCamera {
+            applyVehicleAwayAction(
+                vehicleAway.onMainDisplayPower(
+                    manualSessionGeneration,
+                    displayOn,
+                    SystemClock.elapsedRealtime(),
+                ),
+            )
         }
     }
 
@@ -772,12 +839,14 @@ class RecorderSession(
         stopping = true
         startInFlight = false
         cameraRecovery.cancelManualSession(manualSessionGeneration)
+        vehicleAway.endSession(manualSessionGeneration, "SERVICE_RELEASE")
         manualSessionGeneration++
         openGeneration++
         cancelOpenWatchdog()
         cancelSetupWatchdog()
         cancelTimeout()
         cancelCameraRecoveryTimer()
+        cancelVehicleAwayTimer()
         if (currentPartial != null) {
             finalizeCurrentSegment("STOP", null)
         }
@@ -1808,6 +1877,94 @@ class RecorderSession(
         }
     }
 
+    private fun applyVehicleAwayAction(
+        action: VehicleAwayAction,
+        cameraLossError: String? = null,
+    ): Boolean {
+        when (action) {
+            VehicleAwayAction.None -> return false
+            is VehicleAwayAction.Schedule -> {
+                cancelVehicleAwayTimer()
+                val delayMs = (action.atMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+                val runnable = Runnable {
+                    vehicleAwayTimerRunnable = null
+                    if (stopping || releasing) return@Runnable
+                    applyVehicleAwayAction(
+                        vehicleAway.onTimer(
+                            action.generation,
+                            action.pendingToken,
+                            SystemClock.elapsedRealtime(),
+                        ),
+                    )
+                }
+                vehicleAwayTimerRunnable = runnable
+                cameraHandler?.postDelayed(runnable, delayMs)
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_VEHICLE_AWAY_PENDING",
+                    payload = vehicleAwayDiagnosticPayload(),
+                )
+                return false
+            }
+            is VehicleAwayAction.Cancel -> {
+                cancelVehicleAwayTimer()
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_VEHICLE_AWAY_CANCELLED",
+                    payload = vehicleAwayDiagnosticPayload() + mapOf("reason" to action.reason),
+                )
+                return false
+            }
+            is VehicleAwayAction.Confirm -> {
+                cancelVehicleAwayTimer()
+                if (action.generation != manualSessionGeneration || stopping || releasing) {
+                    EventLogger.logEvent(
+                        Categories.SYSTEM,
+                        "RECORDER_VEHICLE_AWAY_CONFIRM_STALE",
+                        severity = Severity.WARN,
+                        payload = vehicleAwayDiagnosticPayload() + mapOf("reason" to action.reason),
+                    )
+                    return false
+                }
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_VEHICLE_AWAY_CONFIRMED",
+                    payload = vehicleAwayDiagnosticPayload() + mapOf("reason" to action.reason),
+                )
+                stopSessionOnCameraThread(
+                    finalizeReason = if (cameraLossError == null) {
+                        "VEHICLE_AWAY"
+                    } else {
+                        "VEHICLE_AWAY_CAMERA_LOSS"
+                    },
+                    authorityReason = "VEHICLE_AWAY_CONFIRMED",
+                    forcedError = cameraLossError,
+                    vehicleAwayConfirmed = true,
+                )
+                return true
+            }
+        }
+    }
+
+    private fun cancelVehicleAwayTimer() {
+        vehicleAwayTimerRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        vehicleAwayTimerRunnable = null
+    }
+
+    private fun vehicleAwayDiagnosticPayload(): Map<String, String> {
+        val away = vehicleAway.snapshot
+        return mapOf(
+            "generation" to away.generation.toString(),
+            "phase" to away.phase.name,
+            "appForeground" to away.appForeground.toString(),
+            "screenOn" to away.screenOn.toString(),
+            "mainDisplayOn" to away.mainDisplayOn.toString(),
+            "pendingToken" to away.pendingToken.toString(),
+            "pendingSinceElapsedMs" to (away.pendingSinceMs?.toString() ?: "-"),
+            "confirmAtElapsedMs" to (away.confirmAtMs?.toString() ?: "-"),
+        )
+    }
+
     private fun handleCameraLoss(
         message: String,
         recoverableContention: Boolean = false,
@@ -1818,6 +1975,9 @@ class RecorderSession(
         startInFlight = false
         cameraOpenInFlight = false
         val token = manualSessionGeneration
+        if (applyVehicleAwayAction(vehicleAway.onCameraLoss(token), cameraLossError = message)) {
+            return
+        }
         val wasResuming = cameraRecovery.snapshot.phase == CameraRecoveryPhase.RESUMING
         if (wasResuming) {
             EventLogger.markError(

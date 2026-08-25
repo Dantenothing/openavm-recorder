@@ -22,11 +22,13 @@ data class PowerDiagnosticEvidence(
     val wakeLock: Boolean,
     val exitReason: String,
     val events: List<ProbeEvent>,
+    val testType: String = "GENERAL",
 ) {
     fun humanText(nowMs: Long = System.currentTimeMillis()): String = buildString {
         appendLine("诊断编号：$ticket")
         appendLine("版本：$version ($versionCode) · $gitSha")
         appendLine("进程：$processId")
+        appendLine("测试类型：$testType")
         appendLine("录像：$recorder · $source · segment $segment · WakeLock $wakeLock")
         appendLine("最近系统退出：$exitReason")
         appendLine("本次测试时间线：")
@@ -63,8 +65,8 @@ object PowerDiagnosticRepository {
         val scoped = all.drop(if (markerIndex >= 0) markerIndex else (all.size - 120).coerceAtLeast(0))
             .filter(::isRelevant)
             .takeLast(120)
-        val marker = scoped.firstOrNull { it.eventName == "VEHICLE_AWAY_TEST_MARKER" }
-            ?.payload?.get("detail")
+        val markerEvent = scoped.firstOrNull { it.eventName == "VEHICLE_AWAY_TEST_MARKER" }
+        val marker = markerEvent?.payload?.get("detail")
         val state = CameraRecordingService.state.value
         return PowerDiagnosticEvidence(
             ticket = marker?.let { PowerDiagnosticCodec.safeToken(it, 12) }
@@ -79,13 +81,15 @@ object PowerDiagnosticRepository {
             wakeLock = state.wakeLockHeld,
             exitReason = latestExitReason(context),
             events = scoped,
+            testType = markerEvent?.payload?.get("testType") ?: "GENERAL",
         )
     }
 
     private fun isRelevant(event: ProbeEvent): Boolean = event.eventName in keyNames ||
         event.eventName.startsWith("ACTIVITY_") ||
         event.eventName.startsWith("RECORDER_SEGMENT_") ||
-        event.eventName.startsWith("RECORDER_CAMERA_RECOVERY_")
+        event.eventName.startsWith("RECORDER_CAMERA_RECOVERY_") ||
+        event.eventName.startsWith("RECORDER_VEHICLE_AWAY_")
 
     private fun latestExitReason(context: Context): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return "UNAVAILABLE_API_${Build.VERSION.SDK_INT}"
@@ -123,6 +127,7 @@ object PowerDiagnosticCodec {
             "AVMP1", "id=${safeToken(evidence.ticket, 12)}", "v=${safeToken(evidence.version, 30)}",
             "vc=${evidence.versionCode}", "sha=${safeToken(evidence.gitSha, 10)}",
             "p=${safeToken(evidence.processId, 30)}", "st=${safeToken(evidence.recorder, 20)}",
+            "test=${safeToken(evidence.testType, 24)}",
             "src=${safeToken(evidence.source, 12)}", "seg=${evidence.segment}",
             "wl=${if (evidence.wakeLock) 1 else 0}", "exit=${safeToken(evidence.exitReason, 70)}",
         )
@@ -143,7 +148,8 @@ object PowerDiagnosticCodec {
     fun safeDetail(event: ProbeEvent): String = listOf(
         "detail", "probeId", "interactive", "displays", "appForeground", "activity",
         "recorder", "source", "camera", "segment", "wakeLock", "reason", "result",
-        "attempt", "processStartId",
+        "attempt", "processStartId", "testType", "phase", "screenOn", "mainDisplayOn",
+        "pendingToken", "confirmAtElapsedMs",
     ).mapNotNull { key -> event.payload[key]?.let { "$key=$it" } }.joinToString(" ")
 
     fun safeToken(value: String, maxLength: Int): String = value
