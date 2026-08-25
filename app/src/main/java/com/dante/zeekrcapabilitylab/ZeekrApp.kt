@@ -13,6 +13,7 @@ import com.dante.zeekrcapabilitylab.event.CrashHandler
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.util.Utils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +39,7 @@ class ZeekrApp : Application() {
 
         EventLogger.init(this)
         SettingsStore.init(this)
+        CameraRecordingService.restoreTerminalState(this)
 
         CrashHandler.install(this)
 

@@ -5,6 +5,10 @@ import com.dante.zeekrcapabilitylab.player.FourLaneTextureLayout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlin.math.roundToInt
 
 /** Track facts read back from the finalized MP4; nulls mean the device could not extract them. */
@@ -55,7 +59,7 @@ data class SegmentLaneInfo(
 
 @Serializable
 data class SegmentSidecar(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = 4,
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
@@ -93,6 +97,21 @@ data class SegmentSidecar(
     val frameHealth: FrameHealthReport? = null,
     /** V2 product layout; null for recordings made before the V2 UI. */
     val laneLayout: SegmentLaneLayout? = null,
+    /** Defaults preserve readability of pre-front-first sidecars. */
+    val recordingMode: RecordingMode = RecordingMode.SURROUND_360,
+    val sourceFingerprint: String? = null,
+    val sourceKind: RecordingSourceKind = RecordingSourceKind.COMPOSITE,
+    val frontCalibration: FrontCalibration? = null,
+    val encoderProfile: EncoderProfile? = null,
+    val requestedBitrateBps: Int = profile.bitrateBps,
+    val actualCodecName: String? = null,
+    val actualCodecFormat: String? = null,
+    val encodedFrameCount: Long? = null,
+    val encodedBytes: Long? = null,
+    val firstEncodedPresentationTimeUs: Long? = null,
+    val lastEncodedPresentationTimeUs: Long? = null,
+    val calibrationVersion: Int? = null,
+    val pipelineVersion: Int = 0,
 ) {
     companion object {
         const val RESULT_SUCCESS = "SUCCESS"
@@ -161,11 +180,28 @@ object SegmentSidecarIO {
     fun writeAtomic(mp4: File, sidecar: SegmentSidecar): File {
         val target = sidecarFileFor(mp4)
         val tmp = File(target.absolutePath + ".tmp")
-        tmp.writeText(json.encodeToString(SegmentSidecar.serializer(), sidecar))
-        if (!tmp.renameTo(target)) {
-            target.writeText(tmp.readText())
-            tmp.delete()
+        val bytes = json.encodeToString(SegmentSidecar.serializer(), sidecar).toByteArray(Charsets.UTF_8)
+        FileOutputStream(tmp).use { output ->
+            output.write(bytes)
+            output.flush()
+            output.fd.sync()
         }
+        val moved = try {
+            Files.move(
+                tmp.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            true
+        } catch (_: AtomicMoveNotSupportedException) {
+            runCatching {
+                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                true
+            }.getOrDefault(false)
+        }
+        if (!moved) throw IllegalStateException("SIDECAR_ATOMIC_WRITE_FAILED ${target.name}")
+        RecorderLibrary.notifyChanged()
         return target
     }
 

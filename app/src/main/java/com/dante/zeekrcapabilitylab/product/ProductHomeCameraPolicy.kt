@@ -10,7 +10,6 @@ package com.dante.zeekrcapabilitylab.product
  */
 object ProductHomeCameraPolicy {
     const val TRIGGER_USER_START_RECORDING = "USER_START_RECORDING"
-    const val TRIGGER_AUTO_START_RECORDING = "AUTO_START_RECORDING"
     const val TRIGGER_USER_START_PREVIEW = "USER_START_PREVIEW"
     const val TRIGGER_AUTO_PREVIEW = "AUTO_PREVIEW"
 
@@ -20,10 +19,9 @@ object ProductHomeCameraPolicy {
     /** Re-entering the page restores preview after recording/navigation released it. */
     fun shouldAutoAccessCameraOnRevisit(revisitCount: Int): Boolean = revisitCount >= 0
 
-    /** Product startup and the explicit button may record; preview uses the proven path only. */
+    /** Only the explicit button may record; preview uses the proven display path. */
     fun cameraAccessAllowed(trigger: String): Boolean =
         trigger == TRIGGER_USER_START_RECORDING ||
-            trigger == TRIGGER_AUTO_START_RECORDING ||
             trigger == TRIGGER_USER_START_PREVIEW ||
             trigger == TRIGGER_AUTO_PREVIEW
 }

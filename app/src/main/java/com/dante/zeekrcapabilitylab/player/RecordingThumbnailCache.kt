@@ -56,11 +56,12 @@ class RecordingThumbnailCache(private val root: File) {
         return File(root, "$digest.jpg")
     }
 
-    private fun prune(maxFiles: Int = 300) {
+    private fun prune(maxFiles: Int = 300, maxBytes: Long = 25L * 1024L * 1024L) {
         val files = root.listFiles()?.filter { it.isFile && it.extension == "jpg" }.orEmpty()
-        if (files.size <= maxFiles) return
-        files.sortedByDescending { it.lastModified() }
-            .drop(maxFiles)
-            .forEach { it.delete() }
+        var retainedBytes = 0L
+        files.sortedByDescending { it.lastModified() }.forEachIndexed { index, file ->
+            retainedBytes += file.length()
+            if (index >= maxFiles || retainedBytes > maxBytes) file.delete()
+        }
     }
 }

@@ -39,6 +39,7 @@ class ProductHomeCameraPolicyTest {
             ),
         )
         assertTrue(ProductHomeCameraPolicy.cameraAccessAllowed(ProductHomeCameraPolicy.TRIGGER_AUTO_PREVIEW))
+        assertFalse(ProductHomeCameraPolicy.cameraAccessAllowed("AUTO_START_RECORDING"))
         assertFalse(ProductHomeCameraPolicy.cameraAccessAllowed(""))
     }
 
@@ -131,10 +132,12 @@ class ProductHomeCameraPolicyTest {
         assertTrue(
             source.contains(
                 "LaunchedEffect(\n        cameraPermission,\n        recordingActive,\n" +
-                    "        recorderState.previewRequested,\n        recorderState.previewFallbackUsed,",
+                    "        serviceRunning,\n        recorderState.previewRequested,\n" +
+                    "        recorderState.previewFallbackUsed,",
             ),
         )
         assertTrue(source.contains("TRIGGER_AUTO_PREVIEW"))
+        assertTrue(source.contains("serviceRunning && RecorderCommandPolicy.isActive"))
         assertTrue(source.contains("HomePreviewPane("))
         assertTrue(source.contains("ProductStatusCard("))
         assertTrue(source.contains(".weight(1.75f)"))
@@ -142,6 +145,7 @@ class ProductHomeCameraPolicyTest {
         assertTrue(source.contains("可用空间"))
         assertTrue(source.contains("预计可录"))
         assertTrue(source.contains("自动清理"))
+        assertTrue(source.contains("普通录像保留时长"))
         assertFalse(source.contains("Switch("))
         assertFalse(source.contains("查看原始长条"))
         assertFalse(source.contains("显示：四格"))

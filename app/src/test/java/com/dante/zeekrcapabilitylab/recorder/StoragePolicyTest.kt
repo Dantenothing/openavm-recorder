@@ -21,6 +21,7 @@ class StoragePolicyTest {
         uploadPinned: Boolean = false,
         analysisInFlight: Boolean = false,
         playing: Boolean = false,
+        stoppedAtEpochMs: Long? = null,
     ) = ManagedSegmentFile(
         path = "/segments/$name",
         bytes = bytes,
@@ -31,6 +32,7 @@ class StoragePolicyTest {
         uploadPinned = uploadPinned,
         analysisInFlight = analysisInFlight,
         playing = playing,
+        stoppedAtEpochMs = stoppedAtEpochMs,
     )
 
     @Test
@@ -237,5 +239,42 @@ class StoragePolicyTest {
         val evictions = StoragePolicy.selectEvictionsToTarget(files, 2L * gb)
 
         assertEquals(listOf("/segments/new.mp4"), evictions)
+    }
+
+    @Test
+    fun retentionEvictsOnlyOrdinarySegmentsOlderThanTheCutoff() {
+        val files = listOf(
+            file("oldest.mp4", 1L, modified = 900, stoppedAtEpochMs = 100),
+            file("old.mp4", 1L, modified = 100, stoppedAtEpochMs = 200),
+            file("boundary.mp4", 1L, modified = 50, stoppedAtEpochMs = 300),
+            file("new.mp4", 1L, modified = 10, stoppedAtEpochMs = 400),
+        )
+
+        val evictions = StoragePolicy.selectRetentionEvictions(files, cutoffEpochMs = 300)
+
+        assertEquals(listOf("/segments/oldest.mp4", "/segments/old.mp4"), evictions)
+    }
+
+    @Test
+    fun retentionNeverEvictsProtectedPinnedInFlightPlayingOrUnknownSegments() {
+        val files = listOf(
+            file("protected.mp4", 1L, 1, protected = true, stoppedAtEpochMs = 100),
+            file("upload.mp4", 1L, 2, uploadPinned = true, stoppedAtEpochMs = 100),
+            file("analysis.mp4", 1L, 3, analysisInFlight = true, stoppedAtEpochMs = 100),
+            file("playing.mp4", 1L, 4, playing = true, stoppedAtEpochMs = 100),
+            file("unknown.mp4", 1L, 5, hasSidecar = false, stoppedAtEpochMs = 100),
+            file("missing-time.mp4", 1L, 6),
+        )
+
+        assertEquals(emptyList<String>(), StoragePolicy.selectRetentionEvictions(files, 300))
+    }
+
+    @Test
+    fun retentionCutoffUsesHoursAndRejectsInvalidInputs() {
+        val hourMs = 60L * 60L * 1000L
+
+        assertEquals(2L * hourMs, StoragePolicy.retentionCutoffEpochMs(10L * hourMs, 8))
+        assertEquals(null, StoragePolicy.retentionCutoffEpochMs(10L * hourMs, 0))
+        assertEquals(null, StoragePolicy.retentionCutoffEpochMs(0L, 8))
     }
 }

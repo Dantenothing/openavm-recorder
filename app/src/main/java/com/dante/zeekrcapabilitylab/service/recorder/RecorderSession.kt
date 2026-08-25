@@ -12,7 +12,6 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.media.MediaMetadataRetriever
-import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -33,7 +32,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Sole owner of CameraDevice / CaptureSession / MediaRecorder for the segment
+ * Sole owner of CameraDevice / CaptureSession / RecordingPipeline for the segment
  * recorder. All camera/recorder transitions happen on the camera handler thread.
  *
  * Timing contract:
@@ -52,6 +51,7 @@ class RecorderSession(
 ) {
     private val segmentsDir = File(context.filesDir, "recordings/segments").apply { mkdirs() }
     private val quarantineDir = File(context.filesDir, "recordings/quarantine").apply { mkdirs() }
+    private val journalsDir = File(context.filesDir, "recordings/journals").apply { mkdirs() }
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val incidentStore = IncidentProtectionStore(context)
 
@@ -67,22 +67,26 @@ class RecorderSession(
 
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
+    /** Rollover/start gates must never queue behind completed-segment frame decoding. */
+    private val storageExecutor = Executors.newSingleThreadExecutor()
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private var config: RecorderConfig? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-    private var mediaRecorder: MediaRecorder? = null
+    private var recordingPipeline: RecordingPipeline? = null
     private var recordingPreviewSurface: Surface? = null
     private var activeEncoderSurface: Surface? = null
     private var previewOutputDesired = true
     private var currentPartial: File? = null
+    private var currentJournal: File? = null
     private var segmentNumber = 0
     private var recording = false
     private var stopping = false
     private var releasing = false
     private var startInFlight = false
     private var cameraOpenInFlight = false
+    private var storageCheckInFlight = false
     private var protectedPending = false
     private var currentIncidentTag: IncidentTag? = null
     /** True only when this segment is fulfilling the persisted post-event slot. */
@@ -92,18 +96,53 @@ class RecorderSession(
     private var segmentRecordingStartedAtEpochMs: Long? = null
     private var segmentRecordingStartedAtElapsedMs: Long? = null
     private var previousSegmentStoppedElapsedMs: Long? = null
+    private var previousEncodedPresentationTimeUs: Long? = null
     private var frameStats = SegmentFrameStats()
     private var lastTimestampNs: Long? = null
     private var segmentGeneration = 0L
     private var openGeneration = 0L
     private var timeoutRunnable: Runnable? = null
+    private var keyFrameRunnable: Runnable? = null
     private var openWatchdogRunnable: Runnable? = null
     private var setupWatchdogRunnable: Runnable? = null
+    private var encodedWatchdogRunnable: Runnable? = null
+    private var lastEncodedProgressAtElapsedMs = 0L
+    private var lastEncodedFrameCount = 0L
+    private var lastEncodedFileBytes = 0L
     private var recoveryRetryRunnable: Runnable? = null
     private var recoveryRetryAttempt = 0
+    private var availabilityRegistered = false
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
     private val pendingSidecarFiles: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private var state = RecorderState()
+
+    private val availabilityCallback = object : CameraManager.AvailabilityCallback() {
+        override fun onCameraAvailable(cameraId: String) {
+            val cfg = config ?: return
+            if (cameraId != cfg.cameraId || stopping || releasing) return
+            if (state.status != RecorderStatus.CAMERA_UNAVAILABLE ||
+                startInFlight || cameraOpenInFlight || recording || cameraDevice != null
+            ) {
+                return
+            }
+            cancelRecoveryRetry()
+            recoveryRetryAttempt = 0
+            updateState(
+                state.copy(
+                    status = RecorderStatus.RECOVERING,
+                    lastError = null,
+                    message = "Verified camera source available; recovering",
+                ),
+            )
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_AVAILABLE",
+                payload = mapOf("cameraId" to cameraId),
+            )
+            startInFlight = true
+            openCamera(cameraId)
+        }
+    }
 
     init {
         updateState(state)
@@ -142,6 +181,7 @@ class RecorderSession(
                 return@postCamera
             }
             this.config = config
+            registerAvailabilityCallback()
             this.previewOutputDesired = true
             releaseRecordingPreviewSurface()
             this.recordingPreviewSurface = previewSurface?.takeIf { it.isValid }
@@ -153,12 +193,13 @@ class RecorderSession(
             this.currentConsumesPendingIncident = false
             this.segmentNumber = 0
             this.previousSegmentStoppedElapsedMs = null
+            this.previousEncodedPresentationTimeUs = null
             cancelOpenWatchdog()
             cancelSetupWatchdog()
+            cancelEncodedWatchdog()
             cancelTimeout()
             cancelRecoveryRetry()
             recoveryRetryAttempt = 0
-            quarantineLeftoverPartials()
             updateState(
                 state.copy(
                     status = RecorderStatus.STARTING,
@@ -175,6 +216,13 @@ class RecorderSession(
                     previewRequested = this.recordingPreviewSurface != null,
                     previewActive = false,
                     previewFallbackUsed = false,
+                    recordingMode = config.recordingMode,
+                    sourceVerified = true,
+                    calibrationValid = config.recordingMode != RecordingMode.FRONT_ONLY ||
+                        config.sourceKind == RecordingSourceKind.DIRECT_FRONT ||
+                        config.frontCalibration != null,
+                    encodedFrameCount = 0,
+                    encodedBytes = 0,
                 ),
             )
             EventLogger.logEvent(
@@ -183,13 +231,32 @@ class RecorderSession(
                 payload = mapOf(
                     "cameraId" to config.cameraId,
                     "profile" to config.profile.key,
+                    "mode" to config.recordingMode.name,
+                    "sourceKind" to config.sourceKind.name,
+                    "sourceFingerprint" to config.sourceFingerprint.take(12),
                     "segmentSeconds" to config.segmentSeconds.toString(),
                     "storageLimitBytes" to config.storageLimitBytes.toString(),
                     "processStartId" to processStartId,
                 ),
             )
             startInFlight = true
-            openCamera(config.cameraId)
+            runWork(RecorderWorkKind.STARTUP_RECOVERY) {
+                val recovery = SegmentRecovery.reconcile(segmentsDir, quarantineDir, journalsDir)
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_RECOVERY_RECONCILED",
+                    payload = mapOf(
+                        "completedJournals" to recovery.completedJournals.toString(),
+                        "quarantinedPartials" to recovery.quarantinedPartials.toString(),
+                        "quarantinedOrphans" to recovery.quarantinedOrphans.toString(),
+                        "errors" to recovery.errors.joinToString(" | ").ifBlank { "-" },
+                    ),
+                )
+                cameraHandler?.post {
+                    if (stopping || releasing || this.config != config || !startInFlight) return@post
+                    openCamera(config.cameraId)
+                }
+            }
         }
     }
 
@@ -264,6 +331,7 @@ class RecorderSession(
             startInFlight = false
             cancelOpenWatchdog()
             cancelSetupWatchdog()
+            cancelEncodedWatchdog()
             cancelTimeout()
             cancelRecoveryRetry()
             if (currentPartial != null) {
@@ -300,7 +368,7 @@ class RecorderSession(
             }
             // Always reserve one successful segment after the press. The store
             // survives a service recreation, but expires before a later drive.
-            incidentStore.saveNext(eventId, eventRequestedAt)
+            val incidentPersisted = incidentStore.saveNext(eventId, eventRequestedAt)
             protectRecentFinalizedSegments(
                 count = 2,
                 eventId = eventId,
@@ -315,11 +383,17 @@ class RecorderSession(
                     "currentPending" to (currentPartial != null).toString(),
                     "previousSegments" to "2",
                     "nextSegments" to "1",
+                    "persisted" to incidentPersisted.toString(),
                 ),
             )
             updateState(
                 state.copy(
-                    message = "Saving event: previous 2 + current + next 1",
+                    message = if (incidentPersisted) {
+                        "Saving event: previous 2 + current + next 1"
+                    } else {
+                        "Current clip protected; future incident window could not be persisted"
+                    },
+                    lastError = if (incidentPersisted) state.lastError else "INCIDENT_PERSIST_FAILED",
                 ),
             )
         }
@@ -362,7 +436,8 @@ class RecorderSession(
     /**
      * Deterministic, bounded teardown: the cleanup runs on the camera thread and
      * the finalize task is submitted BEFORE the latch releases, so the subsequent
-     * ioExecutor.shutdown() can drain it. Never blocks on frame decoding; the
+     * executors can drain submitted recovery/finalization work. Never blocks on
+     * frame decoding; the
      * wait is capped so a wedged camera thread cannot hang onDestroy.
      */
     fun release() {
@@ -370,20 +445,40 @@ class RecorderSession(
         val thread = cameraThread
         if (handler == null || thread == null) {
             // Never started; nothing to tear down.
+            unregisterAvailabilityCallback()
             wakeLockHolder.releaseAll()
-            ioExecutor.shutdown()
+            shutdownExecutors()
             return
         }
         if (thread.looper.thread === Thread.currentThread()) {
             teardownOnCameraThread()
+            unregisterAvailabilityCallback()
             wakeLockHolder.releaseAll()
-            ioExecutor.shutdown()
+            shutdownExecutors()
             return
         }
         val latch = CountDownLatch(1)
-        handler.post {
-            teardownOnCameraThread()
-            latch.countDown()
+        val teardownPosted = handler.post {
+            try {
+                teardownOnCameraThread()
+            } finally {
+                // finalizeCurrentSegment submits sidecar/journal work before
+                // teardown returns. shutdown() then drains that committed work.
+                shutdownExecutors()
+                latch.countDown()
+            }
+        }
+        if (!teardownPosted) {
+            EventLogger.markError(
+                Categories.SYSTEM,
+                "RECORDER_TEARDOWN_POST_REJECTED",
+                "camera looper rejected teardown; no new finalize work can be submitted",
+                null,
+            )
+            unregisterAvailabilityCallback()
+            wakeLockHolder.releaseAll()
+            shutdownExecutors()
+            return
         }
         val teardownCompleted = try {
             latch.await(3, TimeUnit.SECONDS)
@@ -392,7 +487,8 @@ class RecorderSession(
             false
         }
         if (!teardownCompleted) {
-            // Explicit evidence: finalize commit is NOT guaranteed before shutdown.
+            // The camera runnable owns executor shutdown, so a slow codec can
+            // still submit and drain final sidecar/journal work after this wait.
             EventLogger.markError(
                 Categories.SYSTEM,
                 "RECORDER_TEARDOWN_TIMEOUT",
@@ -401,8 +497,8 @@ class RecorderSession(
             )
         }
         cameraThread?.quitSafely()
+        unregisterAvailabilityCallback()
         wakeLockHolder.releaseAll()
-        ioExecutor.shutdown()
     }
 
     private fun teardownOnCameraThread() {
@@ -411,6 +507,7 @@ class RecorderSession(
         startInFlight = false
         cancelOpenWatchdog()
         cancelSetupWatchdog()
+        cancelEncodedWatchdog()
         cancelTimeout()
         cancelRecoveryRetry()
         if (currentPartial != null) {
@@ -429,6 +526,27 @@ class RecorderSession(
         }
     }
 
+    private fun registerAvailabilityCallback() {
+        if (availabilityRegistered) return
+        runCatching {
+            manager.registerAvailabilityCallback(availabilityCallback, cameraHandler)
+            availabilityRegistered = true
+        }.onFailure {
+            EventLogger.markError(
+                Categories.SYSTEM,
+                "RECORDER_AVAILABILITY_REGISTER_FAILED",
+                it.message ?: it.javaClass.simpleName,
+                it,
+            )
+        }
+    }
+
+    private fun unregisterAvailabilityCallback() {
+        if (!availabilityRegistered) return
+        runCatching { manager.unregisterAvailabilityCallback(availabilityCallback) }
+        availabilityRegistered = false
+    }
+
     private fun postCamera(block: () -> Unit) {
         ensureCameraThread()
         cameraHandler?.post(block)
@@ -443,6 +561,41 @@ class RecorderSession(
         }
     }
 
+    private fun runStorage(block: () -> Unit) {
+        if (storageExecutor.isShutdown) return
+        try {
+            storageExecutor.execute(block)
+        } catch (_: RejectedExecutionException) {
+            // Recorder is releasing; no new camera work may start.
+        }
+    }
+
+    private fun runWork(kind: RecorderWorkKind, block: () -> Unit) {
+        when (RecorderWorkLanePolicy.laneFor(kind)) {
+            RecorderWorkLane.STORAGE -> runStorage(block)
+            RecorderWorkLane.ANALYSIS -> runIo(block)
+        }
+    }
+
+    private fun queueJournalStage(journalFile: File, stage: SegmentJournalStage) {
+        runIo {
+            runCatching { SegmentJournalIO.update(journalFile, stage) }
+                .onFailure { error ->
+                    EventLogger.markError(
+                        Categories.SYSTEM,
+                        "RECORDER_JOURNAL_UPDATE_FAILED",
+                        "${journalFile.name}: ${stage.name}: ${error.message ?: error.javaClass.simpleName}",
+                        error,
+                    )
+                }
+        }
+    }
+
+    private fun shutdownExecutors() {
+        storageExecutor.shutdown()
+        ioExecutor.shutdown()
+    }
+
     private fun openCamera(cameraId: String) {
         val cfg = config ?: run {
             startInFlight = false
@@ -453,10 +606,10 @@ class RecorderSession(
             cameraUnavailable("CAMERA_PERMISSION_DENIED")
             return
         }
-        val declared = CameraRuntime.videoSizeCandidates(context, cameraId)
+        val declared = CameraRuntime.videoSizeCandidates(context, cameraId, cfg.sourceKind)
             .map { ProfileSize(it.width, it.height) }
-        if (!RecorderConfig.profileDeclared(cfg.profile, declared)) {
-            val message = "Profile ${cfg.profile.key} not declared by camera $cameraId"
+        if (!RecorderConfig.profileDeclared(cfg.effectiveSourceProfile, declared)) {
+            val message = "Source profile ${cfg.effectiveSourceProfile.key} not declared by camera $cameraId"
             EventLogger.markError(Categories.SYSTEM, "RECORDER_PROFILE_NOT_DECLARED", message, null)
             startInFlight = false
             cameraUnavailable(message)
@@ -538,16 +691,74 @@ class RecorderSession(
         val cfg = config ?: return
         if (stopping || releasing) return
         val device = cameraDevice ?: return
-        val decision = prepareStorage(cfg)
-        if (!decision.proceed) {
-            storageBlocked(decision.reason ?: "STORAGE_BLOCKED")
-            return
+        if (storageCheckInFlight) return
+        storageCheckInFlight = true
+        val cameraToken = openGeneration
+        val requestedAtEpochMs = System.currentTimeMillis()
+        val prepared = PreparedSegmentStart(
+            segmentNumber = segmentNumber + 1,
+            requestedAtEpochMs = requestedAtEpochMs,
+            requestedAtElapsedMs = SystemClock.elapsedRealtime(),
+            partial = SegmentNaming.partialFile(
+                segmentsDir,
+                segmentNumber + 1,
+                cfg.profile,
+                requestedAtEpochMs,
+            ),
+        )
+        runWork(RecorderWorkKind.NEXT_SEGMENT_GATE) {
+            val decision = prepareStorage(cfg)
+            val journalResult = if (decision.proceed) {
+                runCatching {
+                    SegmentJournalIO.begin(
+                        journalsDir = journalsDir,
+                        partial = prepared.partial,
+                        finalFile = SegmentNaming.finalFileFor(prepared.partial),
+                        nowEpochMs = prepared.requestedAtEpochMs,
+                    )
+                }
+            } else {
+                null
+            }
+            cameraHandler?.post {
+                storageCheckInFlight = false
+                if (stopping || releasing || config != cfg || cameraDevice !== device ||
+                    cameraToken != openGeneration
+                ) {
+                    journalResult?.getOrNull()?.let { staleJournal -> runIo { staleJournal.delete() } }
+                    return@post
+                }
+                if (!decision.proceed) {
+                    storageBlocked(decision.reason ?: "STORAGE_BLOCKED")
+                } else if (journalResult?.isFailure != false) {
+                    storageBlocked(
+                        "JOURNAL_BEGIN_FAILED: ${journalResult?.exceptionOrNull()?.message ?: "unknown"}",
+                    )
+                } else {
+                    startSegmentAfterStorage(
+                        cfg = cfg,
+                        device = device,
+                        prepared = prepared,
+                        journal = requireNotNull(journalResult?.getOrNull()),
+                    )
+                }
+            }
         }
+    }
+
+    /** Camera-thread setup entered only after storage and durable journal gates succeed. */
+    private fun startSegmentAfterStorage(
+        cfg: RecorderConfig,
+        device: CameraDevice,
+        prepared: PreparedSegmentStart,
+        journal: File,
+    ) {
+        if (stopping || releasing || cameraDevice !== device) return
         segmentGeneration++
         val generation = segmentGeneration
-        segmentNumber++
-        val nowEpoch = System.currentTimeMillis()
-        val nowElapsed = SystemClock.elapsedRealtime()
+        segmentNumber = prepared.segmentNumber
+        val nowEpoch = prepared.requestedAtEpochMs
+        val nowElapsed = prepared.requestedAtElapsedMs
         segmentStartedAtEpochMs = nowEpoch
         segmentStartedAtElapsedMs = nowElapsed
         segmentRecordingStartedAtEpochMs = null
@@ -562,31 +773,30 @@ class RecorderSession(
                 protectedPending = true
             }
         }
-        val partial = SegmentNaming.partialFile(segmentsDir, segmentNumber, cfg.profile, nowEpoch)
+        val partial = prepared.partial
         currentPartial = partial
-        scheduleSetupWatchdog(generation)
+        currentJournal = journal
         try {
             partial.parentFile?.mkdirs()
-            val recorder = MediaRecorder()
-            recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-            recorder.setVideoSize(cfg.profile.size.width, cfg.profile.size.height)
-            try {
-                recorder.setVideoFrameRate(30)
-            } catch (t: Throwable) {
-                // Keep recorder default when 30fps is rejected.
-            }
-            recorder.setVideoEncodingBitRate(cfg.profile.bitrateBps)
-            recorder.setOutputFile(partial.absolutePath)
-            recorder.prepare()
-            val surface = recorder.surface
-            mediaRecorder = recorder
+            scheduleSetupWatchdog(generation)
+            val pipeline = RecordingPipelineFactory.create(
+                outputFile = partial,
+                config = cfg,
+                onRuntimeError = { message ->
+                    cameraHandler?.post {
+                        if (generation == segmentGeneration && currentPartial === partial && !stopping && !releasing) {
+                            finalizeCurrentSegment("PIPELINE_ERROR", message)
+                        }
+                    }
+                },
+            )
+            val surface = pipeline.cameraSurface
+            recordingPipeline = pipeline
             activeEncoderSurface = surface
             captureSession?.close()
             captureSession = null
             fun configureSession(includePreview: Boolean) {
-                if (!ownsSetup(generation, partial, recorder)) return
+                if (!ownsSetup(generation, partial, pipeline)) return
                 val preview = recordingPreviewSurface?.takeIf { includePreview && it.isValid }
                 if (includePreview && preview == null) {
                     releaseRecordingPreviewSurface()
@@ -599,7 +809,7 @@ class RecorderSession(
                     outputs,
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
-                            if (!ownsSetup(generation, partial, recorder)) {
+                            if (!ownsSetup(generation, partial, pipeline)) {
                                 closeQuietlySession(session)
                                 return
                             }
@@ -622,7 +832,7 @@ class RecorderSession(
                                     fallbackToRecorderOnly(
                                         generation = generation,
                                         partial = partial,
-                                        recorder = recorder,
+                                        pipeline = pipeline,
                                         reason = t.message ?: "PREVIEW_REPEATING_REQUEST_FAILED",
                                     ) { configureSession(includePreview = false) }
                                 } else {
@@ -631,7 +841,10 @@ class RecorderSession(
                                 return
                             }
                             try {
-                                recorder.start()
+                                pipeline.start()
+                                currentJournal?.let { journalFile ->
+                                    queueJournalStage(journalFile, SegmentJournalStage.CAPTURING)
+                                }
                                 cancelSetupWatchdog()
                                 recording = true
                                 segmentRecordingStartedAtEpochMs = System.currentTimeMillis()
@@ -654,10 +867,14 @@ class RecorderSession(
                                         "segment" to segmentNumber.toString(),
                                         "file" to partial.name,
                                         "profile" to cfg.profile.key,
+                                        "mode" to cfg.recordingMode.name,
+                                        "pipelineVersion" to cfg.pipelineVersion.toString(),
                                         "processStartId" to processStartId,
                                         "previewActive" to (previewTarget != null).toString(),
                                     ),
                                 )
+                                scheduleEncodedWatchdog(generation)
+                                scheduleKeyFrame(generation, cfg.segmentSeconds * 1000L - 250L)
                                 scheduleTimeout(generation, cfg.segmentSeconds * 1000L)
                             } catch (t: Throwable) {
                                 failSegmentStart(generation, partial, t.message ?: "recorder.start failed")
@@ -665,7 +882,7 @@ class RecorderSession(
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
-                            if (!ownsSetup(generation, partial, recorder)) {
+                            if (!ownsSetup(generation, partial, pipeline)) {
                                 quarantine(partial)
                                 closeQuietlySession(session)
                                 return
@@ -675,7 +892,7 @@ class RecorderSession(
                                 fallbackToRecorderOnly(
                                     generation = generation,
                                     partial = partial,
-                                    recorder = recorder,
+                                    pipeline = pipeline,
                                     reason = "PREVIEW_RECORD_SESSION_CONFIGURE_FAILED",
                                 ) { configureSession(includePreview = false) }
                             } else {
@@ -696,11 +913,11 @@ class RecorderSession(
     private fun fallbackToRecorderOnly(
         generation: Long,
         partial: File,
-        recorder: MediaRecorder,
+        pipeline: RecordingPipeline,
         reason: String,
         retryRecorderOnly: () -> Unit,
     ) {
-        if (!ownsSetup(generation, partial, recorder)) return
+        if (!ownsSetup(generation, partial, pipeline)) return
         releaseRecordingPreviewSurface()
         updateState(
             state.copy(
@@ -721,10 +938,10 @@ class RecorderSession(
     private fun ownsSetup(
         generation: Long,
         partial: File,
-        localRecorder: MediaRecorder,
+        localPipeline: RecordingPipeline,
     ): Boolean = SegmentGuardPolicy.ownsSetup(generation, segmentGeneration, currentPartial, partial) &&
         !stopping && !releasing &&
-        mediaRecorder === localRecorder
+        recordingPipeline === localPipeline
 
     private fun scheduleTimeout(generation: Long, delayMs: Long) {
         cancelTimeout()
@@ -749,6 +966,27 @@ class RecorderSession(
             cameraHandler?.removeCallbacks(runnable)
             timeoutRunnable = null
         }
+        keyFrameRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        keyFrameRunnable = null
+    }
+
+    private fun scheduleKeyFrame(generation: Long, delayMs: Long) {
+        keyFrameRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        val runnable = Runnable {
+            if (generation == segmentGeneration && recording && !stopping && !releasing) {
+                val requested = recordingPipeline?.requestKeyFrame() == true
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_SEGMENT_KEYFRAME_REQUEST",
+                    payload = mapOf(
+                        "segment" to segmentNumber.toString(),
+                        "supported" to requested.toString(),
+                    ),
+                )
+            }
+        }
+        keyFrameRunnable = runnable
+        cameraHandler?.postDelayed(runnable, delayMs.coerceAtLeast(0L))
     }
 
     private fun scheduleOpenWatchdog(generation: Long) {
@@ -814,6 +1052,49 @@ class RecorderSession(
         failSegmentStart(generation, partial, "CAMERA_SETUP_TIMEOUT")
     }
 
+    private fun scheduleEncodedWatchdog(generation: Long) {
+        cancelEncodedWatchdog()
+        lastEncodedProgressAtElapsedMs = SystemClock.elapsedRealtime()
+        lastEncodedFrameCount = 0L
+        lastEncodedFileBytes = 0L
+        lateinit var runnable: Runnable
+        runnable = Runnable {
+            if (generation != segmentGeneration || !recording || stopping || releasing) return@Runnable
+            val progress = recordingPipeline?.progress ?: return@Runnable
+            val fileBytes = currentPartial?.takeIf { it.exists() }?.length() ?: 0L
+            val now = SystemClock.elapsedRealtime()
+            val advanced = progress.encodedFrameCount > lastEncodedFrameCount || fileBytes > lastEncodedFileBytes
+            if (advanced) lastEncodedProgressAtElapsedMs = now
+            val stalled = EncodedOutputWatchdogPolicy.stalled(
+                elapsedSinceProgressMs = now - lastEncodedProgressAtElapsedMs,
+                encodedFrameCount = progress.encodedFrameCount,
+                previousEncodedFrameCount = lastEncodedFrameCount,
+                fileBytes = fileBytes,
+                previousFileBytes = lastEncodedFileBytes,
+            )
+            lastEncodedFrameCount = progress.encodedFrameCount
+            lastEncodedFileBytes = fileBytes
+            updateState(
+                state.copy(
+                    encodedFrameCount = progress.encodedFrameCount,
+                    encodedBytes = maxOf(progress.encodedBytes, fileBytes),
+                ),
+            )
+            if (stalled) {
+                finalizeCurrentSegment("PIPELINE_ERROR", "ENCODED_OUTPUT_STALLED")
+            } else {
+                cameraHandler?.postDelayed(runnable, EncodedOutputWatchdogPolicy.CHECK_INTERVAL_MS)
+            }
+        }
+        encodedWatchdogRunnable = runnable
+        cameraHandler?.postDelayed(runnable, EncodedOutputWatchdogPolicy.CHECK_INTERVAL_MS)
+    }
+
+    private fun cancelEncodedWatchdog() {
+        encodedWatchdogRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        encodedWatchdogRunnable = null
+    }
+
     /**
      * Per-segment capture callback: queued results from a closed previous session
      * must never pollute the current segment's frameStats/timestamps.
@@ -844,6 +1125,7 @@ class RecorderSession(
 
     private fun failSegmentStart(generation: Long, partial: File, message: String) {
         cancelSetupWatchdog()
+        cancelEncodedWatchdog()
         if (generation != segmentGeneration || stopping || releasing || currentPartial !== partial) {
             // Stale setup failure: isolate the old partial only; never touch a newer segment.
             quarantine(partial)
@@ -852,17 +1134,14 @@ class RecorderSession(
         val cfg = config ?: return
         cancelTimeout()
         recording = false
-        try {
-            mediaRecorder?.reset()
-            mediaRecorder?.release()
-        } catch (t: Throwable) {
-            // Ignore.
-        }
-        mediaRecorder = null
+        runCatching { recordingPipeline?.release() }
+        recordingPipeline = null
         captureSession?.close()
         captureSession = null
         activeEncoderSurface = null
         val effectiveFile = quarantine(partial) ?: partial
+        val journal = currentJournal
+        journal?.let { queueJournalStage(it, SegmentJournalStage.QUARANTINED) }
         val snapshot = SegmentSnapshot(
             file = effectiveFile,
             finalPath = null,
@@ -887,10 +1166,19 @@ class RecorderSession(
             eventRole = currentIncidentTag?.role,
             frameStats = frameStats,
             storageLimitBytes = cfg.storageLimitBytes,
+            recordingMode = cfg.recordingMode,
+            sourceFingerprint = cfg.sourceFingerprint,
+            sourceKind = cfg.sourceKind,
+            frontCalibration = cfg.frontCalibration,
+            encoderProfile = cfg.encoderProfile,
+            pipelineVersion = cfg.pipelineVersion,
+            pipelineEvidence = null,
+            journalFile = journal,
         )
         // Idempotent cleanup of every current-segment field so a later STOP cannot
         // finalize this same failed segment again, and a late callback cannot revive it.
         currentPartial = null
+        currentJournal = null
         segmentStartedAtEpochMs = null
         segmentStartedAtElapsedMs = null
         segmentRecordingStartedAtEpochMs = null
@@ -901,7 +1189,10 @@ class RecorderSession(
         lastTimestampNs = null
         frameStats = SegmentFrameStats()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_SEGMENT_START_FAILED", message, null)
-        runIo { writeSidecarAsync(buildSidecarFromSnapshot(snapshot, cfg.profile, null, null)) }
+        runIo {
+            val written = writeSidecarAsync(buildSidecarFromSnapshot(snapshot, cfg.profile, null, null))
+            if (written != null) snapshot.journalFile?.let { SegmentJournalIO.complete(it) }
+        }
         setError("SEGMENT_START_FAILED: $message")
         closeCamera()
     }
@@ -913,11 +1204,13 @@ class RecorderSession(
      */
     private fun finalizeCurrentSegment(reason: String, forcedError: String?) {
         cancelSetupWatchdog()
+        cancelEncodedWatchdog()
         cancelTimeout()
         val partial = currentPartial ?: run {
             afterFinalize(reason, success = false, error = forcedError ?: "no active segment")
             return
         }
+        val journal = currentJournal
         val cfg = config
         val requestedAtEpoch = segmentStartedAtEpochMs
         val requestedAtElapsed = segmentStartedAtElapsedMs
@@ -932,6 +1225,7 @@ class RecorderSession(
         currentConsumesPendingIncident = false
         val wasRecording = recording
         currentPartial = null
+        currentJournal = null
         recording = false
         segmentStartedAtEpochMs = null
         segmentStartedAtElapsedMs = null
@@ -940,20 +1234,25 @@ class RecorderSession(
         updateState(state.copy(status = RecorderStatus.FINALIZING))
 
         var stopError: String? = forcedError
+        var pipelineEvidence: PipelineStopEvidence? = null
         if (RecorderTransitionPolicy.shouldInvokeStop(wasRecording)) {
             try {
-                mediaRecorder?.stop()
+                pipelineEvidence = recordingPipeline?.stop()
             } catch (t: Throwable) {
                 stopError = stopError ?: (t.message ?: "recorder.stop failed")
             }
         }
-        try {
-            mediaRecorder?.reset()
-            mediaRecorder?.release()
-        } catch (t: Throwable) {
-            // Ignore.
+        journal?.let { queueJournalStage(it, SegmentJournalStage.ENCODER_STOPPED) }
+        runCatching { recordingPipeline?.release() }
+        recordingPipeline = null
+        pipelineEvidence?.progress?.let { progress ->
+            updateState(
+                state.copy(
+                    encodedFrameCount = progress.encodedFrameCount,
+                    encodedBytes = progress.encodedBytes,
+                ),
+            )
         }
-        mediaRecorder = null
         captureSession?.close()
         captureSession = null
         activeEncoderSurface = null
@@ -961,7 +1260,11 @@ class RecorderSession(
         val finalFile = SegmentNaming.finalFileFor(partial)
         val partialExists = partial.exists()
         val partialBytes = if (partialExists) partial.length() else 0L
-        val renameSucceeded = stopError == null && partialExists && partialBytes > 0L && partial.renameTo(finalFile)
+        val renameSucceeded = stopError == null && partialExists && partialBytes > 0L &&
+            SegmentJournalIO.promote(partial, finalFile)
+        if (renameSucceeded) {
+            journal?.let { queueJournalStage(it, SegmentJournalStage.MEDIA_PROMOTED) }
+        }
         val outcome = FinalizePolicy.outcome(
             stopError = stopError,
             partialExists = partialExists,
@@ -970,11 +1273,18 @@ class RecorderSession(
         )
         val success = outcome.success
         val effectiveFile = if (success) finalFile else quarantine(partial) ?: partial
+        if (!success) journal?.let { queueJournalStage(it, SegmentJournalStage.QUARANTINED) }
         val fileBytes = if (effectiveFile.exists()) effectiveFile.length() else 0L
         val stoppedEpoch = System.currentTimeMillis()
         val stoppedElapsed = SystemClock.elapsedRealtime()
-        val gap = SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, actualStartedElapsed)
+        val gap = SegmentGapPolicy.encodedGapMs(
+            previousEncodedPresentationTimeUs,
+            pipelineEvidence?.progress?.firstPresentationTimeUs,
+        ) ?: SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, actualStartedElapsed)
         previousSegmentStoppedElapsedMs = stoppedElapsed
+        pipelineEvidence?.progress?.lastPresentationTimeUs?.let {
+            previousEncodedPresentationTimeUs = it
+        }
 
         val snapshot = SegmentSnapshot(
             file = effectiveFile,
@@ -1000,6 +1310,14 @@ class RecorderSession(
             eventRole = incidentTag?.role,
             frameStats = stats,
             storageLimitBytes = cfg?.storageLimitBytes ?: state.storageLimitBytes,
+            recordingMode = cfg?.recordingMode ?: RecordingMode.SURROUND_360,
+            sourceFingerprint = cfg?.sourceFingerprint.orEmpty(),
+            sourceKind = cfg?.sourceKind ?: RecordingSourceKind.COMPOSITE,
+            frontCalibration = cfg?.frontCalibration,
+            encoderProfile = cfg?.encoderProfile,
+            pipelineVersion = cfg?.pipelineVersion ?: RecorderConfig.CURRENT_PIPELINE_VERSION,
+            pipelineEvidence = pipelineEvidence,
+            journalFile = journal,
         )
         if (success) {
             pendingSidecarFiles += snapshot.finalPath!!.name
@@ -1020,7 +1338,9 @@ class RecorderSession(
                 "gapMs" to (snapshot.gapFromPreviousMs?.toString() ?: "-"),
             ),
         )
-        runIo { finishSegmentAsync(snapshot, success) }
+        runWork(RecorderWorkKind.COMPLETED_SEGMENT_ANALYSIS) {
+            finishSegmentAsync(snapshot, success)
+        }
         afterFinalize(reason, success, outcome.error)
     }
 
@@ -1049,6 +1369,34 @@ class RecorderSession(
                         durationMs = it.durationMs,
                     )
                 }
+                val verifiedTrack = actualTrack?.width == profile.size.width &&
+                    actualTrack.height == profile.size.height &&
+                    (actualTrack.durationMs ?: 0L) > 0L
+                if (!verifiedTrack) {
+                    SegmentSidecarIO.sidecarFileFor(finalFile).delete()
+                    val quarantined = quarantine(finalFile) ?: finalFile
+                    val written = writeSidecarAsync(
+                        buildSidecarFromSnapshot(
+                            snapshot.copy(
+                                file = quarantined,
+                                finalPath = null,
+                                result = SegmentSidecar.RESULT_FAILED,
+                                error = "OUTPUT_TRACK_VERIFICATION_FAILED",
+                            ),
+                            profile,
+                            actualTrack,
+                            null,
+                        ),
+                    )
+                    if (written != null) snapshot.journalFile?.let { SegmentJournalIO.complete(it) }
+                    EventLogger.markError(
+                        Categories.SYSTEM,
+                        "RECORDER_OUTPUT_TRACK_REJECTED",
+                        "${finalFile.name}: expected=${profile.size} actual=${actualTrack?.width}x${actualTrack?.height}",
+                        null,
+                    )
+                    return
+                }
                 if (!finalFile.exists()) {
                     // Evicted mid-analysis: record the loss, never write an orphan sidecar.
                     EventLogger.logEvent(
@@ -1062,23 +1410,26 @@ class RecorderSession(
                 // Bookmark may have been applied (or upload-pinned) after the
                 // snapshot was captured; merge with the on-disk sidecar so the
                 // enrichment never overwrites protection/pin state.
-                val existing = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(finalFile))
-                val effectiveProtected = SidecarProtectionPolicy.effectiveProtected(
-                    existingProtected = existing?.protected,
-                    snapshotProtected = snapshot.protected,
-                )
-                writeSidecarAsync(
-                    buildSidecarFromSnapshot(snapshot, profile, actualTrack, health)
-                        .copy(
-                            provisional = false,
-                            protected = effectiveProtected,
-                            uploadPinned = existing?.uploadPinned ?: false,
-                            eventId = existing?.eventId ?: snapshot.eventId,
-                            eventRequestedAtEpochMs = existing?.eventRequestedAtEpochMs
-                                ?: snapshot.eventRequestedAtEpochMs,
-                            eventRole = existing?.eventRole ?: snapshot.eventRole,
-                        ),
-                )
+                val finalSidecar = synchronized(RecorderStorageLock.lock) {
+                    val existing = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(finalFile))
+                    val effectiveProtected = SidecarProtectionPolicy.effectiveProtected(
+                        existingProtected = existing?.protected,
+                        snapshotProtected = snapshot.protected,
+                    )
+                    writeSidecarAsync(
+                        buildSidecarFromSnapshot(snapshot, profile, actualTrack, health)
+                            .copy(
+                                provisional = false,
+                                protected = effectiveProtected,
+                                uploadPinned = existing?.uploadPinned ?: false,
+                                eventId = existing?.eventId ?: snapshot.eventId,
+                                eventRequestedAtEpochMs = existing?.eventRequestedAtEpochMs
+                                    ?: snapshot.eventRequestedAtEpochMs,
+                                eventRole = existing?.eventRole ?: snapshot.eventRole,
+                            ),
+                    )
+                }
+                if (finalSidecar != null) snapshot.journalFile?.let { SegmentJournalIO.complete(it) }
                 EventLogger.logEvent(
                     Categories.SYSTEM,
                     "RECORDER_SEGMENT_HEALTH",
@@ -1093,7 +1444,8 @@ class RecorderSession(
                     ),
                 )
             } else {
-                writeSidecarAsync(buildSidecarFromSnapshot(snapshot, profile, null, null))
+                val written = writeSidecarAsync(buildSidecarFromSnapshot(snapshot, profile, null, null))
+                if (written != null) snapshot.journalFile?.let { SegmentJournalIO.complete(it) }
             }
             val settings = SettingsStore.get(context)
             if (settings.autoCleanupEnabled) {
@@ -1101,6 +1453,7 @@ class RecorderSession(
                     limitBytes = snapshot.storageLimitBytes,
                     reserveBytes = settings.minFreeBytes,
                     estimatedNextSegmentBytes = 0L,
+                    retentionHours = settings.retentionHours,
                 )
             }
         } finally {
@@ -1144,6 +1497,7 @@ class RecorderSession(
     private fun handleCameraLoss(message: String) {
         cancelOpenWatchdog()
         cancelSetupWatchdog()
+        cancelEncodedWatchdog()
         cancelTimeout()
         startInFlight = false
         cameraOpenInFlight = false
@@ -1177,7 +1531,7 @@ class RecorderSession(
         cancelRecoveryRetry()
         updateState(
             state.copy(
-                status = RecorderStatus.ERROR,
+                status = RecorderFailureStatusPolicy.recorderFailure(),
                 currentFile = null,
                 segmentStartedAtEpochMs = null,
                 lastError = message,
@@ -1191,7 +1545,7 @@ class RecorderSession(
         EventLogger.markError(Categories.SYSTEM, "RECORDER_STORAGE_BLOCKED", reason, null)
         updateState(
             state.copy(
-                status = RecorderStatus.ERROR,
+                status = RecorderFailureStatusPolicy.storageFailure(),
                 currentFile = null,
                 segmentStartedAtEpochMs = null,
                 lastError = reason,
@@ -1207,17 +1561,28 @@ class RecorderSession(
         requestedAtEpochMs: Long,
     ) {
         runIo {
-            val recent = segmentsDir.listFiles()
+            val candidates = segmentsDir.listFiles()
                 ?.filter { SegmentNaming.isFinalMp4(it.name) }
-                ?.sortedByDescending { it.lastModified() }
-                ?.take(count)
-                ?.reversed()
                 .orEmpty()
+                .mapNotNull { file ->
+                    val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))
+                        ?: return@mapNotNull null
+                    val started = sidecar.startedAtEpochMs ?: return@mapNotNull null
+                    val stopped = sidecar.stoppedAtEpochMs ?: return@mapNotNull null
+                    Triple(file, sidecar, SegmentTimeRange(file.absolutePath, started, stopped))
+                }
+            val selectedPaths = IncidentWindowPolicy.select(
+                segments = candidates.map { it.third },
+                requestedAtEpochMs = requestedAtEpochMs,
+                beforeMs = count * state.segmentSeconds * 1000L,
+                afterMs = 0L,
+            ).takeLast(count).toSet()
+            val recent = candidates.filter { it.first.absolutePath in selectedPaths }
             var protectedCount = 0
             synchronized(RecorderStorageLock.lock) {
-                recent.forEach { file ->
+                recent.forEach { (file, originalSidecar, _) ->
                     val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))
-                        ?: return@forEach
+                        ?: originalSidecar
                     // Do not steal a segment from an older explicit incident.
                     if (!sidecar.eventId.isNullOrBlank() && sidecar.eventId != eventId) return@forEach
                     SegmentSidecarIO.writeAtomic(
@@ -1281,13 +1646,18 @@ class RecorderSession(
         health: FrameHealthReport?,
     ): SegmentSidecar {
         val settings = SettingsStore.get(context)
-        val layout = SegmentLaneLayoutFactory.forProfile(
-            width = profile.size.width,
-            height = profile.size.height,
-            labels = settings.laneLabels,
-            displayOrder = settings.laneOrder,
-            rotations = settings.laneRotations,
-        )
+        val layout = if (s.recordingMode == RecordingMode.SURROUND_360) {
+            SegmentLaneLayoutFactory.forProfile(
+                width = profile.size.width,
+                height = profile.size.height,
+                labels = settings.laneLabels,
+                displayOrder = settings.laneOrder,
+                rotations = settings.laneRotations,
+            )
+        } else {
+            null
+        }
+        val encoded = s.pipelineEvidence?.progress
         return SegmentSidecar(
             file = s.file.absolutePath,
             cameraId = s.cameraId,
@@ -1313,6 +1683,20 @@ class RecorderSession(
             frameStats = s.frameStats,
             frameHealth = health,
             laneLayout = layout,
+            recordingMode = s.recordingMode,
+            sourceFingerprint = s.sourceFingerprint,
+            sourceKind = s.sourceKind,
+            frontCalibration = s.frontCalibration,
+            encoderProfile = s.encoderProfile,
+            requestedBitrateBps = profile.bitrateBps,
+            actualCodecName = s.pipelineEvidence?.codecName,
+            actualCodecFormat = s.pipelineEvidence?.actualFormat,
+            encodedFrameCount = encoded?.encodedFrameCount,
+            encodedBytes = encoded?.encodedBytes,
+            firstEncodedPresentationTimeUs = encoded?.firstPresentationTimeUs,
+            lastEncodedPresentationTimeUs = encoded?.lastPresentationTimeUs,
+            calibrationVersion = s.frontCalibration?.calibrationVersion,
+            pipelineVersion = s.pipelineVersion,
         )
     }
 
@@ -1407,17 +1791,23 @@ class RecorderSession(
     private fun prepareStorage(cfg: RecorderConfig): StorageDecision {
         return try {
             val estimated = StoragePolicy.estimateSegmentBytes(cfg.profile.bitrateBps, cfg.segmentSeconds)
-            if (SettingsStore.get(context).autoCleanupEnabled) {
+            val settings = SettingsStore.get(context)
+            if (settings.autoCleanupEnabled) {
                 enforceAutomaticCleanup(
                     limitBytes = cfg.storageLimitBytes,
                     reserveBytes = cfg.minFreeBytes,
                     estimatedNextSegmentBytes = estimated,
+                    retentionHours = settings.retentionHours,
                 )
             }
-            val usage = segmentsDir.listFiles()
-                ?.filter { SegmentNaming.isFinalMp4(it.name) }
-                ?.sumOf { it.length() }
-                ?: 0L
+            val quarantineBytes = directoryBytes(quarantineDir)
+            if (!StoragePolicy.quarantineWithinBound(quarantineBytes)) {
+                return StorageDecision(
+                    proceed = false,
+                    reason = "QUARANTINE_LIMIT_EXCEEDED bytes=$quarantineBytes limit=${StoragePolicy.MAX_QUARANTINE_BYTES}",
+                )
+            }
+            val usage = recordingArtifactUsageBytes()
             StoragePolicy.canStartSegment(
                 usageBytes = usage,
                 limitBytes = cfg.storageLimitBytes,
@@ -1447,11 +1837,15 @@ class RecorderSession(
         limitBytes: Long,
         reserveBytes: Long,
         estimatedNextSegmentBytes: Long,
+        retentionHours: Int,
     ) {
-        val usage = segmentsDir.listFiles()
+        enforceRetentionLimit(retentionHours, System.currentTimeMillis())
+        val finalizedUsage = segmentsDir.listFiles()
             ?.filter { SegmentNaming.isFinalMp4(it.name) }
             ?.sumOf { it.length() }
             ?: 0L
+        val usage = recordingArtifactUsageBytes()
+        val nonEvictableUsage = (usage - finalizedUsage).coerceAtLeast(0L)
         val quotaTarget = (limitBytes - estimatedNextSegmentBytes).coerceAtLeast(0L)
         val available = availableStorageBytes()
         val requiredFree = reserveBytes + estimatedNextSegmentBytes
@@ -1461,8 +1855,17 @@ class RecorderSession(
             usage
         }
         val target = minOf(usage, quotaTarget, freeSpaceTarget)
-        if (target < usage) enforceStorageLimit(limitBytes, target)
+        if (target < usage) {
+            enforceStorageLimit(limitBytes, (target - nonEvictableUsage).coerceAtLeast(0L))
+        }
     }
+
+    private fun recordingArtifactUsageBytes(): Long =
+        directoryBytes(File(context.filesDir, "recordings"))
+
+    private fun directoryBytes(directory: File): Long = runCatching {
+        directory.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }.getOrDefault(Long.MAX_VALUE)
 
     @SuppressLint("UsableSpace")
     private fun availableStorageBytes(): Long = try {
@@ -1474,44 +1877,92 @@ class RecorderSession(
     private fun enforceStorageLimit(limitBytes: Long, target: Long = limitBytes) {
         // Serialized with upload-pin writes so read/select/delete cannot race a
         // pin that was just applied.
-        synchronized(RecorderStorageLock.lock) {
-            val files = segmentsDir.listFiles()
-                ?.filter { SegmentNaming.isFinalMp4(it.name) }
-                ?.map { file ->
-                    val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))
-                    ManagedSegmentFile(
-                        path = file.absolutePath,
-                        bytes = file.length(),
-                        lastModifiedMs = file.lastModified(),
-                        isFinalMp4 = true,
-                        hasSidecar = sidecar != null || file.name in pendingSidecarFiles,
-                        protected = sidecar?.protected ?: false,
-                        uploadPinned = sidecar?.uploadPinned ?: false,
-                        analysisInFlight = file.name in pendingSidecarFiles,
-                        playing = PlaybackPinRegistry.isPinned(file),
-                    )
-                }
-                .orEmpty()
+        val changed = synchronized(RecorderStorageLock.lock) {
+            val files = managedSegmentFilesLocked()
             val evictions = StoragePolicy.selectEvictionsToTarget(files, target)
-            evictions.forEach { path ->
-                val mp4 = File(path)
-                val sidecar = SegmentSidecarIO.sidecarFileFor(mp4)
-                if (mp4.delete()) {
-                    sidecar.delete()
-                    EventLogger.logEvent(
+            deleteEvictionsLocked(
+                paths = evictions,
+                eventName = "RECORDER_STORAGE_EVICTED",
+                evidence = mapOf("limitBytes" to limitBytes.toString()),
+            )
+        }
+        if (changed) RecorderLibrary.notifyChanged()
+    }
+
+    private fun enforceRetentionLimit(retentionHours: Int, nowEpochMs: Long) {
+        val cutoff = StoragePolicy.retentionCutoffEpochMs(nowEpochMs, retentionHours) ?: return
+        val changed = synchronized(RecorderStorageLock.lock) {
+            val evictions = StoragePolicy.selectRetentionEvictions(managedSegmentFilesLocked(), cutoff)
+            deleteEvictionsLocked(
+                paths = evictions,
+                eventName = "RECORDER_RETENTION_EVICTED",
+                evidence = mapOf(
+                    "retentionHours" to retentionHours.toString(),
+                    "cutoffEpochMs" to cutoff.toString(),
+                ),
+            )
+        }
+        if (changed) RecorderLibrary.notifyChanged()
+    }
+
+    /** Caller holds [RecorderStorageLock.lock] for the full read/select/delete transaction. */
+    private fun managedSegmentFilesLocked(): List<ManagedSegmentFile> = segmentsDir.listFiles()
+        ?.filter { SegmentNaming.isFinalMp4(it.name) }
+        ?.map { file ->
+            val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))
+            val analysisInFlight = file.name in pendingSidecarFiles
+            val finalizedOwnedSidecar = sidecar?.takeIf {
+                it.file == file.absolutePath &&
+                    it.result == SegmentSidecar.RESULT_SUCCESS &&
+                    !it.provisional
+            }
+            ManagedSegmentFile(
+                path = file.absolutePath,
+                bytes = file.length(),
+                lastModifiedMs = file.lastModified(),
+                isFinalMp4 = true,
+                hasSidecar = finalizedOwnedSidecar != null || analysisInFlight,
+                protected = sidecar?.protected ?: false,
+                uploadPinned = sidecar?.uploadPinned ?: false,
+                analysisInFlight = analysisInFlight,
+                playing = PlaybackPinRegistry.isPinned(file),
+                stoppedAtEpochMs = finalizedOwnedSidecar?.stoppedAtEpochMs,
+            )
+        }
+        .orEmpty()
+
+    /** Caller holds [RecorderStorageLock.lock]. */
+    private fun deleteEvictionsLocked(
+        paths: List<String>,
+        eventName: String,
+        evidence: Map<String, String>,
+    ): Boolean {
+        var changed = false
+        paths.forEach { path ->
+            val mp4 = File(path)
+            val sidecar = SegmentSidecarIO.sidecarFileFor(mp4)
+            if (mp4.delete()) {
+                changed = true
+                if (sidecar.exists() && !sidecar.delete()) {
+                    EventLogger.markError(
                         Categories.SYSTEM,
-                        "RECORDER_STORAGE_EVICTED",
-                        payload = mapOf(
-                            "file" to mp4.name,
-                            "limitBytes" to limitBytes.toString(),
-                        ),
+                        "RECORDER_EVICT_SIDECAR_DELETE_FAILED",
+                        sidecar.name,
+                        null,
                     )
                 }
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    eventName,
+                    payload = evidence + ("file" to mp4.name),
+                )
             }
         }
+        return changed
     }
 
     private fun closeCamera() {
+        cancelEncodedWatchdog()
         cameraOpenInFlight = false
         try {
             captureSession?.close()
@@ -1549,7 +2000,7 @@ class RecorderSession(
             closeCamera()
             updateState(
                 state.copy(
-                    status = RecorderStatus.STARTING,
+                    status = RecorderStatus.RECOVERING,
                     lastError = null,
                     message = "Recovering camera ($attemptNumber/${RECOVERY_RETRY_DELAYS_MS.size})",
                 ),
@@ -1620,6 +2071,13 @@ class RecorderSession(
     }
 
     /** Immutable per-segment evidence captured on the camera thread before async work. */
+    private data class PreparedSegmentStart(
+        val segmentNumber: Int,
+        val requestedAtEpochMs: Long,
+        val requestedAtElapsedMs: Long,
+        val partial: File,
+    )
+
     private data class SegmentSnapshot(
         val file: File,
         val finalPath: File?,
@@ -1644,5 +2102,13 @@ class RecorderSession(
         val eventRole: String?,
         val frameStats: SegmentFrameStats,
         val storageLimitBytes: Long,
+        val recordingMode: RecordingMode,
+        val sourceFingerprint: String,
+        val sourceKind: RecordingSourceKind,
+        val frontCalibration: FrontCalibration?,
+        val encoderProfile: EncoderProfile?,
+        val pipelineVersion: Int,
+        val pipelineEvidence: PipelineStopEvidence?,
+        val journalFile: File?,
     )
 }

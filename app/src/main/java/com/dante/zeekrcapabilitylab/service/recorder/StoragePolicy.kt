@@ -20,12 +20,20 @@ data class ManagedSegmentFile(
     val analysisInFlight: Boolean = false,
     /** An open playback surface owns this file until the player is dismissed. */
     val playing: Boolean = false,
+    /** Durable encoded stop time used for age-based retention; null is never guessed. */
+    val stoppedAtEpochMs: Long? = null,
 )
 
 object StoragePolicy {
 
     /** Safety reserve kept free beyond the estimated next segment (filesystem slack, muxing). */
     const val SAFETY_RESERVE_BYTES = 256L * 1024L * 1024L
+    const val MAX_QUARANTINE_BYTES = 1024L * 1024L * 1024L
+
+    fun artifactUsageBytes(segmentFiles: List<ManagedSegmentFile>, otherArtifactBytes: Long): Long =
+        currentUsageBytes(segmentFiles) + otherArtifactBytes.coerceAtLeast(0L)
+
+    fun quarantineWithinBound(bytes: Long): Boolean = bytes in 0L..MAX_QUARANTINE_BYTES
 
     fun currentUsageBytes(files: List<ManagedSegmentFile>): Long =
         files.filter { it.isFinalMp4 }.sumOf { it.bytes }
@@ -59,6 +67,36 @@ object StoragePolicy {
         return evictions
     }
 
+    /**
+     * Selects ordinary managed segments strictly older than [cutoffEpochMs].
+     * Missing/invalid timestamps fail closed and every pin/protection guard is
+     * identical to capacity cleanup.
+     */
+    fun selectRetentionEvictions(
+        files: List<ManagedSegmentFile>,
+        cutoffEpochMs: Long,
+    ): List<String> {
+        if (cutoffEpochMs <= 0L) return emptyList()
+        return files
+            .filter {
+                val stoppedAt = it.stoppedAtEpochMs
+                it.isFinalMp4 && it.hasSidecar && stoppedAt != null && stoppedAt > 0L &&
+                    stoppedAt < cutoffEpochMs && !it.protected && !it.uploadPinned &&
+                    !it.analysisInFlight && !it.playing
+            }
+            .sortedWith(
+                compareBy<ManagedSegmentFile> { it.stoppedAtEpochMs }
+                    .thenBy { it.path },
+            )
+            .map { it.path }
+    }
+
+    fun retentionCutoffEpochMs(nowEpochMs: Long, retentionHours: Int): Long? {
+        if (nowEpochMs <= 0L || retentionHours <= 0) return null
+        val retentionMs = retentionHours.toLong() * 60L * 60L * 1000L
+        return (nowEpochMs - retentionMs).takeIf { it > 0L }
+    }
+
     /** Rough worst-case bytes for one segment at the requested bitrate. */
     fun estimateSegmentBytes(bitrateBps: Int, segmentSeconds: Int): Long {
         if (bitrateBps <= 0 || segmentSeconds <= 0) return 0L
@@ -76,7 +114,10 @@ object StoragePolicy {
         availableBytes: Long,
         reserveBytes: Long = SAFETY_RESERVE_BYTES,
     ): StorageDecision {
-        if (limitBytes > 0L && usageBytes + estimatedBytes > limitBytes) {
+        if (usageBytes < 0L || estimatedBytes < 0L) {
+            return StorageDecision(proceed = false, reason = "STORAGE_ACCOUNTING_INVALID")
+        }
+        if (limitBytes > 0L && (estimatedBytes > limitBytes || usageBytes > limitBytes - estimatedBytes)) {
             return StorageDecision(
                 proceed = false,
                 reason = "STORAGE_CAP_EXCEEDED usage=${usageBytes} estimated=${estimatedBytes} limit=${limitBytes}",

@@ -367,10 +367,10 @@ class LivePreviewController(private val context: Context) {
     }
 
     private fun enumerateAndChoose(): EnumerateResult {
-        val cameraIds = CameraRuntime.cameraIds(context)
-        val id = cameraIds.firstOrNull { it == "2" }
-            ?: cameraIds.firstOrNull()
-            ?: throw IllegalStateException("NO_CAMERA")
+        val settings = SettingsStore.get(context)
+        val id = CameraRuntime.sourceCatalog(context).singleOrNull {
+            it.cameraId == settings.selectedCameraId && it.fingerprint == settings.sourceFingerprint
+        }?.cameraId ?: throw IllegalStateException("VERIFIED_SOURCE_REQUIRED")
         val size = choosePreviewSize(id) ?: Size(1280, 720)
         return EnumerateResult(id, size)
     }

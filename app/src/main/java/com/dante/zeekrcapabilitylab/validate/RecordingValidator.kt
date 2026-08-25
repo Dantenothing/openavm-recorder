@@ -66,7 +66,10 @@ object RecordingValidator {
                 retriever.getFrameAtTime(it * 500, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } != null
             val last = duration?.let {
-                retriever.getFrameAtTime((it - 1).coerceAtLeast(0), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                retriever.getFrameAtTime(
+                    (it - 1).coerceAtLeast(0) * 1000L,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                )
             } != null
             val valid = duration != null && duration > 0 && hasVideo && first && mid && last
             val partial = duration != null && duration > 0 && (hasVideo || first || mid || last)

@@ -2,28 +2,132 @@ package com.dante.zeekrcapabilitylab.product
 
 import android.content.Context
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
-import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceKind
 
-/** Builds the recorder configuration used by the public product UI. */
+sealed interface RecorderConfigResolution {
+    data class Ready(val config: RecorderConfig) : RecorderConfigResolution
+    data class Blocked(val reason: String) : RecorderConfigResolution
+}
+
+/** Builds only configurations tied to an explicitly confirmed, unchanged source. */
 object ProductRecorderConfigFactory {
-    fun create(context: Context): RecorderConfig? {
+    fun resolve(context: Context): RecorderConfigResolution {
         val settings = SettingsStore.get(context)
-        val cameraIds = CameraRuntime.cameraIds(context)
-        val cameraId = cameraIds.firstOrNull { it == "2" }
-            ?: cameraIds.firstOrNull()
-            ?: return null
-        val declaredSizes = CameraRuntime.videoSizeCandidates(context, cameraId)
-            .map { ProfileSize(it.width, it.height) }
-            .toSet()
-        val profile = CameraProfileCatalog.productPreferredProfile(declaredSizes) ?: return null
+        val mode = settings.recordingMode
+            ?: return RecorderConfigResolution.Blocked("MODE_CONFIRMATION_REQUIRED")
+        val cameraId = settings.selectedCameraId
+            ?: return RecorderConfigResolution.Blocked("SOURCE_CONFIRMATION_REQUIRED")
+        val expectedFingerprint = settings.sourceFingerprint
+            ?: return RecorderConfigResolution.Blocked("SOURCE_CONFIRMATION_REQUIRED")
+        val sourceKind = settings.sourceKind
+            ?: return RecorderConfigResolution.Blocked("SOURCE_CONFIRMATION_REQUIRED")
+        val source = CameraRuntime.sourceCatalog(context).singleOrNull {
+            it.cameraId == cameraId && it.fingerprint == expectedFingerprint
+        } ?: return RecorderConfigResolution.Blocked("SOURCE_CHANGED_OR_UNAVAILABLE")
+        val compositeSize = source.sizesFor(sourceKind)
+            .filter(CameraProfileCatalog::isFourLaneComposite)
+            .sortedWith(
+                compareBy<com.dante.zeekrcapabilitylab.probe.camera.ProfileSize> {
+                    if (it.height > it.width) 0 else 1
+                }.thenByDescending { it.totalPixels },
+            )
+            .firstOrNull()
+        val config = when (mode) {
+            RecordingMode.SURROUND_360 -> {
+                if (sourceKind != RecordingSourceKind.COMPOSITE) {
+                    return RecorderConfigResolution.Blocked("SURROUND_REQUIRES_COMPOSITE_SOURCE")
+                }
+                val profile = compositeSize
+                    ?.let { CameraProfileCatalog.productPreferredProfile(listOf(it)) }
+                    ?: return RecorderConfigResolution.Blocked("VERIFIED_COMPOSITE_PROFILE_UNAVAILABLE")
+                RecorderConfig(
+                    cameraId = cameraId,
+                    profile = profile,
+                    segmentSeconds = settings.segmentSeconds,
+                    storageLimitBytes = settings.storageLimitBytes,
+                    minFreeBytes = settings.minFreeBytes,
+                    recordingMode = mode,
+                    sourceFingerprint = expectedFingerprint,
+                    sourceKind = sourceKind,
+                    sourceProfile = profile,
+                )
+            }
 
-        return RecorderConfig(
-            cameraId = cameraId,
-            profile = profile,
-            segmentSeconds = settings.segmentSeconds,
-            storageLimitBytes = settings.storageLimitBytes,
-            minFreeBytes = settings.minFreeBytes,
-        )
+            RecordingMode.FRONT_ONLY -> {
+                val encoder = CameraRuntime.frontEncoderProfile()
+                    ?: return RecorderConfigResolution.Blocked("VALIDATED_H264_ENCODER_PROFILE_UNAVAILABLE")
+                val output = com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile(
+                    size = com.dante.zeekrcapabilitylab.probe.camera.ProfileSize(
+                        encoder.width,
+                        encoder.height,
+                    ),
+                    bitrateBps = encoder.requestedBitrateBps,
+                )
+                when (sourceKind) {
+                    RecordingSourceKind.COMPOSITE_CROP -> {
+                        val sourceProfile = compositeSize
+                            ?.let { CameraProfileCatalog.productPreferredProfile(listOf(it)) }
+                            ?: return RecorderConfigResolution.Blocked("VERIFIED_COMPOSITE_PROFILE_UNAVAILABLE")
+                        val calibration = settings.frontCalibration
+                            ?.takeIf { it.matches(expectedFingerprint, sourceProfile.size) }
+                            ?: return RecorderConfigResolution.Blocked("FRONT_CALIBRATION_REQUIRED")
+                        RecorderConfig(
+                            cameraId = cameraId,
+                            profile = output,
+                            segmentSeconds = settings.segmentSeconds,
+                            storageLimitBytes = settings.storageLimitBytes,
+                            minFreeBytes = settings.minFreeBytes,
+                            recordingMode = mode,
+                            sourceFingerprint = expectedFingerprint,
+                            sourceKind = sourceKind,
+                            sourceProfile = sourceProfile,
+                            frontCalibration = calibration,
+                            encoderProfile = encoder,
+                            calibrationVersion = calibration.calibrationVersion,
+                        )
+                    }
+
+                    RecordingSourceKind.DIRECT_FRONT -> {
+                        val exact = directFrontSourceSize(source, output.size)
+                            ?: return RecorderConfigResolution.Blocked("VERIFIED_DIRECT_FRONT_PROFILE_UNAVAILABLE")
+                        RecorderConfig(
+                            cameraId = cameraId,
+                            profile = output,
+                            segmentSeconds = settings.segmentSeconds,
+                            storageLimitBytes = settings.storageLimitBytes,
+                            minFreeBytes = settings.minFreeBytes,
+                            recordingMode = mode,
+                            sourceFingerprint = expectedFingerprint,
+                            sourceKind = sourceKind,
+                            sourceProfile = com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile(
+                                exact,
+                                output.bitrateBps,
+                            ),
+                            encoderProfile = encoder,
+                        )
+                    }
+
+                    RecordingSourceKind.COMPOSITE ->
+                        return RecorderConfigResolution.Blocked("FRONT_SOURCE_NOT_CALIBRATED")
+                }
+            }
+        }
+        val errors = config.validate()
+        return if (errors.isEmpty()) {
+            RecorderConfigResolution.Ready(config)
+        } else {
+            RecorderConfigResolution.Blocked("CONFIG_INVALID: ${errors.joinToString("; ")}")
+        }
     }
+
+    fun create(context: Context): RecorderConfig? =
+        (resolve(context) as? RecorderConfigResolution.Ready)?.config
+
+    internal fun directFrontSourceSize(
+        source: RuntimeCameraSource,
+        outputSize: com.dante.zeekrcapabilitylab.probe.camera.ProfileSize,
+    ): com.dante.zeekrcapabilitylab.probe.camera.ProfileSize? =
+        source.sizesFor(RecordingSourceKind.DIRECT_FRONT).singleOrNull { it == outputSize }
 }

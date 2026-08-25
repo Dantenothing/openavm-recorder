@@ -62,6 +62,8 @@ import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.service.recorder.PlaybackPinRegistry
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
+import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -76,9 +78,9 @@ private data class PlaybackControls(
 )
 
 /**
- * Product playback surface. It deliberately mirrors the live-preview path:
- * one ordinary TextureView receives the 1280x5140 composite and the shared
- * FourLaneTextureContainer redraws its four vertical lanes as a 2x2 grid.
+ * Product playback surface. Composite sidecars use the four-lane redraw path;
+ * FRONT_ONLY sidecars render the encoded square frame directly and never
+ * reinterpret it as another four-lane source.
  */
 @Composable
 fun FourLanePlayerDialog(
@@ -94,6 +96,12 @@ fun FourLanePlayerDialog(
     val languageMode by AppLanguage.mode.collectAsState()
     val diagnostics by produceState<PlaybackDiagnostics?>(initialValue = null, file) {
         value = withContext(Dispatchers.IO) { PlaybackInspector.inspect(file) }
+    }
+    val frontOnly by produceState(initialValue = false, file) {
+        value = withContext(Dispatchers.IO) {
+            SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.recordingMode ==
+                RecordingMode.FRONT_ONLY
+        }
     }
     val directionLabels = productDirectionLabels()
 
@@ -215,6 +223,7 @@ fun FourLanePlayerDialog(
                                     displayMode = displayMode,
                                     lensMode = lensMode,
                                     correctionConfig = settings.fisheyeCorrection,
+                                    directSingleView = frontOnly,
                                     onControlsReady = { controls = it },
                                     onPrepared = { playerDuration ->
                                         durationMs = playerDuration
@@ -238,7 +247,7 @@ fun FourLanePlayerDialog(
                                     },
                                     modifier = Modifier.fillMaxSize(),
                                 )
-                                FourLaneDirectionOverlay(
+                                if (!frontOnly) FourLaneDirectionOverlay(
                                     labels = directionLabels,
                                     displayMode = displayMode,
                                     interactionEnabled = firstFrame,
@@ -251,7 +260,7 @@ fun FourLanePlayerDialog(
                                         zoom = playbackContainer.applyViewportGesture(zoomChange, panX, panY)
                                     },
                                 )
-                                FourLaneLensToggle(
+                                if (!frontOnly) FourLaneLensToggle(
                                     mode = lensMode,
                                     onModeChanged = { selected ->
                                         lensMode = selected
@@ -505,6 +514,7 @@ private fun FourLanePlaybackSurface(
     displayMode: FourLaneDisplayMode,
     lensMode: FourLaneLensMode,
     correctionConfig: FisheyeCorrectionConfig,
+    directSingleView: Boolean,
     onControlsReady: (PlaybackControls?) -> Unit,
     onPrepared: (Long) -> Unit,
     onFirstFrame: () -> Unit,
@@ -515,6 +525,7 @@ private fun FourLanePlaybackSurface(
     AndroidView(
         factory = { container },
         update = {
+            it.directSingleView = directSingleView
             it.displayMode = displayMode
             it.lensMode = lensMode
             it.correctionConfig = correctionConfig

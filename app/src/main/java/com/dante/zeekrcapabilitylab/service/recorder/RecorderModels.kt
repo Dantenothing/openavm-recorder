@@ -17,12 +17,27 @@ data class RecorderConfig(
     val segmentSeconds: Int,
     val storageLimitBytes: Long,
     val minFreeBytes: Long = 20L * 1024L * 1024L * 1024L,
+    val recordingMode: RecordingMode = RecordingMode.SURROUND_360,
+    val sourceFingerprint: String = "",
+    val sourceKind: RecordingSourceKind = RecordingSourceKind.COMPOSITE,
+    /** Camera2 input dimensions; [profile] is always the encoded output profile. */
+    val sourceProfile: CameraFormatProfile? = null,
+    val frontCalibration: FrontCalibration? = null,
+    val encoderProfile: EncoderProfile? = null,
+    val calibrationVersion: Int? = null,
+    val pipelineVersion: Int = CURRENT_PIPELINE_VERSION,
 ) {
+    val effectiveSourceProfile: CameraFormatProfile get() = sourceProfile ?: profile
+
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
         if (cameraId.isBlank()) errors += "cameraId must not be blank"
+        if (sourceFingerprint.isBlank()) errors += "sourceFingerprint must not be blank"
         if (profile.size.width <= 0 || profile.size.height <= 0) {
             errors += "profile size must be positive"
+        }
+        if (effectiveSourceProfile.size.width <= 0 || effectiveSourceProfile.size.height <= 0) {
+            errors += "source profile size must be positive"
         }
         if (profile.bitrateBps <= 0) errors += "bitrateBps must be positive"
         if (segmentSeconds !in SEGMENT_OPTIONS_SECONDS) {
@@ -34,6 +49,43 @@ data class RecorderConfig(
         if (minFreeBytes !in MIN_FREE_OPTIONS_BYTES) {
             errors += "minFreeBytes must be one of ${MIN_FREE_OPTIONS_BYTES.sorted()}"
         }
+        when (recordingMode) {
+            RecordingMode.SURROUND_360 -> {
+                if (sourceKind != RecordingSourceKind.COMPOSITE) {
+                    errors += "SURROUND_360 requires a composite source"
+                }
+                if (profile != effectiveSourceProfile) {
+                    errors += "SURROUND_360 output must match the verified composite source"
+                }
+            }
+
+            RecordingMode.FRONT_ONLY -> {
+                if (sourceKind == RecordingSourceKind.COMPOSITE) {
+                    errors += "FRONT_ONLY cannot use an uncropped composite source"
+                }
+                if (encoderProfile == null) errors += "FRONT_ONLY requires a validated encoder profile"
+                if (encoderProfile != null && (
+                        encoderProfile.width != profile.size.width ||
+                            encoderProfile.height != profile.size.height ||
+                            encoderProfile.requestedBitrateBps != profile.bitrateBps
+                        )
+                ) {
+                    errors += "encoder profile must match the encoded output profile"
+                }
+                if (sourceKind == RecordingSourceKind.COMPOSITE_CROP) {
+                    val calibration = frontCalibration
+                    if (calibration == null) {
+                        errors += "composite front recording requires calibration"
+                    } else {
+                        errors += calibration.validate()
+                        if (!calibration.matches(sourceFingerprint, effectiveSourceProfile.size)) {
+                            errors += "front calibration does not match the verified source"
+                        }
+                    }
+                }
+            }
+        }
+        if (pipelineVersion != CURRENT_PIPELINE_VERSION) errors += "pipelineVersion is unsupported"
         return errors
     }
 
@@ -46,6 +98,7 @@ data class RecorderConfig(
         val MIN_FREE_OPTIONS_BYTES = setOf(10L, 20L, 30L)
             .map { it * 1024L * 1024L * 1024L }
             .toSet()
+        const val CURRENT_PIPELINE_VERSION = 1
 
         /** Exact-match check against the HAL-declared MediaRecorder output sizes. */
         fun profileDeclared(profile: CameraFormatProfile, declaredSizes: Collection<ProfileSize>): Boolean =
@@ -60,7 +113,34 @@ object RecorderStatus {
     const val FINALIZING = "FINALIZING"
     const val STOPPED = "STOPPED"
     const val CAMERA_UNAVAILABLE = "CAMERA_UNAVAILABLE"
+    const val RECOVERING = "RECOVERING"
+    const val STORAGE_BLOCKED = "STORAGE_BLOCKED"
     const val ERROR = "ERROR"
+}
+
+object RecorderFailureStatusPolicy {
+    fun recorderFailure(): String = RecorderStatus.ERROR
+    fun storageFailure(): String = RecorderStatus.STORAGE_BLOCKED
+}
+
+enum class RecorderWorkKind {
+    STARTUP_RECOVERY,
+    NEXT_SEGMENT_GATE,
+    COMPLETED_SEGMENT_ANALYSIS,
+}
+
+enum class RecorderWorkLane {
+    STORAGE,
+    ANALYSIS,
+}
+
+/** Next-segment work is intentionally isolated from potentially slow media inspection. */
+object RecorderWorkLanePolicy {
+    fun laneFor(kind: RecorderWorkKind): RecorderWorkLane = when (kind) {
+        RecorderWorkKind.STARTUP_RECOVERY,
+        RecorderWorkKind.NEXT_SEGMENT_GATE -> RecorderWorkLane.STORAGE
+        RecorderWorkKind.COMPLETED_SEGMENT_ANALYSIS -> RecorderWorkLane.ANALYSIS
+    }
 }
 
 /** UI-visible service state. Updated from the camera handler thread. */
@@ -81,6 +161,11 @@ data class RecorderState(
     val previewFallbackUsed: Boolean = false,
     /** PARTIAL_WAKE_LOCK held while segments are actively recording. */
     val wakeLockHeld: Boolean = false,
+    val recordingMode: RecordingMode? = null,
+    val sourceVerified: Boolean = false,
+    val calibrationValid: Boolean = false,
+    val encodedFrameCount: Long = 0,
+    val encodedBytes: Long = 0,
 )
 
 /**
@@ -94,6 +179,8 @@ object RecorderCommandPolicy {
         RecorderStatus.RECORDING,
         RecorderStatus.FINALIZING,
         RecorderStatus.CAMERA_UNAVAILABLE,
+        RecorderStatus.RECOVERING,
+        RecorderStatus.STORAGE_BLOCKED,
         RecorderStatus.ERROR,
     )
 
@@ -106,7 +193,7 @@ object RecorderCommandPolicy {
         serviceRunning && status != RecorderStatus.IDLE
 
     fun canRetry(status: String, serviceRunning: Boolean): Boolean =
-        serviceRunning && status == RecorderStatus.CAMERA_UNAVAILABLE
+        serviceRunning && status in setOf(RecorderStatus.CAMERA_UNAVAILABLE, RecorderStatus.RECOVERING)
 
     fun canBookmark(serviceRunning: Boolean): Boolean = serviceRunning
 }
@@ -139,6 +226,13 @@ object SegmentGapPolicy {
     fun gapMs(previousStoppedElapsedMs: Long?, currentStartedElapsedMs: Long?): Long? =
         if (previousStoppedElapsedMs != null && currentStartedElapsedMs != null) {
             currentStartedElapsedMs - previousStoppedElapsedMs
+        } else {
+            null
+        }
+
+    fun encodedGapMs(previousLastPresentationUs: Long?, currentFirstPresentationUs: Long?): Long? =
+        if (previousLastPresentationUs != null && currentFirstPresentationUs != null) {
+            (currentFirstPresentationUs - previousLastPresentationUs) / 1000L
         } else {
             null
         }
@@ -245,4 +339,19 @@ object WatchdogPolicy {
     fun shouldFire(elapsedMs: Long, timeoutMs: Long): Boolean = elapsedMs >= timeoutMs
 
     fun isCurrent(token: Long, currentToken: Long): Boolean = token == currentToken
+}
+
+object EncodedOutputWatchdogPolicy {
+    const val CHECK_INTERVAL_MS = 5_000L
+    const val STALL_TIMEOUT_MS = 15_000L
+
+    fun stalled(
+        elapsedSinceProgressMs: Long,
+        encodedFrameCount: Long,
+        previousEncodedFrameCount: Long,
+        fileBytes: Long,
+        previousFileBytes: Long,
+    ): Boolean = elapsedSinceProgressMs >= STALL_TIMEOUT_MS &&
+        encodedFrameCount <= previousEncodedFrameCount &&
+        fileBytes <= previousFileBytes
 }

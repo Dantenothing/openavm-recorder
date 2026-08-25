@@ -48,6 +48,7 @@ import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.util.Utils
 import java.io.File
 import java.text.SimpleDateFormat
@@ -66,6 +67,7 @@ fun EventsScreen() {
         RecordingThumbnailCache(File(context.cacheDir, "recording-covers"))
     }
     val languageMode by AppLanguage.mode.collectAsState()
+    val libraryRevision by RecorderLibrary.revision.collectAsState()
 
     var segments by remember { mutableStateOf<List<EventGroups.Segment>>(emptyList()) }
     var covers by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
@@ -167,7 +169,7 @@ fun EventsScreen() {
         }
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
     val dateGroups = remember(segments, languageMode) { EventGroups.groupByDate(segments) }
@@ -364,7 +366,11 @@ private fun RecordingCard(
                     if (segment.sidecar.protected) StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
                 }
                 StatusBadge(
-                    text = Utils.t("4 views", "四路"),
+                    text = if (segment.sidecar.recordingMode == RecordingMode.FRONT_ONLY) {
+                        Utils.t("Front", "前方")
+                    } else {
+                        Utils.t("4 views", "四路")
+                    },
                     color = Color(0xFF81C784),
                     modifier = Modifier
                         .align(Alignment.BottomStart)

@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-Experimental surround-view recorder for compatible Zeekr App Lab environments.
+Experimental front-first and surround-view recorder for compatible Zeekr App Lab environments.
 
 > [!WARNING]
 > AVM Recorder is experimental, unofficial software. It is not affiliated with, approved by or endorsed by Zeekr.
@@ -18,14 +18,17 @@ AVM Recorder records and displays the surround-view video stream exposed to a th
 The current alpha provides:
 
 - a 2×2 live view labelled Front, Rear, Left and Right;
+- explicit `Front only` and `360°` recording modes; front-only remains an experimental vehicle-test path after parked visual calibration;
 - segmented recording to the app's internal storage;
 - protected/saved events that automatic cleanup does not remove;
 - a thumbnail-based recording library;
 - four-view playback, seeking, previous/next recording navigation and single-view zoom;
 - optional display-only fisheye correction; and
-- automatic cleanup controlled by a storage limit and reserved free-space threshold.
+- automatic cleanup with a configurable ordinary-recording retention window (8 hours by default), storage limit and reserved free-space threshold.
 
 Phone transfer is not part of this alpha. The phone page remains disabled while a reliable transport method for this vehicle environment is investigated.
+
+The required baseline, endurance and OEM coexistence evidence is tracked in [`VEHICLE_VALIDATION.md`](VEHICLE_VALIDATION.md).
 
 ## How it works
 
@@ -37,8 +40,13 @@ AVM Recorder:
 
 1. requests that single composite stream through standard Android Camera2 APIs;
 2. identifies and maps the four image regions into a 2×2 display;
-3. records the composite stream through Android media APIs; and
-4. applies view layout, zoom and optional lens correction only at the display layer.
+3. in `Front only`, crops the user-confirmed raw front lane in memory through a service-owned `SurfaceTexture` and EGL/OpenGL ES, then encodes only that view with a capability-checked H.264 surface encoder;
+4. in `360°`, records the verified composite stream directly; and
+5. applies preview/playback layout, zoom and optional lens correction only at the display layer.
+
+Recording is fail-closed. A first run, OTA/source fingerprint change, ambiguous source, missing parked live visual calibration, a preview that cannot render the exact selected source geometry, or an unavailable validated H.264 profile blocks recording instead of guessing, changing quality, or silently recording the full composite. Recording starts only after the user taps Start; app launch and process/service restart never auto-start capture. The recording service owns every required camera and encoder surface, so an activity preview is optional and may be destroyed without being part of the recording path.
+
+Front-only is an implemented engineering path, not yet a vehicle-validated stability claim. Because the observed source is still the composite stream, the GPU crop may reduce encoder load and file writes without reducing upstream camera, ISP, memory-bandwidth, thermal or other shared-resource cost.
 
 The app does **not**:
 
@@ -200,17 +208,21 @@ The tested App Lab environment does not currently allow AVM Recorder to write re
 
 Recordings are therefore written to the application's internal storage.
 
-Observed recording profile:
+Observed legacy 360 recording profile:
 
 - approximately `200 MB/min`;
 - approximately `3–4 MB/s` sustained file writes; and
 - approximately `28 Mbps` encoded video bitrate at `1280×5140`.
+
+Automatic cleanup keeps ordinary recordings for up to the selected retention window (`8 hours` by default). The storage limit and reserved free-space threshold remain hard constraints, so the actual history can be shorter. Protected, upload-pinned, playback-pinned, analysis-in-flight, current, partial, unknown and sidecar-less files are not eligible for retention or capacity cleanup.
 
 Automatic cleanup limits the amount of storage space retained by the application, but it does **not** eliminate cumulative writes to the underlying flash storage.
 
 Deleting an old recording and replacing it with a new recording may keep used storage approximately constant while still generating additional writes to the underlying NAND/UFS/eMMC storage.
 
 For example, at approximately `200 MB/min`, one hour of recording represents roughly `12 GB` of host-level video data written before accounting for filesystem or flash write amplification.
+
+The initial front-only profile is requested at `1280×1280`, 30 fps and `8 Mbps` only when the runtime encoder reports exact support. Its theoretical video payload is about `3.6 GB/hour` before container overhead. This is a provisional engineering target, not a measured result on a compatible head unit; actual codec parameters and produced-file metadata are recorded in each sidecar and still require independent playback and vehicle testing.
 
 The following are not yet known for the tested head unit:
 

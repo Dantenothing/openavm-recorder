@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dante.zeekrcapabilitylab.product.ProductHomeCameraPolicy
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
+import com.dante.zeekrcapabilitylab.product.RecorderConfigResolution
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
@@ -60,8 +61,12 @@ import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommandPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
+import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
+import com.dante.zeekrcapabilitylab.service.recorder.SegmentNaming
+import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import com.dante.zeekrcapabilitylab.util.Utils
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,8 +77,8 @@ private const val DEFAULT_ESTIMATED_BITRATE_BPS = 28_000_000L
 private const val FOUR_GRID_ASPECT_RATIO = 1f
 
 /**
- * Recorder config is computed only for an explicit user start or the persisted
- * opt-in auto-start setting. It is never computed directly during composition.
+ * Recorder config is computed only for an explicit user start. It is never
+ * computed directly during composition and process recreation never restarts capture.
  */
 private sealed interface RecordConfigState {
     data object Idle : RecordConfigState
@@ -82,13 +87,19 @@ private sealed interface RecordConfigState {
     data class Failed(val reason: String) : RecordConfigState
 }
 
-private data class DiskStats(val freeBytes: Long)
+private data class DiskStats(
+    val freeBytes: Long,
+    val artifactUsageBytes: Long = 0L,
+    val protectedBytes: Long = 0L,
+    val measuredBitrateBps: Long? = null,
+)
 
 @Composable
 fun RecordScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val libraryRevision by RecorderLibrary.revision.collectAsState()
     val languageMode by AppLanguage.mode.collectAsState()
     val settings = remember(languageMode) { SettingsStore.get(context) }
     val previewController = remember { SafeManualPreviewController(context.applicationContext) }
@@ -117,7 +128,6 @@ fun RecordScreen() {
     var configState by remember { mutableStateOf<RecordConfigState>(RecordConfigState.Idle) }
     var previewEnabled by remember { mutableStateOf(false) }
     var startupPermissionPrompted by rememberSaveable { mutableStateOf(false) }
-    var autoStartAttempted by rememberSaveable { mutableStateOf(false) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -130,8 +140,8 @@ fun RecordScreen() {
         notificationsGranted = granted
     }
 
-    val recordingActive = RecorderCommandPolicy.isActive(recorderState.status)
     val serviceRunning = CameraRecordingService.isRunning()
+    val recordingActive = serviceRunning && RecorderCommandPolicy.isActive(recorderState.status)
 
     DisposableEffect(previewController) {
         onDispose { previewController.release() }
@@ -140,6 +150,7 @@ fun RecordScreen() {
     LaunchedEffect(
         cameraPermission,
         recordingActive,
+        serviceRunning,
         recorderState.previewRequested,
         recorderState.previewFallbackUsed,
     ) {
@@ -163,11 +174,30 @@ fun RecordScreen() {
     }
 
     // Directory scans and free-space probes run on IO, never on the UI thread.
-    val diskStats by produceState(initialValue = DiskStats(-1L), recordingActive) {
+    val diskStats by produceState(initialValue = DiskStats(-1L), recordingActive, libraryRevision) {
         value = withContext(Dispatchers.IO) {
             runCatching { segmentsDir.mkdirs() }
             val free = runCatching { segmentsDir.usableSpace }.getOrDefault(-1L)
-            DiskStats(free)
+            val recordingsRoot = File(context.filesDir, "recordings")
+            val usage = runCatching {
+                recordingsRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            }.getOrDefault(0L)
+            val sidecars = segmentsDir.listFiles()
+                ?.filter { SegmentNaming.isFinalMp4(it.name) }
+                ?.mapNotNull { file ->
+                    SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.let { file to it }
+                }
+                .orEmpty()
+            val protectedBytes = sidecars.filter { it.second.protected || it.second.uploadPinned }
+                .sumOf { it.first.length() }
+            val measured = sidecars
+                .filter { it.second.recordingMode == settings.recordingMode && !it.second.provisional }
+                .maxByOrNull { it.second.stoppedAtEpochMs ?: 0L }
+                ?.second
+                ?.actualTrack
+                ?.bitrateBps
+                ?.takeIf { it > 0L }
+            DiskStats(free, usage, protectedBytes, measured)
         }
     }
 
@@ -178,15 +208,23 @@ fun RecordScreen() {
     val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning)
     val canRetry = RecorderCommandPolicy.canRetry(recorderState.status, serviceRunning)
 
-    val estimatedBitrateBps = recorderState.profile?.bitrateBps
+    val estimatedBitrateBps = diskStats.measuredBitrateBps
+        ?: recorderState.profile?.bitrateBps
         ?.takeIf { it > 0 }
         ?.toLong()
         ?: readyConfig?.profile?.bitrateBps
             ?.takeIf { it > 0 }
             ?.toLong()
         ?: DEFAULT_ESTIMATED_BITRATE_BPS
-    val estimatedMinutes = if (diskStats.freeBytes > 0) {
-        diskStats.freeBytes * 8 / estimatedBitrateBps / 60
+    val quotaRemaining = (settings.storageLimitBytes - diskStats.artifactUsageBytes).coerceAtLeast(0L)
+    val reserveRemaining = if (diskStats.freeBytes >= 0L) {
+        (diskStats.freeBytes - settings.minFreeBytes).coerceAtLeast(0L)
+    } else {
+        quotaRemaining
+    }
+    val writableRemaining = minOf(quotaRemaining, reserveRemaining)
+    val estimatedMinutes = if (writableRemaining > 0) {
+        writableRemaining * 8 / estimatedBitrateBps / 60
     } else {
         null
     }
@@ -196,6 +234,8 @@ fun RecordScreen() {
         RecorderStatus.RECORDING -> Utils.t("Recording ${Utils.formatDuration(recordingElapsed)}", "录像中 ${Utils.formatDuration(recordingElapsed)}")
         RecorderStatus.FINALIZING -> Utils.t("Saving", "正在保存")
         RecorderStatus.CAMERA_UNAVAILABLE -> Utils.t("Camera in use", "摄像头占用")
+        RecorderStatus.RECOVERING -> Utils.t("Recovering camera", "正在恢复摄像头")
+        RecorderStatus.STORAGE_BLOCKED -> Utils.t("Storage blocked", "存储空间受限")
         RecorderStatus.ERROR -> Utils.t("Recording error", "录像异常")
         else -> Utils.t("Standby", "待机")
     }
@@ -203,7 +243,9 @@ fun RecordScreen() {
         RecorderStatus.RECORDING -> Color(0xFFFF6E6E)
         RecorderStatus.STARTING,
         RecorderStatus.FINALIZING,
-        RecorderStatus.CAMERA_UNAVAILABLE -> Color(0xFFFFB74D)
+        RecorderStatus.CAMERA_UNAVAILABLE,
+        RecorderStatus.RECOVERING,
+        RecorderStatus.STORAGE_BLOCKED -> Color(0xFFFFB74D)
         RecorderStatus.ERROR -> MaterialTheme.colorScheme.error
         else -> Color(0xFF66BB6A)
     }
@@ -227,26 +269,22 @@ fun RecordScreen() {
                     }
                     val outcome = withTimeoutOrNull(CONFIG_TIMEOUT_MS) {
                         withContext(Dispatchers.IO) {
-                            ProductRecorderConfigFactory.create(context)
+                            ProductRecorderConfigFactory.resolve(context)
                         }
                     }
                     configState = when {
                         outcome == null -> RecordConfigState.Failed(Utils.t("Configuration timed out. Please retry.", "配置计算超时，请重试"))
-                        outcome.validate().isEmpty() -> RecordConfigState.Ready(outcome)
-                        else -> RecordConfigState.Failed(
-                            Utils.t("No valid recording configuration: ", "无可用的录制配置：") +
-                                (outcome.validate().firstOrNull() ?: "invalid"),
+                        outcome is RecorderConfigResolution.Ready -> RecordConfigState.Ready(outcome.config)
+                        outcome is RecorderConfigResolution.Blocked -> RecordConfigState.Failed(
+                            Utils.t("Setup required: ", "需要完成设置：") + outcome.reason,
                         )
+                        else -> RecordConfigState.Failed(Utils.t("Unknown configuration error.", "未知配置错误。"))
                     }
                     val ready = configState as? RecordConfigState.Ready
                     if (ready != null) {
-                        val recorderPreviewSurface = if (settings.previewWhileRecordingEnabled) {
-                            previewController.acquireRecorderPreviewSurface()
-                        } else {
-                            null
-                        }
-                        previewEnabled = recorderPreviewSurface != null
-                        CameraRecordingService.start(context, ready.config, recorderPreviewSurface)
+                        previewController.clearRecorderPreviewHandoff()
+                        previewEnabled = false
+                        CameraRecordingService.start(context, ready.config, previewSurface = null)
                     } else if (cameraPermission) {
                         previewEnabled = true
                         previewController.startPreview()
@@ -256,18 +294,10 @@ fun RecordScreen() {
         }
     }
 
-    LaunchedEffect(cameraPermission, canStart, autoStartAttempted) {
+    LaunchedEffect(cameraPermission) {
         if (!cameraPermission && !startupPermissionPrompted) {
             startupPermissionPrompted = true
             cameraLauncher.launch(Manifest.permission.CAMERA)
-        } else if (
-            cameraPermission &&
-            canStart &&
-            !autoStartAttempted &&
-            settings.autoStartRecordingEnabled
-        ) {
-            autoStartAttempted = true
-            startRecording(ProductHomeCameraPolicy.TRIGGER_AUTO_START_RECORDING)
         }
     }
 
@@ -319,6 +349,12 @@ fun RecordScreen() {
                 estimatedMinutes = estimatedMinutes,
                 segmentSeconds = settings.segmentSeconds,
                 autoCleanupEnabled = settings.autoCleanupEnabled,
+                retentionHours = settings.retentionHours,
+                recordingMode = settings.recordingMode,
+                sourceVerified = settings.sourceFingerprint != null,
+                calibrationValid = settings.recordingMode != com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY ||
+                    settings.frontCalibration != null,
+                protectedSpace = formatBytes(diskStats.protectedBytes),
             )
             Spacer(Modifier.height(14.dp))
 
@@ -400,6 +436,8 @@ fun RecordScreen() {
             }
 
             if (recorderState.status == RecorderStatus.CAMERA_UNAVAILABLE ||
+                recorderState.status == RecorderStatus.RECOVERING ||
+                recorderState.status == RecorderStatus.STORAGE_BLOCKED ||
                 recorderState.status == RecorderStatus.ERROR
             ) {
                 Card(
@@ -414,8 +452,10 @@ fun RecordScreen() {
                         Column(Modifier.weight(1f)) {
                             Text(
                                 when (recorderState.status) {
-                                    RecorderStatus.CAMERA_UNAVAILABLE ->
+                                    RecorderStatus.CAMERA_UNAVAILABLE,
+                                    RecorderStatus.RECOVERING ->
                                         Utils.t("Camera unavailable (OEM 360/reverse camera has priority)", "摄像头不可用（原厂 360/倒车已优先接管）")
+                                    RecorderStatus.STORAGE_BLOCKED -> Utils.t("Storage blocked", "存储空间受限")
                                     else -> Utils.t("Recording error", "录像异常")
                                 },
                                 color = Color(0xFFF9A825),
@@ -528,6 +568,11 @@ private fun ProductStatusCard(
     estimatedMinutes: Long?,
     segmentSeconds: Int,
     autoCleanupEnabled: Boolean,
+    retentionHours: Int,
+    recordingMode: com.dante.zeekrcapabilitylab.service.recorder.RecordingMode?,
+    sourceVerified: Boolean,
+    calibrationValid: Boolean,
+    protectedSpace: String,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -538,9 +583,24 @@ private fun ProductStatusCard(
             )
             Spacer(Modifier.height(10.dp))
             ProductInfoRow(Utils.t("Phone transfer", "手机传输"), Utils.t("In development", "开发中"))
+            ProductInfoRow(
+                Utils.t("Recording mode", "录像模式"),
+                when (recordingMode) {
+                    com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY -> Utils.t("Front only", "仅前方")
+                    com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.SURROUND_360 -> "360°"
+                    null -> Utils.t("Confirmation required", "需要确认")
+                },
+            )
+            ProductInfoRow(Utils.t("Source", "来源"), if (sourceVerified) Utils.t("Verified", "已确认") else Utils.t("Setup required", "需要设置"))
+            ProductInfoRow(Utils.t("Front calibration", "前方校准"), if (calibrationValid) Utils.t("Ready", "就绪") else Utils.t("Required", "需要校准"))
             ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
             ProductInfoRow(Utils.t("Estimated recording", "预计可录"), formatEstimatedMinutes(estimatedMinutes))
+            ProductInfoRow(Utils.t("Protected usage", "受保护占用"), protectedSpace)
             ProductInfoRow(Utils.t("Segment length", "分段时长"), formatSegmentDuration(segmentSeconds))
+            ProductInfoRow(
+                Utils.t("Keep ordinary recordings", "普通录像保留时长"),
+                Utils.t("Up to $retentionHours hours", "最多 $retentionHours 小时"),
+            )
             ProductInfoRow(Utils.t("Automatic cleanup", "自动清理"), if (autoCleanupEnabled) Utils.t("On", "已开启") else Utils.t("Off", "已关闭"))
         }
     }
@@ -675,8 +735,10 @@ private fun StatusPill(text: String, color: Color) {
 }
 
 private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> String.format("%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
-    bytes >= 1024L * 1024L -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L * 1024L * 1024L ->
+        String.format(Locale.getDefault(), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L ->
+        String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
     else -> "$bytes B"
 }
 

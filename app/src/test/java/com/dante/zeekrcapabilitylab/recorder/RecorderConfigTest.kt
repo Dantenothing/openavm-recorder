@@ -18,7 +18,15 @@ class RecorderConfigTest {
         segmentSeconds: Int = 60,
         storageLimitBytes: Long = 15L * gb,
         minFreeBytes: Long = 20L * gb,
-    ) = RecorderConfig(cameraId, profile, segmentSeconds, storageLimitBytes, minFreeBytes)
+    ) = RecorderConfig(
+        cameraId = cameraId,
+        profile = profile,
+        segmentSeconds = segmentSeconds,
+        storageLimitBytes = storageLimitBytes,
+        minFreeBytes = minFreeBytes,
+        sourceFingerprint = "verified-fingerprint",
+        sourceProfile = profile,
+    )
 
     @Test
     fun validConfigPassesValidation() {
@@ -67,6 +75,11 @@ class RecorderConfigTest {
                 .validate()
                 .isEmpty(),
         )
+    }
+
+    @Test
+    fun missingSourceIdentityIsRejected() {
+        assertFalse(config().copy(sourceFingerprint = "").validate().isEmpty())
     }
 
     @Test

@@ -18,6 +18,8 @@ import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.product.CompositePreviewSizePolicy
+import com.dante.zeekrcapabilitylab.product.CameraRuntime
+import com.dante.zeekrcapabilitylab.product.SettingsStore
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +61,8 @@ class SafeManualPreviewController(context: Context) {
     private var textureView: TextureView? = null
     @Volatile
     private var recorderSurfaceHandedOff = false
+    @Volatile
+    private var requiredPreviewSize: Size? = null
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
 
@@ -124,8 +128,9 @@ class SafeManualPreviewController(context: Context) {
         if (requested && view.isAvailable) openIfReady()
     }
 
-    fun startPreview() {
+    fun startPreview(requiredSourceSize: ProfileSize? = null) {
         if (released || requested) return
+        requiredPreviewSize = requiredSourceSize?.let { Size(it.width, it.height) }
         requested = true
         _state.value = ManualPreviewState(message = "正在安全打开预览…")
         openIfReady()
@@ -133,6 +138,7 @@ class SafeManualPreviewController(context: Context) {
 
     fun stopPreview() {
         requested = false
+        requiredPreviewSize = null
         val token = generation.incrementAndGet()
         val handler = cameraHandler
         if (handler == null) {
@@ -243,10 +249,12 @@ class SafeManualPreviewController(context: Context) {
             return
         }
         try {
-            val ids = manager.cameraIdList.toList()
-            val cameraId = ids.firstOrNull { it == "2" } ?: ids.firstOrNull()
+            val settings = SettingsStore.get(appContext)
+            val cameraId = CameraRuntime.sourceCatalog(appContext).singleOrNull {
+                it.cameraId == settings.selectedCameraId && it.fingerprint == settings.sourceFingerprint
+            }?.cameraId
             if (cameraId == null) {
-                fail("没有可用摄像头")
+                fail("请先在设置中确认摄像头来源")
                 return
             }
             val declaredSizes = declaredSurfaceTextureSizes(manager, cameraId)
@@ -257,7 +265,12 @@ class SafeManualPreviewController(context: Context) {
                 return
             }
             val declaredHighResolution = if (attemptHighResolution) {
-                chooseDeclaredHighResolution(declaredSizes)
+                val required = requiredPreviewSize
+                if (required != null) {
+                    declaredSizes.singleOrNull { it.width == required.width && it.height == required.height }
+                } else {
+                    chooseDeclaredHighResolution(declaredSizes)
+                }
             } else {
                 null
             }
@@ -296,7 +309,7 @@ class SafeManualPreviewController(context: Context) {
                     eventName = "PRODUCT_MANUAL_PREVIEW_HIGH_RES_SKIPPED",
                     payload = mapOf(
                         "cameraId" to cameraId,
-                        "reason" to "1280x5140 not declared for SurfaceTexture",
+                        "reason" to "required composite size not declared for SurfaceTexture",
                         "surfaceTextureSizes" to declaredSizes.joinToString(",") {
                             "${it.width}x${it.height}"
                         },

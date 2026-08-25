@@ -50,6 +50,38 @@ class FourLaneTextureContainer @JvmOverloads constructor(
 ) : ViewGroup(context, attrs) {
     val textureView = TextureView(context)
 
+    var directSingleView: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            requestLayout()
+            invalidate()
+        }
+
+    /** Verified composite geometry used by calibration and playback crop math. */
+    var sourceWidth: Int = COMPOSITE_WIDTH
+        set(value) {
+            if (value <= 0 || field == value) return
+            field = value
+            invalidate()
+        }
+
+    var sourceHeight: Int = COMPOSITE_HEIGHT
+        set(value) {
+            if (value <= 0 || field == value) return
+            field = value
+            invalidate()
+        }
+
+    /** Display-only preview of the raw rotation that front-only encoding will apply. */
+    var previewRotationDegrees: Int = 0
+        set(value) {
+            val normalized = ((value % 360) + 360) % 360
+            if (normalized !in setOf(0, 90, 180, 270) || field == normalized) return
+            field = normalized
+            invalidate()
+        }
+
     var displayMode: FourLaneDisplayMode = FourLaneDisplayMode.FOUR_GRID
         set(value) {
             if (field == value) return
@@ -97,9 +129,12 @@ class FourLaneTextureContainer @JvmOverloads constructor(
 
         // The product panel is now larger, but the camera-facing child stays
         // near the successful v0.6.9 size. Only Canvas output is enlarged.
-        val rawWidth = (measuredWidth * STABLE_INPUT_SIZE_FRACTION).roundToInt()
-        val rawHeight = (rawWidth / RAW_VIEW_ASPECT_RATIO).roundToInt()
-            .coerceAtMost(measuredHeight)
+        val rawWidth = if (directSingleView) measuredWidth else {
+            (measuredWidth * STABLE_INPUT_SIZE_FRACTION).roundToInt()
+        }
+        val rawHeight = if (directSingleView) measuredHeight else {
+            (rawWidth / RAW_VIEW_ASPECT_RATIO).roundToInt().coerceAtMost(measuredHeight)
+        }
         textureView.measure(
             MeasureSpec.makeMeasureSpec(rawWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(rawHeight, MeasureSpec.EXACTLY),
@@ -118,7 +153,7 @@ class FourLaneTextureContainer @JvmOverloads constructor(
     }
 
     override fun dispatchDraw(canvas: Canvas) {
-        if (displayMode == FourLaneDisplayMode.RAW_STRIP || !canvas.isHardwareAccelerated) {
+        if (directSingleView || displayMode == FourLaneDisplayMode.RAW_STRIP || !canvas.isHardwareAccelerated) {
             super.dispatchDraw(canvas)
             return
         }
@@ -126,8 +161,8 @@ class FourLaneTextureContainer @JvmOverloads constructor(
         val lane = displayMode.singleLane
         val draws = if (lane == null) {
             FourLaneCanvasLayout.plan(
-                videoWidth = COMPOSITE_WIDTH,
-                videoHeight = COMPOSITE_HEIGHT,
+                videoWidth = sourceWidth,
+                videoHeight = sourceHeight,
                 contentLeft = textureView.left.toFloat(),
                 contentTop = textureView.top.toFloat(),
                 contentWidth = textureView.width.toFloat(),
@@ -138,8 +173,8 @@ class FourLaneTextureContainer @JvmOverloads constructor(
         } else {
             listOf(
                 FourLaneCanvasLayout.planSingle(
-                    videoWidth = COMPOSITE_WIDTH,
-                    videoHeight = COMPOSITE_HEIGHT,
+                    videoWidth = sourceWidth,
+                    videoHeight = sourceHeight,
                     contentLeft = textureView.left.toFloat(),
                     contentTop = textureView.top.toFloat(),
                     contentWidth = textureView.width.toFloat(),
@@ -151,11 +186,20 @@ class FourLaneTextureContainer @JvmOverloads constructor(
             )
         }
         draws.forEach { draw ->
+            val saveCount = canvas.save()
+            if (displayMode.singleLane != null && previewRotationDegrees != 0) {
+                canvas.rotate(
+                    previewRotationDegrees.toFloat(),
+                    draw.destination.left + draw.destination.width / 2f,
+                    draw.destination.top + draw.destination.height / 2f,
+                )
+            }
             if (lensMode == FourLaneLensMode.STANDARD) {
                 drawCorrectedLane(canvas, draw)
             } else {
                 drawOriginalLane(canvas, draw)
             }
+            canvas.restoreToCount(saveCount)
         }
     }
 

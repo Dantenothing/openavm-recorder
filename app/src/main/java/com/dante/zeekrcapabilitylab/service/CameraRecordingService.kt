@@ -14,6 +14,7 @@ import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommands
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderNotification
+import com.dante.zeekrcapabilitylab.service.recorder.RecorderHealthStore
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderSession
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderState
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
@@ -123,6 +124,7 @@ class CameraRecordingService : Service() {
 
     private fun publishState(s: RecorderState) {
         _state.value = s
+        RecorderHealthStore.save(this, s)
         if (foreground) refreshNotification()
     }
 
@@ -140,7 +142,6 @@ class CameraRecordingService : Service() {
     override fun onDestroy() {
         session.release()
         instance = null
-        _state.value = RecorderState()
         super.onDestroy()
     }
 
@@ -193,6 +194,11 @@ class CameraRecordingService : Service() {
         }
 
         fun isRunning(): Boolean = instance != null
+
+        /** Restores evidence only; this deliberately does not start the service or camera. */
+        fun restoreTerminalState(context: Context) {
+            if (instance == null) _state.value = RecorderHealthStore.load(context)
+        }
 
         /**
          * Command delivery consistent with the notification's Stop action: send an

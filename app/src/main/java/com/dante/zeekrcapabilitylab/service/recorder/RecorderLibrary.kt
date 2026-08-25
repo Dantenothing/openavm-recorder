@@ -1,6 +1,10 @@
 package com.dante.zeekrcapabilitylab.service.recorder
 
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Pure selection of app-owned finalized segments for the UI library.
@@ -10,6 +14,13 @@ import java.io.File
  * quarantined files, failed segments, and unknown files are never listed/queued.
  */
 object RecorderLibrary {
+    private val revisionCounter = AtomicLong(0)
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
+    fun notifyChanged() {
+        _revision.value = revisionCounter.incrementAndGet()
+    }
 
     const val DELETE_NOT_MANAGED = "NOT_MANAGED"
     const val DELETE_BOOKMARKED = "BOOKMARKED"
@@ -87,42 +98,38 @@ object RecorderLibrary {
     }
 
     /** Explicit user bookmark: sets protected=true on a managed segment. */
-    fun bookmark(file: File): Boolean {
-        if (!isManaged(file)) return false
+    fun bookmark(file: File): Boolean = synchronized(RecorderStorageLock.lock) {
+        if (!isManaged(file)) return@synchronized false
         val sidecarFile = SegmentSidecarIO.sidecarFileFor(file)
-        val sidecar = SegmentSidecarIO.read(sidecarFile) ?: return false
-        if (sidecar.protected) return true
-        synchronized(RecorderStorageLock.lock) {
-            return try {
-                SegmentSidecarIO.writeAtomic(file, sidecar.copy(protected = true))
-                true
-            } catch (t: Throwable) {
-                false
-            }
+        val sidecar = SegmentSidecarIO.read(sidecarFile) ?: return@synchronized false
+        if (sidecar.protected) return@synchronized true
+        try {
+            SegmentSidecarIO.writeAtomic(file, sidecar.copy(protected = true))
+            true
+        } catch (t: Throwable) {
+            false
         }
     }
 
     /** Explicit user un-bookmark: clears protected on a managed segment. */
-    fun unbookmark(file: File): Boolean {
-        if (!isManaged(file)) return false
+    fun unbookmark(file: File): Boolean = synchronized(RecorderStorageLock.lock) {
+        if (!isManaged(file)) return@synchronized false
         val sidecarFile = SegmentSidecarIO.sidecarFileFor(file)
-        val sidecar = SegmentSidecarIO.read(sidecarFile) ?: return false
-        if (!sidecar.protected) return true
-        synchronized(RecorderStorageLock.lock) {
-            return try {
-                SegmentSidecarIO.writeAtomic(
-                    file,
-                    sidecar.copy(
-                        protected = false,
-                        eventId = null,
-                        eventRequestedAtEpochMs = null,
-                        eventRole = null,
-                    ),
-                )
-                true
-            } catch (t: Throwable) {
-                false
-            }
+        val sidecar = SegmentSidecarIO.read(sidecarFile) ?: return@synchronized false
+        if (!sidecar.protected) return@synchronized true
+        try {
+            SegmentSidecarIO.writeAtomic(
+                file,
+                sidecar.copy(
+                    protected = false,
+                    eventId = null,
+                    eventRequestedAtEpochMs = null,
+                    eventRole = null,
+                ),
+            )
+            true
+        } catch (t: Throwable) {
+            false
         }
     }
 
@@ -178,7 +185,7 @@ object RecorderLibrary {
         DeleteResult(
             deleted = true,
             reason = if (sidecarDeleted) null else DELETE_SIDECAR_FAILED,
-        )
+        ).also { notifyChanged() }
     }
 }
 

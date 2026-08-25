@@ -29,6 +29,7 @@ object EventLogger {
 
     fun init(context: Context) {
         appContext = context.applicationContext
+        synchronized(fileLock) { pruneEventFiles() }
     }
 
     fun startSessionFile(sessionId: String) {
@@ -121,7 +122,14 @@ object EventLogger {
         }
         synchronized(fileLock) {
             try {
+                val rotatedNow = file.length() >= MAX_ACTIVE_FILE_BYTES
+                if (rotatedNow) {
+                    val rotated = File(file.parentFile, file.nameWithoutExtension + ".previous.jsonl")
+                    rotated.delete()
+                    file.renameTo(rotated)
+                }
                 file.appendText(json.encodeToString(ProbeEvent.serializer(), event) + "\n")
+                if (rotatedNow || event.sequence % 100L == 0L) pruneEventFiles()
             } catch (t: Throwable) {
                 // Storage failures must never crash the probe.
             }
@@ -133,6 +141,20 @@ object EventLogger {
     fun debugContextAvailable(): Boolean = ::appContext.isInitialized
 
     private const val PRODUCT_SESSION_ID = "app"
+    private const val MAX_ACTIVE_FILE_BYTES = 5L * 1024L * 1024L
+    private const val MAX_TOTAL_EVENT_BYTES = 25L * 1024L * 1024L
+
+    private fun pruneEventFiles() {
+        val files = File(appContext.filesDir, "events").listFiles()
+            ?.filter { it.isFile }
+            ?.sortedByDescending { it.lastModified() }
+            .orEmpty()
+        var retained = 0L
+        files.forEach { file ->
+            retained += file.length()
+            if (retained > MAX_TOTAL_EVENT_BYTES && file != activeFile) file.delete()
+        }
+    }
 }
 
 object LogUtil {

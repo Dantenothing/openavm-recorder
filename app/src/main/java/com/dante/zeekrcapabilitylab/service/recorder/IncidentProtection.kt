@@ -9,6 +9,30 @@ data class IncidentTag(
     val role: String,
 )
 
+data class SegmentTimeRange(
+    val id: String,
+    val startedAtEpochMs: Long,
+    val stoppedAtEpochMs: Long,
+)
+
+object IncidentWindowPolicy {
+    fun select(
+        segments: List<SegmentTimeRange>,
+        requestedAtEpochMs: Long,
+        beforeMs: Long,
+        afterMs: Long,
+    ): List<String> {
+        if (requestedAtEpochMs <= 0L || beforeMs < 0L || afterMs < 0L) return emptyList()
+        val windowStart = requestedAtEpochMs - beforeMs
+        val windowEnd = requestedAtEpochMs + afterMs
+        return segments
+            .filter { it.startedAtEpochMs <= it.stoppedAtEpochMs }
+            .filter { it.stoppedAtEpochMs >= windowStart && it.startedAtEpochMs <= windowEnd }
+            .sortedWith(compareBy<SegmentTimeRange> { it.startedAtEpochMs }.thenBy { it.id })
+            .map { it.id }
+    }
+}
+
 /**
  * Small persistent hand-off for the one segment that must be protected after
  * the user presses Save Clip. Persistence matters when the recorder service is
@@ -30,13 +54,12 @@ class IncidentProtectionStore(context: Context) {
     }
 
     @Synchronized
-    fun saveNext(eventId: String, requestedAtEpochMs: Long) {
+    fun saveNext(eventId: String, requestedAtEpochMs: Long): Boolean =
         preferences.edit()
             .putString(KEY_EVENT_ID, eventId)
             .putLong(KEY_REQUESTED_AT, requestedAtEpochMs)
             .putLong(KEY_EXPIRES_AT, requestedAtEpochMs + PENDING_EXPIRY_MS)
-            .apply()
-    }
+            .commit()
 
     @Synchronized
     fun consume(eventId: String) {

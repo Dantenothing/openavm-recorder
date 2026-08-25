@@ -54,6 +54,7 @@ logcat*.txt
 
 # Private research projects and internal handoff material. These stay in the
 # local workspace but are not part of the AVM Recorder public source tree.
+/AGENTS.md
 /ZeekrBridgeCompanion/
 /ZeekrProbes/
 /docs/

@@ -52,6 +52,8 @@ If AVM Recorder appears to affect a factory camera, reverse-view function, infot
 
 Do not rely on AVM Recorder as a safety system or as the only record of a trip or incident.
 
+Front-only recording does not establish isolation from factory camera, AVM, ADAS, ISP, memory, GPU, encoder, thermal or storage resources. If source identity or parked calibration is no longer an exact match, do not bypass the recording block; reconfirm only while parked. Stop testing immediately if the GPU crop path, encoder, camera recovery or sustained writes coincide with degraded factory-camera behaviour, vehicle UI responsiveness or thermal stability.
+
 ## Response expectations
 
 This is a small experimental project and does not currently provide a guaranteed response or remediation time. Safety-relevant and reproducible reports will be prioritised.

@@ -75,7 +75,7 @@ object FourLaneThumbs {
     }
 
     fun extractCover(file: File, laneSizePx: Int = 160): Bitmap? {
-        val lanes = extract(file, laneSizePx) ?: return null
+        val lanes = extract(file, laneSizePx) ?: return extractSingleCover(file, laneSizePx * 2)
         return try {
             val cover = Bitmap.createBitmap(laneSizePx * 2, laneSizePx * 2, Bitmap.Config.RGB_565)
             val canvas = Canvas(cover)
@@ -91,6 +91,35 @@ object FourLaneThumbs {
             cover
         } finally {
             lanes.forEach { runCatching { it.recycle() } }
+        }
+    }
+
+    private fun extractSingleCover(file: File, sizePx: Int): Bitmap? {
+        if (!file.isFile || sizePx <= 0) return null
+        var retriever: MediaMetadataRetriever? = null
+        return try {
+            retriever = MediaMetadataRetriever()
+            retriever.setDataSource(file.absolutePath)
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?: 1000L
+            val timeUs = minOf(durationMs / 2L, 2_000L).coerceAtLeast(0L) * 1000L
+            val frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                retriever.getScaledFrameAtTime(
+                    timeUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    sizePx,
+                    sizePx,
+                )
+            } else {
+                retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            } ?: return null
+            Bitmap.createScaledBitmap(frame, sizePx, sizePx, true)
+                .also { if (it !== frame) frame.recycle() }
+        } catch (_: Throwable) {
+            null
+        } finally {
+            runCatching { retriever?.release() }
         }
     }
 

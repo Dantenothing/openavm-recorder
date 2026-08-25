@@ -2,6 +2,12 @@ package com.dante.zeekrcapabilitylab.product
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
+import com.dante.zeekrcapabilitylab.service.recorder.FrontCalibration
+import com.dante.zeekrcapabilitylab.service.recorder.FrontCropPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceKind
+import com.dante.zeekrcapabilitylab.service.recorder.NormalizedCropRect
 
 /**
  * Product-level recorder and four-lane calibration settings for the V2 UI.
@@ -26,12 +32,28 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val RESERVE_20_GB = 20L * 1024L * 1024L * 1024L
         const val RESERVE_30_GB = 30L * 1024L * 1024L * 1024L
 
+        const val DEFAULT_RETENTION_HOURS = 8
+
         const val KEY_SEGMENT_SECONDS = "segment_seconds"
         const val KEY_STORAGE_LIMIT_BYTES = "storage_limit_bytes"
         const val KEY_MIN_FREE_BYTES = "min_free_bytes"
         const val KEY_AUTO_CLEANUP = "auto_cleanup"
-        const val KEY_PREVIEW_WHILE_RECORDING = "preview_while_recording_beta2"
-        const val KEY_AUTO_START_RECORDING = "auto_start_recording"
+        const val KEY_RETENTION_HOURS = "retention_hours_v3"
+        const val KEY_RECORDING_MODE = "recording_mode_v3"
+        const val KEY_MODE_CONFIRMED = "recording_mode_confirmed_v3"
+        const val KEY_SOURCE_CAMERA_ID = "recording_source_camera_id_v3"
+        const val KEY_SOURCE_FINGERPRINT = "recording_source_fingerprint_v3"
+        const val KEY_SOURCE_KIND = "recording_source_kind_v3"
+        const val KEY_FRONT_LANE = "front_lane_v3"
+        const val KEY_FRONT_ROTATION = "front_rotation_v3"
+        const val KEY_FRONT_SOURCE_WIDTH = "front_source_width_v3"
+        const val KEY_FRONT_SOURCE_HEIGHT = "front_source_height_v3"
+        const val KEY_FRONT_SOURCE_FINGERPRINT = "front_source_fingerprint_v3"
+        const val KEY_FRONT_CALIBRATION_VERSION = "front_calibration_version_v3"
+        const val KEY_FRONT_CROP_LEFT = "front_crop_left_v3"
+        const val KEY_FRONT_CROP_TOP = "front_crop_top_v3"
+        const val KEY_FRONT_CROP_RIGHT = "front_crop_right_v3"
+        const val KEY_FRONT_CROP_BOTTOM = "front_crop_bottom_v3"
         const val KEY_LANE_ORDER = "lane_order"
         const val KEY_LANE_ROTATIONS = "lane_rotations"
         const val KEY_LANE_LABELS = "lane_labels"
@@ -45,6 +67,7 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         val SEGMENT_OPTIONS = listOf(SEGMENT_1_MIN, SEGMENT_2_MIN, SEGMENT_3_MIN)
         val STORAGE_OPTIONS = listOf(STORAGE_5_GB, STORAGE_10_GB, STORAGE_15_GB, STORAGE_30_GB)
         val RESERVE_OPTIONS = listOf(RESERVE_10_GB, RESERVE_20_GB, RESERVE_30_GB)
+        val RETENTION_HOURS_OPTIONS = listOf(1, 2, 4, 8, 12, 24)
 
         private val DEFAULT_LABELS_ZH = listOf("视角1", "视角2", "视角3", "视角4")
         private val DEFAULT_LABELS_EN = listOf("View 1", "View 2", "View 3", "View 4")
@@ -63,6 +86,9 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         }
 
         fun get(context: Context): SettingsStore = init(context)
+
+        fun sanitizeRetentionHours(value: Int): Int =
+            value.takeIf { it in RETENTION_HOURS_OPTIONS } ?: DEFAULT_RETENTION_HOURS
     }
 
     val segmentSeconds: Int
@@ -80,11 +106,51 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
     val autoCleanupEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_CLEANUP, true)
 
-    val previewWhileRecordingEnabled: Boolean
-        get() = prefs.getBoolean(KEY_PREVIEW_WHILE_RECORDING, true)
+    val retentionHours: Int
+        get() = prefs.getInt(KEY_RETENTION_HOURS, DEFAULT_RETENTION_HOURS)
+            .let(::sanitizeRetentionHours)
 
-    val autoStartRecordingEnabled: Boolean
-        get() = prefs.getBoolean(KEY_AUTO_START_RECORDING, false)
+    val recordingMode: RecordingMode?
+        get() {
+            if (!prefs.getBoolean(KEY_MODE_CONFIRMED, false)) return null
+            return prefs.getString(KEY_RECORDING_MODE, null)
+                ?.let { runCatching { RecordingMode.valueOf(it) }.getOrNull() }
+        }
+
+    val selectedCameraId: String?
+        get() = prefs.getString(KEY_SOURCE_CAMERA_ID, null)?.takeIf { it.isNotBlank() }
+
+    val sourceFingerprint: String?
+        get() = prefs.getString(KEY_SOURCE_FINGERPRINT, null)?.takeIf { it.isNotBlank() }
+
+    val sourceKind: RecordingSourceKind?
+        get() = prefs.getString(KEY_SOURCE_KIND, null)
+            ?.let { runCatching { RecordingSourceKind.valueOf(it) }.getOrNull() }
+
+    val frontCalibration: FrontCalibration?
+        get() {
+            val fingerprint = prefs.getString(KEY_FRONT_SOURCE_FINGERPRINT, null) ?: return null
+            val width = prefs.getInt(KEY_FRONT_SOURCE_WIDTH, 0)
+            val height = prefs.getInt(KEY_FRONT_SOURCE_HEIGHT, 0)
+            val lane = prefs.getInt(KEY_FRONT_LANE, 0)
+            val rotation = prefs.getInt(KEY_FRONT_ROTATION, -1)
+            val version = prefs.getInt(KEY_FRONT_CALIBRATION_VERSION, 0)
+            val crop = NormalizedCropRect(
+                left = prefs.getFloat(KEY_FRONT_CROP_LEFT, Float.NaN),
+                top = prefs.getFloat(KEY_FRONT_CROP_TOP, Float.NaN),
+                right = prefs.getFloat(KEY_FRONT_CROP_RIGHT, Float.NaN),
+                bottom = prefs.getFloat(KEY_FRONT_CROP_BOTTOM, Float.NaN),
+            ).takeIf { it.validate().isEmpty() } ?: return null
+            return FrontCalibration(
+                sourceFingerprint = fingerprint,
+                sourceWidth = width,
+                sourceHeight = height,
+                frontLane = lane,
+                crop = crop,
+                rotationDegrees = rotation,
+                calibrationVersion = version,
+            ).takeIf { it.validate().isEmpty() }
+        }
 
     /** Display order: slot i shows source lane [laneOrder[i]] (1-based). */
     val laneOrder: List<Int>
@@ -167,12 +233,84 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         prefs.edit().putBoolean(KEY_AUTO_CLEANUP, value).apply()
     }
 
-    fun setPreviewWhileRecordingEnabled(value: Boolean) {
-        prefs.edit().putBoolean(KEY_PREVIEW_WHILE_RECORDING, value).apply()
+    fun setRetentionHours(value: Int) {
+        if (value in RETENTION_HOURS_OPTIONS) {
+            prefs.edit().putInt(KEY_RETENTION_HOURS, value).apply()
+        }
     }
 
-    fun setAutoStartRecordingEnabled(value: Boolean) {
-        prefs.edit().putBoolean(KEY_AUTO_START_RECORDING, value).apply()
+    fun setRecordingMode(value: RecordingMode) {
+        if (recordingMode != value) clearRecordingSource()
+        prefs.edit()
+            .putString(KEY_RECORDING_MODE, value.name)
+            .putBoolean(KEY_MODE_CONFIRMED, true)
+            .apply()
+    }
+
+    fun clearRecordingSource() {
+        prefs.edit()
+            .remove(KEY_SOURCE_CAMERA_ID)
+            .remove(KEY_SOURCE_FINGERPRINT)
+            .remove(KEY_SOURCE_KIND)
+            .apply()
+        clearFrontCalibration()
+    }
+
+    fun confirmSource(cameraId: String, fingerprint: String, sourceKind: RecordingSourceKind) {
+        if (cameraId.isBlank() || fingerprint.isBlank()) return
+        val changed = selectedCameraId != cameraId || sourceFingerprint != fingerprint || this.sourceKind != sourceKind
+        prefs.edit()
+            .putString(KEY_SOURCE_CAMERA_ID, cameraId)
+            .putString(KEY_SOURCE_FINGERPRINT, fingerprint)
+            .putString(KEY_SOURCE_KIND, sourceKind.name)
+            .apply()
+        if (changed) clearFrontCalibration()
+    }
+
+    fun saveFrontCalibration(
+        sourceSize: ProfileSize,
+        lane: Int,
+        rotationDegrees: Int,
+        visuallyConfirmed: Boolean,
+        expectedSourceFingerprint: String,
+    ): Boolean {
+        if (!visuallyConfirmed) return false
+        val fingerprint = sourceFingerprint ?: return false
+        if (fingerprint != expectedSourceFingerprint) return false
+        val calibration = FrontCropPolicy.calibration(
+            fingerprint = fingerprint,
+            size = sourceSize,
+            lane = lane,
+            rotationDegrees = rotationDegrees,
+        ) ?: return false
+        prefs.edit()
+            .putString(KEY_FRONT_SOURCE_FINGERPRINT, calibration.sourceFingerprint)
+            .putInt(KEY_FRONT_SOURCE_WIDTH, calibration.sourceWidth)
+            .putInt(KEY_FRONT_SOURCE_HEIGHT, calibration.sourceHeight)
+            .putInt(KEY_FRONT_LANE, calibration.frontLane)
+            .putInt(KEY_FRONT_ROTATION, calibration.rotationDegrees)
+            .putInt(KEY_FRONT_CALIBRATION_VERSION, calibration.calibrationVersion)
+            .putFloat(KEY_FRONT_CROP_LEFT, calibration.crop.left)
+            .putFloat(KEY_FRONT_CROP_TOP, calibration.crop.top)
+            .putFloat(KEY_FRONT_CROP_RIGHT, calibration.crop.right)
+            .putFloat(KEY_FRONT_CROP_BOTTOM, calibration.crop.bottom)
+            .apply()
+        return true
+    }
+
+    fun clearFrontCalibration() {
+        prefs.edit()
+            .remove(KEY_FRONT_SOURCE_FINGERPRINT)
+            .remove(KEY_FRONT_SOURCE_WIDTH)
+            .remove(KEY_FRONT_SOURCE_HEIGHT)
+            .remove(KEY_FRONT_LANE)
+            .remove(KEY_FRONT_ROTATION)
+            .remove(KEY_FRONT_CALIBRATION_VERSION)
+            .remove(KEY_FRONT_CROP_LEFT)
+            .remove(KEY_FRONT_CROP_TOP)
+            .remove(KEY_FRONT_CROP_RIGHT)
+            .remove(KEY_FRONT_CROP_BOTTOM)
+            .apply()
     }
 
     fun setLensMode(value: FourLaneLensMode) {
@@ -218,6 +356,7 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
             .remove(KEY_LANE_LABELS)
             .putBoolean(KEY_CALIBRATED, false)
             .apply()
+        clearFrontCalibration()
     }
 
     /** Display label for display slot 0..3. */

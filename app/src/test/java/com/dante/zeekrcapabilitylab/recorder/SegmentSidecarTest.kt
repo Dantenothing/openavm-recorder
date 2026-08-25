@@ -7,6 +7,8 @@ import com.dante.zeekrcapabilitylab.service.recorder.FrameHealthReport
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentFrameStats
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -137,6 +139,29 @@ class SegmentSidecarTest {
         assertEquals(1_700_000_000_000, decoded?.eventRequestedAtEpochMs)
         assertEquals("CURRENT", decoded?.eventRole)
         assertNull(sampleSidecar(mp4).eventId)
+    }
+
+    @Test
+    fun legacySidecarDefaultsToSurroundWithoutInventingSourceIdentity() {
+        val legacy = """
+            {
+              "schemaVersion": 3,
+              "file": "/recordings/legacy.mp4",
+              "cameraId": "2",
+              "profile": {"size":{"width":1280,"height":5140},"bitrateBps":14000000,"source":"EXPLICIT"},
+              "segmentSeconds": 60,
+              "segmentNumber": 1,
+              "processStartId": "legacy",
+              "result": "SUCCESS"
+            }
+        """.trimIndent()
+
+        val decoded = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), legacy)
+
+        assertEquals(RecordingMode.SURROUND_360, decoded.recordingMode)
+        assertEquals(RecordingSourceKind.COMPOSITE, decoded.sourceKind)
+        assertNull(decoded.sourceFingerprint)
+        assertEquals(0, decoded.pipelineVersion)
     }
 
     private fun tempMp4(): File {
