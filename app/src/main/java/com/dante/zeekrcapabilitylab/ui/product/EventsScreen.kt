@@ -51,6 +51,7 @@ import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.transfer.TransferRepository
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -60,7 +61,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun EventsScreen() {
+fun EventsScreen(onOpenPhone: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val segmentsDir = remember { File(context.filesDir, "recordings/segments").apply { mkdirs() } }
@@ -69,6 +70,7 @@ fun EventsScreen() {
     }
     val languageMode by AppLanguage.mode.collectAsState()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val phoneConnection by TransferRepository.connection.collectAsState()
 
     var segments by remember { mutableStateOf<List<EventGroups.Segment>>(emptyList()) }
     var covers by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
@@ -341,7 +343,20 @@ fun EventsScreen() {
             sourceRole = presentation?.sourceRole,
             onPrevious = previousFile?.let { previous -> { playFile = previous } },
             onNext = nextFile?.let { next -> { playFile = next } },
-            onSendToPhone = null,
+            onSendToPhone = {
+                if (!phoneConnection.connected) {
+                    playFile = null
+                    onOpenPhone()
+                    false
+                } else {
+                    val queued = TransferRepository.enqueue(file)
+                    statusText = queued.fold(
+                        onSuccess = { Utils.t("Added to phone transfer queue", "已加入手机传输队列") },
+                        onFailure = { it.message ?: Utils.t("Unable to queue transfer", "无法加入传输队列") },
+                    )
+                    queued.isSuccess
+                }
+            },
             onDelete = {
                 // Close playback first so its MediaPlayer and playback pin are
                 // released before the single confirmation dialog can delete.

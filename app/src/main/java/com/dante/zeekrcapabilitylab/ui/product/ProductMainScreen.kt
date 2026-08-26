@@ -82,7 +82,7 @@ fun ProductMainScreen() {
             modifier = Modifier.padding(padding),
         ) {
             composable("record") { RecordScreen() }
-            composable("events") { EventsScreen() }
+            composable("events") { EventsScreen(onOpenPhone = { navController.navigate("phone") }) }
             composable("phone") { PhoneScreen() }
             composable("settings") { SettingsScreen() }
         }

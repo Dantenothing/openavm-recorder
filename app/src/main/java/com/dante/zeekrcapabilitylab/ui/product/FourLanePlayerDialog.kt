@@ -99,7 +99,7 @@ fun FourLanePlayerDialog(
     sourceRole: RecordingSourceRole? = RecordingSourceRole.SURROUND,
     onPrevious: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
-    onSendToPhone: (() -> Unit)? = null,
+    onSendToPhone: (() -> Boolean)? = null,
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
@@ -339,8 +339,8 @@ fun FourLanePlayerDialog(
                         Spacer(Modifier.height(14.dp))
                         Button(
                             onClick = {
-                                onSendToPhone?.invoke()
-                                status = Utils.t("Added to phone transfer queue", "已加入手机传输队列")
+                                val queued = onSendToPhone?.invoke() == true
+                                if (queued) status = Utils.t("Added to phone transfer queue", "已加入手机传输队列")
                             },
                             enabled = onSendToPhone != null,
                             modifier = Modifier

@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "AVMRecorder"
 include(":app")
+include(":phone")
+include(":transfer-protocol")

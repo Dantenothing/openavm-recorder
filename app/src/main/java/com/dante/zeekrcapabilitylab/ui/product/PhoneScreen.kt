@@ -1,138 +1,107 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
-import android.graphics.Bitmap
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dante.zeekrcapabilitylab.diagnostic.PowerDiagnosticEvidence
-import com.dante.zeekrcapabilitylab.diagnostic.PowerDiagnosticRepository
-import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
-import kotlinx.coroutines.Dispatchers
+import com.dante.zeekrcapabilitylab.transfer.TransferRepository
+import io.github.dantenothing.avmtransfer.protocol.TransferTaskState
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-/** Temporary on-car diagnostic exit. It never opens a camera or changes recording state. */
 @Composable
 fun PhoneScreen() {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var evidence by remember { mutableStateOf<PowerDiagnosticEvidence?>(null) }
+    val connection by TransferRepository.connection.collectAsState()
+    val tasks by TransferRepository.tasks.collectAsState()
+    var host by remember(connection.endpoint?.host) { mutableStateOf(connection.endpoint?.host.orEmpty()) }
+    var code by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
 
-    fun refresh() {
-        scope.launch { evidence = withContext(Dispatchers.IO) { PowerDiagnosticRepository.collect(context) } }
-    }
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(Unit) { if (connection.endpoint != null) TransferRepository.checkConnection() }
 
     Column(
-        Modifier.fillMaxSize()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f))
-            .verticalScroll(rememberScrollState())
-            .padding(22.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("离车与预览诊断", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("请选择测试类型。锁车后，稳定离车信号或随后发生的车辆 Camera 断开都会结束 Session；解锁后不会自动恢复。")
-
-        evidence?.let { current ->
-            Card(Modifier.fillMaxWidth()) {
-                Text(
-                    current.humanText(),
-                    Modifier.padding(18.dp),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+        Text("手机传输", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(if (connection.connected) "已连接：${connection.endpoint?.phoneName}" else connection.message)
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("连接手机", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("手机和车机需连接同一热点或可信局域网。先在手机 AVM Receiver 中启动接收并生成六位配对码。")
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(host, { host = it }, label = { Text("手机 IP") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("六位配对码") }, singleLine = true, modifier = Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        busy = true
+                        scope.launch {
+                            val result = TransferRepository.pair(host, code)
+                            message = result.fold({ "配对成功" }, { it.message ?: "配对失败" })
+                            if (result.isSuccess) code = ""
+                            busy = false
+                        }
+                    }, enabled = !busy && host.isNotBlank() && code.length == 6) { Text("配对") }
+                    OutlinedButton(onClick = {
+                        busy = true
+                        scope.launch {
+                            val result = TransferRepository.discover()
+                            result.onSuccess { host = it }
+                            message = result.fold({ "已找到手机：$it" }, { "未自动找到，请输入手机 IP" })
+                            busy = false
+                        }
+                    }, enabled = !busy) { Text("自动查找") }
+                    OutlinedButton(onClick = {
+                        busy = true
+                        scope.launch { message = if (TransferRepository.checkConnection()) "连接正常" else "手机未连接"; busy = false }
+                    }, enabled = !busy && connection.endpoint != null) { Text("检查连接") }
+                }
+                if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
             }
-            val payload = current.qrPayload()
-            val qr = remember(payload) { runCatching { qrBitmap(payload) }.getOrNull() }
-            if (qr != null) {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(
-                        Modifier.fillMaxWidth().padding(14.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text("紧凑诊断二维码", fontWeight = FontWeight.SemiBold)
-                        Image(qr.asImageBitmap(), "诊断二维码", Modifier.size(330.dp))
+        }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("传输队列", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            OutlinedButton(onClick = TransferRepository::clearFinished, enabled = tasks.any { it.state in TransferRepository.TERMINAL }) { Text("清理已结束") }
+        }
+        if (tasks.isEmpty()) Text("暂无传输任务。请在录像回看中选择“发送到手机”。")
+        tasks.sortedByDescending { it.createdAt }.forEach { task ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(task.fileName, fontWeight = FontWeight.SemiBold)
+                    Text(stateLabel(task.state, task.reason), style = MaterialTheme.typography.bodySmall)
+                    if (task.totalChunks > 0 && task.state !in TransferRepository.TERMINAL) {
+                        LinearProgressIndicator(progress = { task.uploadedChunks.toFloat() / task.totalChunks }, modifier = Modifier.fillMaxWidth())
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (task.state !in TransferRepository.TERMINAL && task.state != TransferTaskState.CANCEL_PENDING) {
+                            OutlinedButton(onClick = { TransferRepository.cancel(task.id) }) { Text("取消传输") }
+                        }
+                        if (task.state == TransferTaskState.FAILED) {
+                            OutlinedButton(onClick = { TransferRepository.retry(task.id) }) { Text("重试") }
+                        }
                     }
                 }
             }
         }
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(onClick = {
-                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_NORMAL_BACKGROUND)
-                refresh()
-            }, modifier = Modifier.weight(1f)) { Text("正常后台") }
-            Button(onClick = {
-                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_OEM_CAMERA)
-                refresh()
-            }, modifier = Modifier.weight(1f)) { Text("OEM Camera") }
-            Button(onClick = {
-                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_VEHICLE_AWAY)
-                refresh()
-            }, modifier = Modifier.weight(1f)) { Text("锁车离开") }
-        }
-
-        OutlinedButton(onClick = ::refresh) { Text("刷新证据") }
-
-        Card(Modifier.fillMaxWidth()) {
-            Text(
-                "锁车测试预期：如果三项离车信号稳定，约 30 秒后停止；否则应在车辆自然切断 Camera（以往约 5 分钟）时停止。回来后应保持待机，必须再次手动 Start。",
-                Modifier.padding(18.dp),
-            )
-        }
-        Text("手机连接功能仍在开发中，本页只是 alpha9 的临时诊断入口。")
+        Text("Alpha 说明：传输采用带配对认证的明文 HTTP，只应在可信手机热点或私人局域网使用。手机或车机进入后台时服务会继续运行；网络中断后可续传。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
-private fun qrBitmap(payload: String, size: Int = 700): Bitmap {
-    val matrix = QRCodeWriter().encode(
-        payload,
-        BarcodeFormat.QR_CODE,
-        size,
-        size,
-        mapOf(
-            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
-            EncodeHintType.MARGIN to 2,
-            EncodeHintType.CHARACTER_SET to "UTF-8",
-        ),
-    )
-    val pixels = IntArray(size * size)
-    for (y in 0 until size) for (x in 0 until size) {
-        pixels[y * size + x] = if (matrix[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
-    }
-    return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
+private fun stateLabel(state: TransferTaskState, reason: String?): String = when (state) {
+    TransferTaskState.QUEUED -> "等待发送"
+    TransferTaskState.PREPARING -> "正在计算完整性校验"
+    TransferTaskState.UPLOADING -> "正在传输"
+    TransferTaskState.COMMITTING -> "手机正在校验并保存"
+    TransferTaskState.WAITING_RETRY -> "等待恢复：${reason.orEmpty()}"
+    TransferTaskState.CANCEL_PENDING -> "正在取消并清理手机临时文件"
+    TransferTaskState.COMPLETED -> "传输完成"
+    TransferTaskState.CANCELLED -> "已取消"
+    TransferTaskState.FAILED -> "失败：${reason.orEmpty()}"
 }

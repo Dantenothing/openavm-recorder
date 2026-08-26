@@ -15,6 +15,7 @@ import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.transfer.TransferRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +40,7 @@ class ZeekrApp : Application() {
 
         EventLogger.init(this)
         SettingsStore.init(this)
+        TransferRepository.init(this)
 
         CrashHandler.install(this)
 
