@@ -94,6 +94,7 @@ fun SettingsScreen() {
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var correctionTuningVisible by remember { mutableStateOf(false) }
     var versionTapCount by remember { mutableStateOf(0) }
+    var logsVisible by remember { mutableStateOf(false) }
 
     val calibrationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -509,6 +510,26 @@ fun SettingsScreen() {
         Spacer(Modifier.height(10.dp))
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
+                Text(Utils.t("Diagnostics", "诊断"), style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    Utils.t(
+                        "View recent app, camera and recording events stored on this device.",
+                        "查看保存在本机的近期应用、摄像头和录像事件。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { logsVisible = true }) {
+                    Text(Utils.t("Show logs", "查看日志"))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
                 Text(Utils.t("About & privacy", "关于与隐私"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -537,6 +558,10 @@ fun SettingsScreen() {
                 )
             }
         }
+    }
+
+    if (logsVisible) {
+        LogsDialog(onDismiss = { logsVisible = false })
     }
 }
 
