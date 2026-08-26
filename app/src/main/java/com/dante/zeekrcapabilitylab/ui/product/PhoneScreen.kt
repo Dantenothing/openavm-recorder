@@ -33,7 +33,7 @@ fun PhoneScreen() {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("连接手机", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("手机和车机需连接同一热点或可信局域网。先在手机 AVM Receiver 中启动接收并生成六位配对码。")
+                Text("手机和车机需连接同一热点或可信局域网。先在手机 OpenAVM Companion 中启动接收并生成六位配对码。")
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(host, { host = it }, label = { Text("手机 IP") }, singleLine = true, modifier = Modifier.weight(1f))
                     OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("六位配对码") }, singleLine = true, modifier = Modifier.weight(1f))
