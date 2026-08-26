@@ -7,6 +7,9 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecorderTransitionPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentGuardPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentGapPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.SidecarProtectionPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.ActivePreviewReplacementPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.LibraryPublicationPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -115,5 +118,103 @@ class RecorderLifecycleTest {
         assertTrue(SidecarProtectionPolicy.effectiveProtected(existingProtected = true, snapshotProtected = true))
         assertFalse(SidecarProtectionPolicy.effectiveProtected(existingProtected = false, snapshotProtected = false))
         assertFalse(SidecarProtectionPolicy.effectiveProtected(existingProtected = null, snapshotProtected = false))
+    }
+
+    @Test
+    fun activePreviewReplacementRequiresAHealthyRecordingPipeline() {
+        assertTrue(
+            ActivePreviewReplacementPolicy.canRebuild(
+                replacementValid = true,
+                recording = true,
+                cameraReady = true,
+                encoderReady = true,
+            ),
+        )
+        assertFalse(
+            ActivePreviewReplacementPolicy.canRebuild(
+                replacementValid = false,
+                recording = true,
+                cameraReady = true,
+                encoderReady = true,
+            ),
+        )
+        assertFalse(
+            ActivePreviewReplacementPolicy.canRebuild(
+                replacementValid = true,
+                recording = false,
+                cameraReady = true,
+                encoderReady = true,
+            ),
+        )
+    }
+
+    @Test
+    fun stalePreviewReplacementCallbacksCannotTouchANewerSegment() {
+        assertTrue(
+            ActivePreviewReplacementPolicy.ownsCallback(
+                token = 4,
+                currentToken = 4,
+                segmentGeneration = 8,
+                currentSegmentGeneration = 8,
+                recording = true,
+                encoderMatches = true,
+            ),
+        )
+        assertFalse(
+            ActivePreviewReplacementPolicy.ownsCallback(
+                token = 3,
+                currentToken = 4,
+                segmentGeneration = 8,
+                currentSegmentGeneration = 8,
+                recording = true,
+                encoderMatches = true,
+            ),
+        )
+        assertTrue(
+            ActivePreviewReplacementPolicy.shouldQueueForNextSegment(
+                status = com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus.FINALIZING,
+                stopping = false,
+                releasing = false,
+            ),
+        )
+        assertFalse(
+            ActivePreviewReplacementPolicy.shouldQueueForNextSegment(
+                status = com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus.STOPPED,
+                stopping = false,
+                releasing = false,
+            ),
+        )
+        assertFalse(
+            ActivePreviewReplacementPolicy.ownsCallback(
+                token = 4,
+                currentToken = 4,
+                segmentGeneration = 7,
+                currentSegmentGeneration = 8,
+                recording = true,
+                encoderMatches = true,
+            ),
+        )
+    }
+
+    @Test
+    fun libraryPublishesOnlyCompletedSuccessfulSidecars() {
+        assertTrue(
+            LibraryPublicationPolicy.shouldPublish(
+                result = SegmentSidecar.RESULT_SUCCESS,
+                provisional = false,
+            ),
+        )
+        assertFalse(
+            LibraryPublicationPolicy.shouldPublish(
+                result = SegmentSidecar.RESULT_SUCCESS,
+                provisional = true,
+            ),
+        )
+        assertFalse(
+            LibraryPublicationPolicy.shouldPublish(
+                result = SegmentSidecar.RESULT_FAILED,
+                provisional = false,
+            ),
+        )
     }
 }

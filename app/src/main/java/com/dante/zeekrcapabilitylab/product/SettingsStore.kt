@@ -2,6 +2,7 @@ package com.dante.zeekrcapabilitylab.product
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 
 /**
  * Product-level recorder and four-lane calibration settings for the V2 UI.
@@ -32,6 +33,11 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_AUTO_CLEANUP = "auto_cleanup"
         const val KEY_PREVIEW_WHILE_RECORDING = "preview_while_recording_beta2"
         const val KEY_AUTO_START_RECORDING = "auto_start_recording"
+        const val KEY_SURROUND_CAMERA_MAPPING = "source_mapping_surround"
+        const val KEY_CABIN_CAMERA_MAPPING = "source_mapping_cabin"
+        const val KEY_IR_CAMERA_MAPPING = "source_mapping_ir"
+        const val KEY_CAMERA_MAPPING_REVISION = "source_mapping_revision"
+        const val KEY_SOURCE_CONFLICT_WARNING_ACK = "source_conflict_warning_ack"
         const val KEY_LANE_ORDER = "lane_order"
         const val KEY_LANE_ROTATIONS = "lane_rotations"
         const val KEY_LANE_LABELS = "lane_labels"
@@ -85,6 +91,23 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     val autoStartRecordingEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_RECORDING, false)
+
+    val cameraMappingRevision: Int
+        get() = prefs.getInt(KEY_CAMERA_MAPPING_REVISION, 0).coerceAtLeast(0)
+
+    val sourceConflictWarningAcknowledged: Boolean
+        get() = prefs.getBoolean(KEY_SOURCE_CONFLICT_WARNING_ACK, false)
+
+    fun cameraMapping(role: RecordingSourceRole): String {
+        val key = when (role) {
+            RecordingSourceRole.SURROUND -> KEY_SURROUND_CAMERA_MAPPING
+            RecordingSourceRole.CABIN -> KEY_CABIN_CAMERA_MAPPING
+            RecordingSourceRole.IR -> KEY_IR_CAMERA_MAPPING
+        }
+        return prefs.getString(key, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: RecordingSourcePolicy.defaultMapping(role)
+    }
 
     /** Display order: slot i shows source lane [laneOrder[i]] (1-based). */
     val laneOrder: List<Int>
@@ -173,6 +196,24 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     fun setAutoStartRecordingEnabled(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTO_START_RECORDING, value).apply()
+    }
+
+    fun setCameraMapping(role: RecordingSourceRole, value: String) {
+        val safe = value.trim()
+        if (safe.isEmpty()) return
+        val key = when (role) {
+            RecordingSourceRole.SURROUND -> KEY_SURROUND_CAMERA_MAPPING
+            RecordingSourceRole.CABIN -> KEY_CABIN_CAMERA_MAPPING
+            RecordingSourceRole.IR -> KEY_IR_CAMERA_MAPPING
+        }
+        prefs.edit()
+            .putString(key, safe)
+            .putInt(KEY_CAMERA_MAPPING_REVISION, cameraMappingRevision + 1)
+            .apply()
+    }
+
+    fun acknowledgeSourceConflictWarning() {
+        prefs.edit().putBoolean(KEY_SOURCE_CONFLICT_WARNING_ACK, true).apply()
     }
 
     fun setLensMode(value: FourLaneLensMode) {

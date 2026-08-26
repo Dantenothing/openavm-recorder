@@ -16,12 +16,14 @@ class RecorderWakeLockPolicyTest {
             RecorderStatus.STARTING,
             RecorderStatus.RECORDING,
             RecorderStatus.FINALIZING,
+            RecorderStatus.RESUMING,
         )) {
             assertTrue("should hold for $status", RecorderWakeLockPolicy.shouldHold(status))
         }
         for (status in listOf(
             RecorderStatus.IDLE,
             RecorderStatus.STOPPED,
+            RecorderStatus.WAITING_CAMERA,
             RecorderStatus.CAMERA_UNAVAILABLE,
             RecorderStatus.ERROR,
         )) {

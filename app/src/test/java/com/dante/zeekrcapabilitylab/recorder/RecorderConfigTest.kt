@@ -4,6 +4,10 @@ import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
+import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommands
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
+import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,7 +22,17 @@ class RecorderConfigTest {
         segmentSeconds: Int = 60,
         storageLimitBytes: Long = 15L * gb,
         minFreeBytes: Long = 20L * gb,
-    ) = RecorderConfig(cameraId, profile, segmentSeconds, storageLimitBytes, minFreeBytes)
+    ) = RecorderConfig(
+        source = SessionSourceSnapshot(
+            sourceRole = RecordingSourceRole.SURROUND,
+            cameraId = cameraId,
+            profile = profile,
+            layoutKind = RecordingLayoutKind.FOUR_LANE_V1,
+        ),
+        segmentSeconds = segmentSeconds,
+        storageLimitBytes = storageLimitBytes,
+        minFreeBytes = minFreeBytes,
+    )
 
     @Test
     fun validConfigPassesValidation() {
@@ -82,5 +96,16 @@ class RecorderConfigTest {
         val declared = setOf(ProfileSize(1920, 1080), ProfileSize(1280, 5140))
         assertTrue(RecorderConfig.profileDeclared(CameraFormatProfile(ProfileSize(1280, 5140), 14_000_000), declared))
         assertTrue(CameraProfileCatalog.availableProfiles(declared).any { it.size == ProfileSize(1280, 5140) })
+    }
+
+    @Test
+    fun sourceSnapshotSurvivesForegroundServiceJsonHandoff() {
+        val expected = config()
+        val encoded = RecorderCommands.json.encodeToString(RecorderConfig.serializer(), expected)
+        val decoded = RecorderCommands.json.decodeFromString(RecorderConfig.serializer(), encoded)
+
+        assertTrue(decoded == expected)
+        assertTrue(decoded.source.sourceRole == RecordingSourceRole.SURROUND)
+        assertTrue(decoded.source.layoutKind == RecordingLayoutKind.FOUR_LANE_V1)
     }
 }

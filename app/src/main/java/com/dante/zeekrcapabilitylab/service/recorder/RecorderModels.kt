@@ -12,12 +12,14 @@ import java.io.File
  */
 @Serializable
 data class RecorderConfig(
-    val cameraId: String,
-    val profile: CameraFormatProfile,
+    val source: SessionSourceSnapshot,
     val segmentSeconds: Int,
     val storageLimitBytes: Long,
     val minFreeBytes: Long = 20L * 1024L * 1024L * 1024L,
 ) {
+    val cameraId: String get() = source.cameraId
+    val profile: CameraFormatProfile get() = source.profile
+
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
         if (cameraId.isBlank()) errors += "cameraId must not be blank"
@@ -58,6 +60,8 @@ object RecorderStatus {
     const val STARTING = "STARTING"
     const val RECORDING = "RECORDING"
     const val FINALIZING = "FINALIZING"
+    const val WAITING_CAMERA = "WAITING_CAMERA"
+    const val RESUMING = "RESUMING"
     const val STOPPED = "STOPPED"
     const val CAMERA_UNAVAILABLE = "CAMERA_UNAVAILABLE"
     const val ERROR = "ERROR"
@@ -68,6 +72,8 @@ data class RecorderState(
     val status: String = RecorderStatus.IDLE,
     val cameraId: String? = null,
     val profile: CameraFormatProfile? = null,
+    val sourceRole: RecordingSourceRole? = null,
+    val layoutKind: RecordingLayoutKind? = null,
     val segmentSeconds: Int = 60,
     val storageLimitBytes: Long = 15L * 1024L * 1024L * 1024L,
     val segmentNumber: Int = 0,
@@ -75,6 +81,8 @@ data class RecorderState(
     val segmentStartedAtEpochMs: Long? = null,
     val lastError: String? = null,
     val lastSidecarPath: String? = null,
+    /** Increments only when a completed successful segment becomes library-visible. */
+    val libraryRevision: Long = 0L,
     val message: String? = null,
     val previewRequested: Boolean = false,
     val previewActive: Boolean = false,
@@ -93,6 +101,8 @@ object RecorderCommandPolicy {
         RecorderStatus.STARTING,
         RecorderStatus.RECORDING,
         RecorderStatus.FINALIZING,
+        RecorderStatus.WAITING_CAMERA,
+        RecorderStatus.RESUMING,
         RecorderStatus.CAMERA_UNAVAILABLE,
         RecorderStatus.ERROR,
     )
@@ -105,8 +115,8 @@ object RecorderCommandPolicy {
     fun canStop(status: String, serviceRunning: Boolean): Boolean =
         serviceRunning && status != RecorderStatus.IDLE
 
-    fun canRetry(status: String, serviceRunning: Boolean): Boolean =
-        serviceRunning && status == RecorderStatus.CAMERA_UNAVAILABLE
+    /** Automatic recovery is internal to an already-running manual Session. */
+    fun canRetry(status: String, serviceRunning: Boolean): Boolean = false
 
     fun canBookmark(serviceRunning: Boolean): Boolean = serviceRunning
 }
@@ -199,6 +209,42 @@ object SegmentGuardPolicy {
     ): Boolean = generation == currentGeneration && currentPartial === partial
 }
 
+/** A new session uses the UI preview only while it both exists and is still desired. */
+object SegmentPreviewPolicy {
+    fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean): Boolean =
+        previewConfigured && previewDesired
+}
+
+/** Guards an in-flight preview swap from ever taking ownership of a newer encoder segment. */
+object ActivePreviewReplacementPolicy {
+    fun canRebuild(
+        replacementValid: Boolean,
+        recording: Boolean,
+        cameraReady: Boolean,
+        encoderReady: Boolean,
+    ): Boolean = replacementValid && recording && cameraReady && encoderReady
+
+    fun shouldQueueForNextSegment(status: String, stopping: Boolean, releasing: Boolean): Boolean =
+        !stopping && !releasing && status in setOf(RecorderStatus.STARTING, RecorderStatus.FINALIZING)
+
+    fun ownsCallback(
+        token: Long,
+        currentToken: Long,
+        segmentGeneration: Long,
+        currentSegmentGeneration: Long,
+        recording: Boolean,
+        encoderMatches: Boolean,
+    ): Boolean = token == currentToken &&
+        segmentGeneration == currentSegmentGeneration &&
+        recording && encoderMatches
+}
+
+/** The gallery must never publish provisional or failed recording evidence. */
+object LibraryPublicationPolicy {
+    fun shouldPublish(result: String, provisional: Boolean): Boolean =
+        result == SegmentSidecar.RESULT_SUCCESS && !provisional
+}
+
 /** Bookmark protection must survive sidecar enrichment: merge existing + snapshot flags. */
 object SidecarProtectionPolicy {
     fun effectiveProtected(existingProtected: Boolean?, snapshotProtected: Boolean): Boolean =
@@ -220,6 +266,7 @@ object RecorderWakeLockPolicy {
         RecorderStatus.STARTING,
         RecorderStatus.RECORDING,
         RecorderStatus.FINALIZING,
+        RecorderStatus.RESUMING,
     )
 
     fun shouldHold(status: String): Boolean = status in HOLDING_STATUSES

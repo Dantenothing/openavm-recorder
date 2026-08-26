@@ -11,6 +11,7 @@ import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.data.Severity
 import com.dante.zeekrcapabilitylab.event.CrashHandler
 import com.dante.zeekrcapabilitylab.event.EventLogger
+import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.util.Utils
@@ -52,13 +53,17 @@ class ZeekrApp : Application() {
             ),
         )
 
+        VehicleAwayProbe.init(this)
+
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 _isForeground.value = true
+                VehicleAwayProbe.recordAppState(true)
             }
 
             override fun onStop(owner: LifecycleOwner) {
                 _isForeground.value = false
+                VehicleAwayProbe.recordAppState(false)
             }
         })
 

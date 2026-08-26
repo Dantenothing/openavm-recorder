@@ -44,8 +44,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.player.RecordingThumbnailCache
+import com.dante.zeekrcapabilitylab.player.RecordingPresentationPolicy
 import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import com.dante.zeekrcapabilitylab.util.Utils
@@ -66,6 +68,7 @@ fun EventsScreen() {
         RecordingThumbnailCache(File(context.cacheDir, "recording-covers"))
     }
     val languageMode by AppLanguage.mode.collectAsState()
+    val recorderState by CameraRecordingService.state.collectAsState()
 
     var segments by remember { mutableStateOf<List<EventGroups.Segment>>(emptyList()) }
     var covers by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
@@ -73,6 +76,8 @@ fun EventsScreen() {
     var playFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
+    var confirmDeleteUnprotected by remember { mutableStateOf(false) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
 
     fun refresh() {
         scope.launch(Dispatchers.IO) {
@@ -89,10 +94,12 @@ fun EventsScreen() {
         }
     }
 
-    fun loadCover(file: File) {
+    fun loadCover(segment: EventGroups.Segment) {
+        val file = segment.file
         if (file.name in covers) return
+        val presentation = RecordingPresentationPolicy.resolve(segment.sidecar)
         scope.launch(Dispatchers.IO) {
-            val cover = thumbnailCache.loadOrCreate(file)
+            val cover = thumbnailCache.loadOrCreate(file, presentation.layoutKind)
             if (cover != null) {
                 withContext(Dispatchers.Main) {
                     covers = covers + (file.name to cover)
@@ -167,7 +174,46 @@ fun EventsScreen() {
         }
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    fun deleteAllRecordings() {
+        val visibleFiles = segments.map { it.file }
+        scope.launch(Dispatchers.IO) {
+            visibleFiles.forEach(thumbnailCache::remove)
+            val result = RecorderLibrary.deleteAllManagedByUser(segmentsDir)
+            withContext(Dispatchers.Main) {
+                playFile = null
+                covers = emptyMap()
+                statusText = Utils.t(
+                    "Deleted ${result.deleted} recordings" +
+                        if (result.blocked > 0) "; kept ${result.blocked} active or transfer-locked recordings" else "",
+                    "已删除 ${result.deleted} 段录像" +
+                        if (result.blocked > 0) "；${result.blocked} 段正在播放或传输锁定的录像已保留" else "",
+                )
+            }
+            refresh()
+        }
+    }
+
+    fun deleteUnprotectedRecordings() {
+        val unprotectedFiles = segments.filterNot { it.sidecar.protected }.map { it.file }
+        scope.launch(Dispatchers.IO) {
+            val result = RecorderLibrary.deleteAllUnprotected(segmentsDir)
+            val deletedFiles = unprotectedFiles.filterNot { it.exists() }
+            deletedFiles.forEach(thumbnailCache::remove)
+            withContext(Dispatchers.Main) {
+                if (playFile?.let(deletedFiles::contains) == true) playFile = null
+                covers = covers - deletedFiles.mapTo(mutableSetOf()) { it.name }
+                statusText = Utils.t(
+                    "Deleted ${result.deleted} unprotected recordings" +
+                        if (result.blocked > 0) "; kept ${result.blocked} protected or locked recordings" else "",
+                    "已删除 ${result.deleted} 段未保护录像" +
+                        if (result.blocked > 0) "；${result.blocked} 段受保护或锁定中的录像已保留" else "",
+                )
+            }
+            refresh()
+        }
+    }
+
+    LaunchedEffect(recorderState.libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
     val dateGroups = remember(segments, languageMode) { EventGroups.groupByDate(segments) }
@@ -203,7 +249,24 @@ fun EventsScreen() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { confirmDeleteUnprotected = true },
+                            enabled = segments.any { !it.sidecar.protected },
+                        ) {
+                            Text(Utils.t("Delete unprotected", "只删未保护"))
+                        }
+                        OutlinedButton(
+                            onClick = { confirmDeleteAll = true },
+                            enabled = segments.isNotEmpty(),
+                        ) {
+                            Text(
+                                Utils.t("Clear all", "清空全部"),
+                                color = if (segments.isNotEmpty()) MaterialTheme.colorScheme.error else Color.Unspecified,
+                            )
+                        }
+                        OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
+                    }
                 }
                 if (statusText.isNotBlank()) {
                     Text(
@@ -219,9 +282,9 @@ fun EventsScreen() {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     SectionTitle(Utils.t("Saved events", "已保存事件"), Utils.t("${incidents.size}", "${incidents.size} 个"))
                 }
-                items(incidents, key = { "event:${it.segments.first().file.name}" }) { group ->
+                items(incidents, key = EventGroups::stableIncidentKey) { group ->
                     val first = group.segments.first()
-                    LaunchedEffect(first.file.name) { loadCover(first.file) }
+                    LaunchedEffect(first.file.name) { loadCover(first) }
                     SavedEventCard(
                         group = group,
                         cover = covers[first.file.name],
@@ -253,7 +316,7 @@ fun EventsScreen() {
                     items = group.segments.sortedByDescending { recordingEpoch(it) },
                     key = { "recording:${it.file.name}" },
                 ) { segment ->
-                    LaunchedEffect(segment.file.name) { loadCover(segment.file) }
+                    LaunchedEffect(segment.file.name) { loadCover(segment) }
                     RecordingCard(
                         segment = segment,
                         cover = covers[segment.file.name],
@@ -268,10 +331,14 @@ fun EventsScreen() {
 
     playFile?.let { file ->
         val playbackIndex = playbackSegments.indexOfFirst { it.file == file }
+        val playbackSegment = playbackSegments.getOrNull(playbackIndex)
+        val presentation = playbackSegment?.sidecar?.let(RecordingPresentationPolicy::resolve)
         val previousFile = playbackSegments.getOrNull(playbackIndex - 1)?.file
         val nextFile = playbackSegments.getOrNull(playbackIndex + 1)?.file
         FourLanePlayerDialog(
             file = file,
+            layoutKind = presentation?.layoutKind,
+            sourceRole = presentation?.sourceRole,
             onPrevious = previousFile?.let { previous -> { playFile = previous } },
             onNext = nextFile?.let { next -> { playFile = next } },
             onSendToPhone = null,
@@ -315,6 +382,66 @@ fun EventsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteGroup = null }) { Text(Utils.t("Cancel", "取消")) }
+            },
+        )
+    }
+
+    if (confirmDeleteUnprotected) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteUnprotected = false },
+            title = { Text(Utils.t("Delete unprotected recordings?", "删除未保护录像？")) },
+            text = {
+                Text(
+                    Utils.t(
+                        "This permanently deletes all unprotected recordings. Protected recordings and recordings being played or transferred are kept.",
+                        "这会永久删除全部未保护录像。已保护、正在播放或正在传输的录像会被保留。",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDeleteUnprotected = false
+                        deleteUnprotectedRecordings()
+                    },
+                ) {
+                    Text(Utils.t("Delete unprotected", "删除未保护"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteUnprotected = false }) {
+                    Text(Utils.t("Cancel", "取消"))
+                }
+            },
+        )
+    }
+
+    if (confirmDeleteAll) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            title = { Text(Utils.t("Delete all recordings?", "删除全部录像？")) },
+            text = {
+                Text(
+                    Utils.t(
+                        "This permanently deletes all recordings in the library, including protected recordings. Recordings being played or transferred are kept.",
+                        "这会永久删除记录库中的全部录像，包括已保护录像。正在播放或传输中的录像会被保留。",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDeleteAll = false
+                        deleteAllRecordings()
+                    },
+                ) {
+                    Text(Utils.t("Delete all", "全部删除"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteAll = false }) {
+                    Text(Utils.t("Cancel", "取消"))
+                }
             },
         )
     }
@@ -364,7 +491,7 @@ private fun RecordingCard(
                     if (segment.sidecar.protected) StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
                 }
                 StatusBadge(
-                    text = Utils.t("4 views", "四路"),
+                    text = recordingSourceLabel(segment.sidecar),
                     color = Color(0xFF81C784),
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -459,7 +586,10 @@ private fun SavedEventCard(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    Utils.t("${Utils.formatDuration(group.durationMs)}  ·  ${group.segments.size} segments  ·  ${group.laneCount} views", "${Utils.formatDuration(group.durationMs)}  ·  ${group.segments.size} 段  ·  ${group.laneCount} 路"),
+                    Utils.t(
+                        "${Utils.formatDuration(group.durationMs)}  ·  ${group.segments.size} segments  ·  ${recordingSourceLabel(group.segments.first().sidecar)}",
+                        "${Utils.formatDuration(group.durationMs)}  ·  ${group.segments.size} 段  ·  ${recordingSourceLabel(group.segments.first().sidecar)}",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -529,6 +659,13 @@ private fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifie
 
 private fun recordingEpoch(segment: EventGroups.Segment): Long =
     segment.sidecar.startedAtEpochMs ?: segment.file.lastModified()
+
+private fun recordingSourceLabel(sidecar: com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar): String =
+    when (RecordingPresentationPolicy.resolve(sidecar).sourceRole) {
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole.SURROUND -> "360°"
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole.CABIN -> "Cabin"
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole.IR -> "IR"
+    }
 
 private fun formatRecordingTime(epochMs: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))

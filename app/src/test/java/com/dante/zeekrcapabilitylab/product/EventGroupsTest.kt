@@ -89,4 +89,21 @@ class EventGroupsTest {
         assertEquals(1, incidents.size)
         assertEquals(listOf("before.mp4", "current.mp4", "next.mp4"), incidents[0].segments.map { it.file.name })
     }
+
+    @Test
+    fun overlappingLegacyIncidentsHaveUniqueStableKeysEvenWhenFirstSegmentMatches() {
+        val dir = File.createTempFile("event-groups", "").parentFile
+        val sharedBefore = segment(File(dir, "shared-before.mp4"), 90_000, 120_000)
+        val firstBookmark = segment(File(dir, "first-bookmark.mp4"), 120_000, 180_000, protected = true)
+        val secondBookmark = segment(File(dir, "second-bookmark.mp4"), 180_000, 240_000, protected = true)
+        val laterContext = segment(File(dir, "later-context.mp4"), 270_000, 330_000)
+
+        val incidents = EventGroups.groupIncidents(
+            listOf(sharedBefore, firstBookmark, secondBookmark, laterContext),
+        )
+
+        assertEquals(2, incidents.size)
+        assertEquals(incidents[0].segments.first().file.name, incidents[1].segments.first().file.name)
+        assertEquals(2, incidents.map(EventGroups::stableIncidentKey).toSet().size)
+    }
 }
