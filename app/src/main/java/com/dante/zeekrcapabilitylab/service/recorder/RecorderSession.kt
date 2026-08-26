@@ -23,6 +23,7 @@ import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.product.CameraRuntime
+import com.dante.zeekrcapabilitylab.product.EmulatorTestRecording
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import java.io.File
 import java.util.concurrent.Executors
@@ -156,7 +157,9 @@ class RecorderSession(
 
     fun start(config: RecorderConfig, previewSurface: Surface? = null) {
         postCamera {
-            val errors = config.validate()
+            val errors = config.validate(
+                allowEmulatorTestSource = config.emulatorTestSource && EmulatorTestRecording.isAvailable(),
+            )
             if (errors.isNotEmpty()) {
                 val message = "CONFIG_INVALID: ${errors.joinToString("; ")}"
                 EventLogger.markError(Categories.SYSTEM, "RECORDER_CONFIG_INVALID", message, null)
@@ -1166,6 +1169,7 @@ class RecorderSession(
             eventRole = currentIncidentTag?.role,
             frameStats = frameStats,
             storageLimitBytes = cfg.storageLimitBytes,
+            minFreeBytes = cfg.minFreeBytes,
             recordingMode = cfg.recordingMode,
             sourceFingerprint = cfg.sourceFingerprint,
             sourceKind = cfg.sourceKind,
@@ -1310,6 +1314,7 @@ class RecorderSession(
             eventRole = incidentTag?.role,
             frameStats = stats,
             storageLimitBytes = cfg?.storageLimitBytes ?: state.storageLimitBytes,
+            minFreeBytes = cfg?.minFreeBytes ?: SettingsStore.get(context).minFreeBytes,
             recordingMode = cfg?.recordingMode ?: RecordingMode.SURROUND_360,
             sourceFingerprint = cfg?.sourceFingerprint.orEmpty(),
             sourceKind = cfg?.sourceKind ?: RecordingSourceKind.COMPOSITE,
@@ -1451,7 +1456,7 @@ class RecorderSession(
             if (settings.autoCleanupEnabled) {
                 enforceAutomaticCleanup(
                     limitBytes = snapshot.storageLimitBytes,
-                    reserveBytes = settings.minFreeBytes,
+                    reserveBytes = snapshot.minFreeBytes,
                     estimatedNextSegmentBytes = 0L,
                     retentionHours = settings.retentionHours,
                 )
@@ -2102,6 +2107,7 @@ class RecorderSession(
         val eventRole: String?,
         val frameStats: SegmentFrameStats,
         val storageLimitBytes: Long,
+        val minFreeBytes: Long,
         val recordingMode: RecordingMode,
         val sourceFingerprint: String,
         val sourceKind: RecordingSourceKind,

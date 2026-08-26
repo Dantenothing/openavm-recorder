@@ -46,6 +46,7 @@ import com.dante.zeekrcapabilitylab.product.CameraRuntime
 import com.dante.zeekrcapabilitylab.product.RuntimeCameraSource
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
+import com.dante.zeekrcapabilitylab.product.EmulatorTestRecording
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
@@ -64,6 +65,7 @@ import kotlinx.coroutines.withContext
 fun SettingsScreen() {
     val context = LocalContext.current
     val settings = remember { SettingsStore.get(context) }
+    val emulatorTestMode = remember { EmulatorTestRecording.isAvailable() }
     val scope = rememberCoroutineScope()
     val languageMode by AppLanguage.mode.collectAsState()
     val calibrationPreviewController = remember {
@@ -152,6 +154,17 @@ fun SettingsScreen() {
             Column(Modifier.padding(16.dp)) {
                 Text(Utils.t("Recording", "录像参数"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
+                if (emulatorTestMode) {
+                    Text(
+                        Utils.t(
+                            "Debug emulator camera is active. Recordings use one ordinary virtual camera to test Camera2, MP4 segments, sidecars, cleanup, library, and playback. This does not validate the Zeekr four-camera stream.",
+                            "已启用调试版模拟器摄像头。录像使用一路普通虚拟摄像头，用于测试 Camera2、MP4 分段、sidecar、清理、媒体库与播放；这不能验证极氪四路合成视频流。",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 OptionRow(
                     label = Utils.t("Recording mode", "录像模式"),
                     options = listOf(Utils.t("Front only", "仅前方"), "360°"),
@@ -204,8 +217,15 @@ fun SettingsScreen() {
                             }
                         }
                     },
+                    enabled = !emulatorTestMode,
                 ) {
-                    Text(Utils.t("Discover camera sources", "检测摄像头来源"))
+                    Text(
+                        if (emulatorTestMode) {
+                            Utils.t("Emulator camera selected automatically", "已自动选择模拟器摄像头")
+                        } else {
+                            Utils.t("Discover camera sources", "检测摄像头来源")
+                        },
+                    )
                 }
                 sources.forEach { source ->
                     val kind = if (recordingMode == RecordingMode.FRONT_ONLY) {
@@ -232,7 +252,7 @@ fun SettingsScreen() {
                 sourceMessage?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
-                if (recordingMode == RecordingMode.FRONT_ONLY) {
+                if (!emulatorTestMode && recordingMode == RecordingMode.FRONT_ONLY) {
                     val sourceSize = calibrationSourceSize
                     if (sourceSize != null && calibrationSourceFingerprint == settings.sourceFingerprint) {
                         Text(

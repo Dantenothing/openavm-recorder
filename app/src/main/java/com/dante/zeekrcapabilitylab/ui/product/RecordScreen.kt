@@ -3,6 +3,7 @@ package com.dante.zeekrcapabilitylab.ui.product
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -57,6 +58,7 @@ import com.dante.zeekrcapabilitylab.product.RecorderConfigResolution
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
+import com.dante.zeekrcapabilitylab.product.EmulatorTestRecording
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommandPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
@@ -102,6 +104,7 @@ fun RecordScreen() {
     val libraryRevision by RecorderLibrary.revision.collectAsState()
     val languageMode by AppLanguage.mode.collectAsState()
     val settings = remember(languageMode) { SettingsStore.get(context) }
+    val emulatorTestMode = remember { EmulatorTestRecording.isAvailable() }
     val previewController = remember { SafeManualPreviewController(context.applicationContext) }
     val previewState by previewController.state.collectAsState()
     val segmentsDir = remember { File(context.filesDir, "recordings/segments") }
@@ -215,10 +218,15 @@ fun RecordScreen() {
         ?: readyConfig?.profile?.bitrateBps
             ?.takeIf { it > 0 }
             ?.toLong()
-        ?: DEFAULT_ESTIMATED_BITRATE_BPS
+        ?: if (emulatorTestMode) EmulatorTestRecording.BITRATE_BPS.toLong() else DEFAULT_ESTIMATED_BITRATE_BPS
     val quotaRemaining = (settings.storageLimitBytes - diskStats.artifactUsageBytes).coerceAtLeast(0L)
+    val effectiveMinFreeBytes = if (emulatorTestMode) {
+        RecorderConfig.EMULATOR_TEST_MIN_FREE_BYTES
+    } else {
+        settings.minFreeBytes
+    }
     val reserveRemaining = if (diskStats.freeBytes >= 0L) {
-        (diskStats.freeBytes - settings.minFreeBytes).coerceAtLeast(0L)
+        (diskStats.freeBytes - effectiveMinFreeBytes).coerceAtLeast(0L)
     } else {
         quotaRemaining
     }
@@ -350,9 +358,12 @@ fun RecordScreen() {
                 segmentSeconds = settings.segmentSeconds,
                 autoCleanupEnabled = settings.autoCleanupEnabled,
                 retentionHours = settings.retentionHours,
-                recordingMode = settings.recordingMode,
-                sourceVerified = settings.sourceFingerprint != null,
-                calibrationValid = settings.recordingMode != com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY ||
+                recordingMode = if (emulatorTestMode) {
+                    EmulatorTestRecording.effectiveMode(settings.recordingMode)
+                } else settings.recordingMode,
+                sourceVerified = emulatorTestMode || settings.sourceFingerprint != null,
+                calibrationValid = emulatorTestMode ||
+                    settings.recordingMode != com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY ||
                     settings.frontCalibration != null,
                 protectedSpace = formatBytes(diskStats.protectedBytes),
             )
@@ -529,6 +540,8 @@ private fun HomePreviewPane(
     modifier: Modifier = Modifier,
 ) {
     var lensMode by remember(settings) { mutableStateOf(settings.lensMode) }
+    val singleEmulatorCamera = EmulatorTestRecording.isAvailable() &&
+        settings.recordingMode == com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center,
@@ -539,25 +552,94 @@ private fun HomePreviewPane(
                 !recordingActive || (recorderPreviewRequested && !recorderPreviewFallbackUsed)
                 )
             if (showLivePreview) {
-                ManualPreviewPanel(
-                    controller = controller,
-                    state = state,
-                    lensMode = lensMode,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (singleEmulatorCamera) {
+                    ManualSingleCameraPreviewPanel(
+                        controller = controller,
+                        state = state,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    ManualPreviewPanel(
+                        controller = controller,
+                        state = state,
+                        lensMode = lensMode,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             } else {
-                StaticLaneGrid(modifier = Modifier.fillMaxSize())
+                if (singleEmulatorCamera) {
+                    StaticFrontPreview(modifier = Modifier.fillMaxSize())
+                } else {
+                    StaticLaneGrid(modifier = Modifier.fillMaxSize())
+                }
             }
-            FourLaneLensToggle(
-                mode = lensMode,
-                onModeChanged = { selected ->
-                    lensMode = selected
-                    settings.setLensMode(selected)
-                },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp),
+            if (!singleEmulatorCamera) {
+                FourLaneLensToggle(
+                    mode = lensMode,
+                    onModeChanged = { selected ->
+                        lensMode = selected
+                        settings.setLensMode(selected)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManualSingleCameraPreviewPanel(
+    controller: SafeManualPreviewController,
+    state: ManualPreviewState,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val previewView = remember(controller) { TextureView(context) }
+    Card(modifier) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            AndroidView(
+                factory = { previewView.also(controller::attach) },
+                modifier = Modifier.fillMaxSize(),
             )
+            Text(
+                Utils.t("Front", "前方"),
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp)
+                    .background(Color(0xB0000000), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+            if (state.error != null) {
+                Text(
+                    Utils.t("Preview unavailable", "预览暂不可用"),
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .background(Color(0xC0000000), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaticFrontPreview(modifier: Modifier = Modifier) {
+    Card(modifier) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(Utils.t("Front preview unavailable", "前方预览暂不可用"), color = Color.White)
         }
     }
 }

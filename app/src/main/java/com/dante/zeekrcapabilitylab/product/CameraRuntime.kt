@@ -32,6 +32,7 @@ data class RuntimeCameraSource(
     val mediaRecorderSizes: List<ProfileSize>,
     val surfaceTextureSizes: List<ProfileSize>,
     val mediaCodecSizes: List<ProfileSize>,
+    val lensFacing: Int? = null,
 ) {
     /** Legacy name retained for display/360 callers. */
     val recordSizes: List<ProfileSize> get() = mediaRecorderSizes
@@ -112,6 +113,7 @@ object CameraRuntime {
                         mediaRecorderSizes = mediaRecorderSizes,
                         surfaceTextureSizes = surfaceTextureSizes,
                         mediaCodecSizes = mediaCodecSizes,
+                        lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING),
                     )
                 }.getOrNull()
             }

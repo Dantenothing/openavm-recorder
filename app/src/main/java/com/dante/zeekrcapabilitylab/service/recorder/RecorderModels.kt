@@ -26,11 +26,16 @@ data class RecorderConfig(
     val encoderProfile: EncoderProfile? = null,
     val calibrationVersion: Int? = null,
     val pipelineVersion: Int = CURRENT_PIPELINE_VERSION,
+    /** Debug builds may use an ordinary emulator Camera2 source for lifecycle testing. */
+    val emulatorTestSource: Boolean = false,
 ) {
     val effectiveSourceProfile: CameraFormatProfile get() = sourceProfile ?: profile
 
-    fun validate(): List<String> {
+    fun validate(allowEmulatorTestSource: Boolean = false): List<String> {
         val errors = mutableListOf<String>()
+        if (emulatorTestSource && !allowEmulatorTestSource) {
+            errors += "emulator test source is not allowed"
+        }
         if (cameraId.isBlank()) errors += "cameraId must not be blank"
         if (sourceFingerprint.isBlank()) errors += "sourceFingerprint must not be blank"
         if (profile.size.width <= 0 || profile.size.height <= 0) {
@@ -46,7 +51,9 @@ data class RecorderConfig(
         if (storageLimitBytes !in STORAGE_LIMIT_OPTIONS_BYTES) {
             errors += "storageLimitBytes must be one of ${STORAGE_LIMIT_OPTIONS_BYTES.sorted()}"
         }
-        if (minFreeBytes !in MIN_FREE_OPTIONS_BYTES) {
+        val emulatorReserveAllowed = emulatorTestSource && allowEmulatorTestSource &&
+            minFreeBytes == EMULATOR_TEST_MIN_FREE_BYTES
+        if (minFreeBytes !in MIN_FREE_OPTIONS_BYTES && !emulatorReserveAllowed) {
             errors += "minFreeBytes must be one of ${MIN_FREE_OPTIONS_BYTES.sorted()}"
         }
         when (recordingMode) {
@@ -63,7 +70,11 @@ data class RecorderConfig(
                 if (sourceKind == RecordingSourceKind.COMPOSITE) {
                     errors += "FRONT_ONLY cannot use an uncropped composite source"
                 }
-                if (encoderProfile == null) errors += "FRONT_ONLY requires a validated encoder profile"
+                val debugDirectFront = emulatorTestSource && allowEmulatorTestSource &&
+                    sourceKind == RecordingSourceKind.DIRECT_FRONT
+                if (encoderProfile == null && !debugDirectFront) {
+                    errors += "FRONT_ONLY requires a validated encoder profile"
+                }
                 if (encoderProfile != null && (
                         encoderProfile.width != profile.size.width ||
                             encoderProfile.height != profile.size.height ||
@@ -99,6 +110,7 @@ data class RecorderConfig(
             .map { it * 1024L * 1024L * 1024L }
             .toSet()
         const val CURRENT_PIPELINE_VERSION = 1
+        const val EMULATOR_TEST_MIN_FREE_BYTES = 256L * 1024L * 1024L
 
         /** Exact-match check against the HAL-declared MediaRecorder output sizes. */
         fun profileDeclared(profile: CameraFormatProfile, declaredSizes: Collection<ProfileSize>): Boolean =

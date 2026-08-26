@@ -355,6 +355,14 @@ Without a locally configured private signing key, Gradle produces `app-release-u
 
 Signing keys and credentials must never be committed to the repository.
 
+### Debug emulator recording
+
+A debug build running on an Android Emulator automatically selects a conservative ordinary Camera2/MediaRecorder source (preferring the back virtual camera at `1280×720`). This path exists only to exercise recorder lifecycle, MP4 segmentation, sidecars, storage cleanup, the library and playback without a vehicle. It uses a debug-only `256 MB` free-space reserve so a standard AVD data partition can record; release builds reject that configuration and keep the normal vehicle reserve policy.
+
+Grant camera and notification permissions, tap **Start recording**, allow several seconds of capture, then tap **Stop** to finalize the segment before opening **Library**. Configure the AVD back camera as **VirtualScene** or a host webcam if the emulator does not already expose one.
+
+The emulator produces one conventional camera image, not a `1280×5140` four-lane AVM composite. In `Front only`, the debug adapter previews and records that one image directly and marks its sidecar as `FRONT_ONLY` / `DIRECT_FRONT`. In `360°`, the four-lane preview/playback can show repeated or sliced portions of the same image. Emulator success does **not** validate Zeekr Camera HAL compatibility, composite geometry, OEM camera contention, encoder performance, thermal behaviour or real-vehicle safety.
+
 ## Known limitations
 
 - Compatibility is currently confirmed only on the tested Australian Zeekr 7X App Lab environment.

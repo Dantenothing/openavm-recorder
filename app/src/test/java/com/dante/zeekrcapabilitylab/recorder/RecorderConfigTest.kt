@@ -4,6 +4,8 @@ import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceKind
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -60,6 +62,41 @@ class RecorderConfigTest {
         assertTrue(config(minFreeBytes = 10L * gb).validate().isEmpty())
         assertTrue(config(minFreeBytes = 30L * gb).validate().isEmpty())
         assertFalse(config(minFreeBytes = 1L * gb).validate().isEmpty())
+    }
+
+    @Test
+    fun emulatorReserveRequiresAnExplicitDebugValidationGate() {
+        val emulator = config(minFreeBytes = RecorderConfig.EMULATOR_TEST_MIN_FREE_BYTES)
+            .copy(emulatorTestSource = true)
+
+        assertFalse(emulator.validate().isEmpty())
+        assertTrue(emulator.validate(allowEmulatorTestSource = true).isEmpty())
+        assertFalse(
+            emulator.copy(emulatorTestSource = false)
+                .validate(allowEmulatorTestSource = true)
+                .isEmpty(),
+        )
+    }
+
+    @Test
+    fun emulatorDirectFrontRequiresTheExplicitDebugValidationGate() {
+        val profile = CameraFormatProfile(ProfileSize(1280, 720), 4_000_000)
+        val emulatorFront = config(
+            profile = profile,
+            minFreeBytes = RecorderConfig.EMULATOR_TEST_MIN_FREE_BYTES,
+        ).copy(
+            recordingMode = RecordingMode.FRONT_ONLY,
+            sourceKind = RecordingSourceKind.DIRECT_FRONT,
+            emulatorTestSource = true,
+        )
+
+        assertFalse(emulatorFront.validate().isEmpty())
+        assertTrue(emulatorFront.validate(allowEmulatorTestSource = true).isEmpty())
+        assertFalse(
+            emulatorFront.copy(emulatorTestSource = false)
+                .validate(allowEmulatorTestSource = true)
+                .isEmpty(),
+        )
     }
 
     @Test

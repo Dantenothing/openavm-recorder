@@ -15,6 +15,16 @@ sealed interface RecorderConfigResolution {
 object ProductRecorderConfigFactory {
     fun resolve(context: Context): RecorderConfigResolution {
         val settings = SettingsStore.get(context)
+        if (EmulatorTestRecording.isAvailable()) {
+            val emulatorConfig = EmulatorTestRecording.config(context, settings)
+                ?: return RecorderConfigResolution.Blocked("EMULATOR_CAMERA_UNAVAILABLE")
+            val emulatorErrors = emulatorConfig.validate(allowEmulatorTestSource = true)
+            return if (emulatorErrors.isEmpty()) {
+                RecorderConfigResolution.Ready(emulatorConfig)
+            } else {
+                RecorderConfigResolution.Blocked("EMULATOR_CONFIG_INVALID: ${emulatorErrors.joinToString("; ")}")
+            }
+        }
         val mode = settings.recordingMode
             ?: return RecorderConfigResolution.Blocked("MODE_CONFIRMATION_REQUIRED")
         val cameraId = settings.selectedCameraId

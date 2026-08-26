@@ -52,6 +52,14 @@ object RecordingPipelineFactory {
         config: RecorderConfig,
         onRuntimeError: (String) -> Unit,
     ): RecordingPipeline = when {
+        // Debug AVD cameras provide one ordinary stream. MediaRecorder is the
+        // stable lifecycle test path for either user-selected product mode.
+        config.emulatorTestSource -> MediaRecorderPipeline(
+            outputFile = outputFile,
+            config = config,
+            onRuntimeError = onRuntimeError,
+        )
+
         config.recordingMode == RecordingMode.SURROUND_360 -> MediaRecorderPipeline(
             outputFile = outputFile,
             config = config,

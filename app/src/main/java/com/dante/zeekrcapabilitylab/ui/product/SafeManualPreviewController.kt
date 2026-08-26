@@ -19,6 +19,7 @@ import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.product.CompositePreviewSizePolicy
 import com.dante.zeekrcapabilitylab.product.CameraRuntime
+import com.dante.zeekrcapabilitylab.product.EmulatorTestRecording
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -250,9 +251,10 @@ class SafeManualPreviewController(context: Context) {
         }
         try {
             val settings = SettingsStore.get(appContext)
-            val cameraId = CameraRuntime.sourceCatalog(appContext).singleOrNull {
-                it.cameraId == settings.selectedCameraId && it.fingerprint == settings.sourceFingerprint
-            }?.cameraId
+            val cameraId = EmulatorTestRecording.source(appContext)?.cameraId
+                ?: CameraRuntime.sourceCatalog(appContext).singleOrNull {
+                    it.cameraId == settings.selectedCameraId && it.fingerprint == settings.sourceFingerprint
+                }?.cameraId
             if (cameraId == null) {
                 fail("请先在设置中确认摄像头来源")
                 return
