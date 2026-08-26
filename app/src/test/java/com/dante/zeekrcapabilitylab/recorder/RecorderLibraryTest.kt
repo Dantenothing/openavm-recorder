@@ -159,6 +159,32 @@ class RecorderLibraryTest {
     }
 
     @Test
+    fun explicitBatchDeleteDeduplicatesAndRevalidatesEverySelection() {
+        val dir = Files.createTempDirectory("rec-lib").toFile()
+        val ordinary = managedMp4(dir, "seg-0001-1-1280x5140-14M.mp4")
+        val bookmarked = managedMp4(
+            dir,
+            "seg-0002-2-1280x5140-14M.mp4",
+            protected = true,
+        )
+        val uploadPinned = managedMp4(dir, "seg-0003-3-1280x5140-14M.mp4")
+        assertTrue(RecorderLibrary.pinForUpload(uploadPinned))
+
+        val attempts = RecorderLibrary.deleteManagedByUser(
+            dir,
+            listOf(ordinary, ordinary, bookmarked, uploadPinned),
+        )
+
+        assertEquals(3, attempts.size)
+        assertEquals(listOf(ordinary, bookmarked, uploadPinned), attempts.map { it.file })
+        assertEquals(listOf(true, true, false), attempts.map { it.result.deleted })
+        assertEquals(RecorderLibrary.DELETE_UPLOAD_PINNED, attempts.last().result.reason)
+        assertFalse(ordinary.exists())
+        assertFalse(bookmarked.exists())
+        assertTrue(uploadPinned.exists())
+    }
+
+    @Test
     fun deleteManagedRefusesUnknownFiles() {
         val dir = Files.createTempDirectory("rec-lib").toFile()
         val unknown = File(dir, "notes.mp4").apply { writeBytes(ByteArray(10)) }

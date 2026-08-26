@@ -1,6 +1,7 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +77,9 @@ fun EventsScreen() {
     var playFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteFile by remember { mutableStateOf<File?>(null) }
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedNames by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingDeleteSelection by remember { mutableStateOf<Set<String>?>(null) }
 
     fun refresh() {
         scope.launch(Dispatchers.IO) {
@@ -87,6 +92,7 @@ fun EventsScreen() {
                 segments = items
                 val names = items.mapTo(mutableSetOf()) { it.file.name }
                 covers = covers.filterKeys { it in names }
+                selectedNames = selectedNames.intersect(names)
             }
         }
     }
@@ -169,6 +175,34 @@ fun EventsScreen() {
         }
     }
 
+    fun deleteSelection(names: Set<String>) {
+        scope.launch(Dispatchers.IO) {
+            val selectedFiles = RecorderLibrary.selectManaged(
+                RecorderLibrary.listFinalized(segmentsDir),
+                names,
+            )
+            val attempts = RecorderLibrary.deleteManagedByUser(segmentsDir, selectedFiles)
+            val deletedFiles = attempts.filter { it.result.deleted }.map { it.file }
+            deletedFiles.forEach(thumbnailCache::remove)
+            val deletedNames = deletedFiles.mapTo(mutableSetOf()) { it.name }
+            val blocked = names.size - deletedNames.size
+            withContext(Dispatchers.Main) {
+                statusText = Utils.t(
+                    "Deleted ${deletedNames.size} recordings",
+                    "已删除 ${deletedNames.size} 段录像",
+                ) + if (blocked > 0) {
+                    Utils.t(
+                        "; kept $blocked locked or unavailable recordings",
+                        "；已保留 $blocked 段锁定中或不可用的录像",
+                    )
+                } else {
+                    ""
+                }
+            }
+            refresh()
+        }
+    }
+
     LaunchedEffect(libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
@@ -196,16 +230,64 @@ fun EventsScreen() {
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(Utils.t("Recordings", "录像记录"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            Utils.t("${segments.size} recordings", "${segments.size} 段录像"),
+                            if (selectionMode) {
+                                Utils.t("${selectedNames.size} selected", "已选择 ${selectedNames.size} 项")
+                            } else {
+                                Utils.t("${segments.size} recordings", "${segments.size} 段录像")
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
+                    if (selectionMode) {
+                        OutlinedButton(
+                            onClick = {
+                                selectedNames = if (selectedNames.size == segments.size) {
+                                    emptySet()
+                                } else {
+                                    segments.mapTo(mutableSetOf()) { it.file.name }
+                                }
+                            },
+                        ) {
+                            Text(
+                                if (selectedNames.size == segments.size) {
+                                    Utils.t("Clear all", "全部取消")
+                                } else {
+                                    Utils.t("Select all", "全选")
+                                },
+                            )
+                        }
+                        TextButton(
+                            onClick = { pendingDeleteSelection = selectedNames },
+                            enabled = selectedNames.isNotEmpty(),
+                        ) {
+                            Text(
+                                Utils.t("Delete (${selectedNames.size})", "删除 (${selectedNames.size})"),
+                                color = if (selectedNames.isNotEmpty()) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                },
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                selectionMode = false
+                                selectedNames = emptySet()
+                            },
+                        ) { Text(Utils.t("Cancel", "取消")) }
+                    } else {
+                        OutlinedButton(
+                            onClick = { selectionMode = true },
+                            enabled = segments.isNotEmpty(),
+                        ) { Text(Utils.t("Select", "选择")) }
+                        OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
+                    }
                 }
                 if (statusText.isNotBlank()) {
                     Text(
@@ -223,6 +305,8 @@ fun EventsScreen() {
                 }
                 items(incidents, key = { "event:${it.segments.first().file.name}" }) { group ->
                     val first = group.segments.first()
+                    val groupNames = group.segments.mapTo(mutableSetOf()) { it.file.name }
+                    val selectedCount = groupNames.count { it in selectedNames }
                     LaunchedEffect(first.file.name) { loadCover(first.file) }
                     SavedEventCard(
                         group = group,
@@ -230,6 +314,15 @@ fun EventsScreen() {
                         onPlay = { playFile = first.file },
                         onToggleProtect = { toggleGroupProtection(group) },
                         onDelete = { pendingDeleteGroup = group },
+                        selectionMode = selectionMode,
+                        selectedCount = selectedCount,
+                        onToggleSelection = {
+                            selectedNames = if (selectedCount == groupNames.size) {
+                                selectedNames - groupNames
+                            } else {
+                                selectedNames + groupNames
+                            }
+                        },
                     )
                 }
             }
@@ -262,6 +355,15 @@ fun EventsScreen() {
                         onPlay = { playFile = segment.file },
                         onToggleProtect = { toggleFileProtection(segment) },
                         onDelete = { pendingDeleteFile = segment.file },
+                        selectionMode = selectionMode,
+                        selected = segment.file.name in selectedNames,
+                        onToggleSelection = {
+                            selectedNames = if (segment.file.name in selectedNames) {
+                                selectedNames - segment.file.name
+                            } else {
+                                selectedNames + segment.file.name
+                            }
+                        },
                     )
                 }
             }
@@ -320,6 +422,45 @@ fun EventsScreen() {
             },
         )
     }
+
+    pendingDeleteSelection?.let { names ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteSelection = null },
+            title = {
+                Text(
+                    Utils.t(
+                        "Delete ${names.size} selected recordings?",
+                        "删除已选择的 ${names.size} 段录像？",
+                    ),
+                )
+            },
+            text = {
+                Text(
+                    Utils.t(
+                        "This permanently deletes the selected recordings, including protected recordings. Temporarily locked recordings will be kept.",
+                        "这会永久删除所选录像，包括已保护录像。暂时锁定中的录像会被保留。",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDeleteSelection = null
+                        selectionMode = false
+                        selectedNames = emptySet()
+                        deleteSelection(names)
+                    },
+                ) {
+                    Text(Utils.t("Delete", "删除"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteSelection = null }) {
+                    Text(Utils.t("Cancel", "取消"))
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -342,12 +483,16 @@ private fun RecordingCard(
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
     onDelete: () -> Unit,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onToggleSelection: () -> Unit,
 ) {
     var menuOpen by remember(segment.file.name) { mutableStateOf(false) }
     Card(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onPlay),
+            .clickable(onClick = if (selectionMode) onToggleSelection else onPlay),
+        border = if (selected) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column {
             Box {
@@ -376,22 +521,33 @@ private fun RecordingCard(
                         .align(Alignment.BottomStart)
                         .padding(9.dp),
                 )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(5.dp),
-                ) {
-                    TextButton(
-                        onClick = { menuOpen = true },
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(999.dp)),
-                    ) { Text("•••", color = Color.White) }
-                    RecordingActionsMenu(
-                        expanded = menuOpen,
-                        protected = segment.sidecar.protected,
-                        onDismiss = { menuOpen = false },
-                        onToggleProtect = onToggleProtect,
-                        onDelete = onDelete,
+                if (selectionMode) {
+                    Checkbox(
+                        checked = selected,
+                        onCheckedChange = { onToggleSelection() },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp)
+                            .background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(999.dp)),
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp),
+                    ) {
+                        TextButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(999.dp)),
+                        ) { Text("•••", color = Color.White) }
+                        RecordingActionsMenu(
+                            expanded = menuOpen,
+                            protected = segment.sidecar.protected,
+                            onDismiss = { menuOpen = false },
+                            onToggleProtect = onToggleProtect,
+                            onDelete = onDelete,
+                        )
+                    }
                 }
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -417,12 +573,16 @@ private fun SavedEventCard(
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
     onDelete: () -> Unit,
+    selectionMode: Boolean,
+    selectedCount: Int,
+    onToggleSelection: () -> Unit,
 ) {
     var menuOpen by remember(group.segments.first().file.name) { mutableStateOf(false) }
     Card(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onPlay),
+            .clickable(onClick = if (selectionMode) onToggleSelection else onPlay),
+        border = if (selectedCount > 0) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column {
             Box {
@@ -439,23 +599,37 @@ private fun SavedEventCard(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     StatusBadge(Utils.t("Saved", "已保存"), Color(0xFFFFB74D))
+                    if (selectionMode && selectedCount > 0) {
+                        StatusBadge("$selectedCount/${group.segments.size}", MaterialTheme.colorScheme.primary)
+                    }
                 }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(5.dp),
-                ) {
-                    TextButton(
-                        onClick = { menuOpen = true },
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(999.dp)),
-                    ) { Text("•••", color = Color.White) }
-                    RecordingActionsMenu(
-                        expanded = menuOpen,
-                        protected = group.protectedCount > 0,
-                        onDismiss = { menuOpen = false },
-                        onToggleProtect = onToggleProtect,
-                        onDelete = onDelete,
+                if (selectionMode) {
+                    Checkbox(
+                        checked = selectedCount == group.segments.size,
+                        onCheckedChange = { onToggleSelection() },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp)
+                            .background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(999.dp)),
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp),
+                    ) {
+                        TextButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(999.dp)),
+                        ) { Text("•••", color = Color.White) }
+                        RecordingActionsMenu(
+                            expanded = menuOpen,
+                            protected = group.protectedCount > 0,
+                            onDismiss = { menuOpen = false },
+                            onToggleProtect = onToggleProtect,
+                            onDelete = onDelete,
+                        )
+                    }
                 }
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {

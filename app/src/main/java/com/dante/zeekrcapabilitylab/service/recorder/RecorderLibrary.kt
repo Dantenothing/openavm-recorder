@@ -34,6 +34,11 @@ object RecorderLibrary {
         val reason: String? = null,
     )
 
+    data class DeleteAttempt(
+        val file: File,
+        val result: DeleteResult,
+    )
+
     fun isManaged(file: File): Boolean {
         if (!file.isFile || !SegmentNaming.isFinalMp4(file.name)) return false
         val sidecarFile = SegmentSidecarIO.sidecarFileFor(file)
@@ -147,10 +152,41 @@ object RecorderLibrary {
     fun deleteManagedByUser(segmentsDir: File, file: File): DeleteResult =
         deleteManagedInternal(segmentsDir, file, allowProtected = true)
 
+    /**
+     * Explicit batch deletion for a confirmed user selection. Duplicate paths
+     * are collapsed and every file is revalidated while the storage lock is
+     * held. Protected recordings may be removed; temporarily pinned recordings
+     * remain protected from deletion.
+     */
+    fun deleteManagedByUser(
+        segmentsDir: File,
+        files: Collection<File>,
+    ): List<DeleteAttempt> = synchronized(RecorderStorageLock.lock) {
+        files
+            .distinctBy { file ->
+                runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            }
+            .map { file ->
+                DeleteAttempt(
+                    file = file,
+                    result = deleteManagedInternal(
+                        segmentsDir = segmentsDir,
+                        file = file,
+                        allowProtected = true,
+                        notify = false,
+                    ),
+                )
+            }
+            .also { attempts ->
+                if (attempts.any { it.result.deleted }) notifyChanged()
+            }
+    }
+
     private fun deleteManagedInternal(
         segmentsDir: File,
         file: File,
         allowProtected: Boolean,
+        notify: Boolean = true,
     ): DeleteResult = synchronized(RecorderStorageLock.lock) {
         val insideRecorderDirectory = try {
             file.canonicalFile.parentFile == segmentsDir.canonicalFile
@@ -185,7 +221,9 @@ object RecorderLibrary {
         DeleteResult(
             deleted = true,
             reason = if (sidecarDeleted) null else DELETE_SIDECAR_FAILED,
-        ).also { notifyChanged() }
+        ).also {
+            if (notify) notifyChanged()
+        }
     }
 }
 

@@ -21,7 +21,7 @@ The current alpha provides:
 - explicit `Front only` and `360°` recording modes; front-only remains an experimental vehicle-test path after parked visual calibration;
 - segmented recording to the app's internal storage;
 - protected/saved events that automatic cleanup does not remove;
-- a thumbnail-based recording library;
+- a thumbnail-based recording library with multi-select and confirmed batch deletion;
 - four-view playback, seeking, previous/next recording navigation and single-view zoom;
 - optional display-only fisheye correction; and
 - automatic cleanup with a configurable ordinary-recording retention window (8 hours by default), storage limit and reserved free-space threshold.
