@@ -13,6 +13,10 @@ class PowerDiagnosticCodecTest {
 
         assertTrue(payload.startsWith("AVMP1|"))
         assertTrue(payload.contains("|test=VEHICLE_AWAY|"))
+        assertTrue(payload.contains("|va=ACTIVE|"))
+        assertTrue(payload.contains("|dark=1|"))
+        assertTrue(payload.contains("|route=TERMINAL_STOP|"))
+        assertTrue(payload.contains("|vr=CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF|"))
         assertTrue(payload.toByteArray(Charsets.UTF_8).size <= 900)
         assertTrue(payload.endsWith("tr=1"))
     }
@@ -32,6 +36,42 @@ class PowerDiagnosticCodecTest {
         assertFalse(detail.contains("private"))
     }
 
+    @Test
+    fun summaryPreservesCameraLossDecisionStateAfterForegroundClearsLiveLatch() {
+        val route = event(1).copy(
+            eventName = "RECORDER_CAMERA_LOSS_ROUTE",
+            payload = mapOf(
+                "phase" to "CONFIRMED",
+                "appForeground" to "false",
+                "screenOn" to "true",
+                "mainDisplayOn" to "true",
+                "backgroundPowerOffEvidence" to "true",
+                "sawScreenOffWhileBackground" to "true",
+                "sawMainDisplayOffWhileBackground" to "false",
+                "route" to "TERMINAL_STOP",
+                "reason" to "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF",
+            ),
+        )
+        val laterForeground = event(2).copy(
+            eventName = "RECORDER_VEHICLE_AWAY_SIGNAL",
+            payload = mapOf(
+                "phase" to "ACTIVE",
+                "appForeground" to "true",
+                "screenOn" to "true",
+                "mainDisplayOn" to "true",
+                "backgroundPowerOffEvidence" to "false",
+            ),
+        )
+
+        val summary = VehicleAwayDiagnosticSummary.fromEvents(listOf(route, laterForeground))
+
+        assertTrue(summary.backgroundPowerOffEvidence)
+        assertFalse(summary.appForeground)
+        assertTrue(summary.sawScreenOffWhileBackground)
+        assertTrue(summary.cameraLossRoute == "TERMINAL_STOP")
+        assertTrue(summary.lastReason == "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF")
+    }
+
     private fun evidence(events: List<ProbeEvent>) = PowerDiagnosticEvidence(
         ticket = "ABC123",
         version = "0.2.0-alpha7-probe",
@@ -45,6 +85,17 @@ class PowerDiagnosticCodecTest {
         exitReason = "NONE",
         events = events,
         testType = "VEHICLE_AWAY",
+        vehicleAway = VehicleAwayDiagnosticSummary(
+            phase = "ACTIVE",
+            appForeground = false,
+            screenOn = false,
+            mainDisplayOn = true,
+            backgroundPowerOffEvidence = true,
+            sawScreenOffWhileBackground = true,
+            sawMainDisplayOffWhileBackground = false,
+            cameraLossRoute = "TERMINAL_STOP",
+            lastReason = "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF",
+        ),
     )
 
     private fun event(number: Int) = ProbeEvent(

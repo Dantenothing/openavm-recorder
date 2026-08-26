@@ -10,6 +10,57 @@ import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import java.nio.charset.StandardCharsets
 
+data class VehicleAwayDiagnosticSummary(
+    val phase: String = "NONE",
+    val appForeground: Boolean = true,
+    val screenOn: Boolean = true,
+    val mainDisplayOn: Boolean = true,
+    val backgroundPowerOffEvidence: Boolean = false,
+    val sawScreenOffWhileBackground: Boolean = false,
+    val sawMainDisplayOffWhileBackground: Boolean = false,
+    val cameraLossRoute: String = "NONE",
+    val lastReason: String = "NONE",
+) {
+    companion object {
+        fun fromEvents(events: List<ProbeEvent>): VehicleAwayDiagnosticSummary {
+            val stateEvent = events.lastOrNull {
+                it.eventName == "RECORDER_VEHICLE_AWAY_SIGNAL" ||
+                    it.eventName.startsWith("RECORDER_VEHICLE_AWAY_") ||
+                    it.eventName == "RECORDER_CAMERA_LOSS_ROUTE"
+            } ?: return VehicleAwayDiagnosticSummary()
+            val routeEvent = events.lastOrNull { it.eventName == "RECORDER_CAMERA_LOSS_ROUTE" }
+            // A later APP_FOREGROUND signal may clear the live latch after unlock.
+            // When a Camera-loss route exists, preserve the exact signal state that
+            // made that routing decision instead of showing the post-return state.
+            val payload = (routeEvent ?: stateEvent).payload
+            val routePayload = routeEvent?.payload.orEmpty()
+            return VehicleAwayDiagnosticSummary(
+                phase = payload["phase"] ?: "NONE",
+                appForeground = payload["appForeground"].toBooleanDefault(true),
+                screenOn = payload["screenOn"].toBooleanDefault(true),
+                mainDisplayOn = payload["mainDisplayOn"].toBooleanDefault(true),
+                backgroundPowerOffEvidence =
+                    payload["backgroundPowerOffEvidence"].toBooleanDefault(false),
+                sawScreenOffWhileBackground =
+                    payload["sawScreenOffWhileBackground"].toBooleanDefault(false),
+                sawMainDisplayOffWhileBackground =
+                    payload["sawMainDisplayOffWhileBackground"].toBooleanDefault(false),
+                cameraLossRoute = routePayload["route"] ?: "NONE",
+                lastReason = routePayload["reason"]
+                    ?: payload["reason"]
+                    ?: payload["lastReason"]
+                    ?: "NONE",
+            )
+        }
+
+        private fun String?.toBooleanDefault(default: Boolean): Boolean = when (this) {
+            "true" -> true
+            "false" -> false
+            else -> default
+        }
+    }
+}
+
 data class PowerDiagnosticEvidence(
     val ticket: String,
     val version: String,
@@ -23,6 +74,7 @@ data class PowerDiagnosticEvidence(
     val exitReason: String,
     val events: List<ProbeEvent>,
     val testType: String = "GENERAL",
+    val vehicleAway: VehicleAwayDiagnosticSummary = VehicleAwayDiagnosticSummary(),
 ) {
     fun humanText(nowMs: Long = System.currentTimeMillis()): String = buildString {
         appendLine("诊断编号：$ticket")
@@ -30,6 +82,16 @@ data class PowerDiagnosticEvidence(
         appendLine("进程：$processId")
         appendLine("测试类型：$testType")
         appendLine("录像：$recorder · $source · segment $segment · WakeLock $wakeLock")
+        appendLine(
+            "离车判定：${vehicleAway.phase} · powerEvidence=${vehicleAway.backgroundPowerOffEvidence} " +
+                "· route=${vehicleAway.cameraLossRoute} · reason=${vehicleAway.lastReason}",
+        )
+        appendLine(
+            "离车信号：foreground=${vehicleAway.appForeground} · screenOn=${vehicleAway.screenOn} " +
+                "· mainDisplayOn=${vehicleAway.mainDisplayOn} " +
+                "· sawScreenOff=${vehicleAway.sawScreenOffWhileBackground} " +
+                "· sawDisplayOff=${vehicleAway.sawMainDisplayOffWhileBackground}",
+        )
         appendLine("最近系统退出：$exitReason")
         appendLine("本次测试时间线：")
         if (events.isEmpty()) appendLine("- 暂无关键事件")
@@ -55,6 +117,7 @@ object PowerDiagnosticRepository {
         "RECORDER_CAMERA_RECOVERY_AVAILABILITY_TRACKED", "RECORDER_WAKE_LOCK_ACQUIRED",
         "RECORDER_WAKE_LOCK_RELEASED", "RECORDER_STOP", "RECORDER_STOPPED",
         "RECORDER_CAMERA_RESUME_GATE_ARMED", "RECORDER_CAMERA_RESUME_GATE_DISARMED",
+        "RECORDER_CAMERA_LOSS_ROUTE", "RECORDER_VEHICLE_AWAY_SIGNAL",
         "SURROUND_PREVIEW_BACKGROUND_STALE", "SURROUND_PREVIEW_FOREGROUND_REBUILD",
     )
 
@@ -67,6 +130,9 @@ object PowerDiagnosticRepository {
             .takeLast(120)
         val markerEvent = scoped.firstOrNull { it.eventName == "VEHICLE_AWAY_TEST_MARKER" }
         val marker = markerEvent?.payload?.get("detail")
+        val lastRecorderStart = all.indexOfLast { it.eventName == "RECORDER_START" }
+        val diagnosticStart = maxOf(lastRecorderStart, markerIndex, 0)
+        val recorderScope = all.drop(diagnosticStart)
         val state = CameraRecordingService.state.value
         return PowerDiagnosticEvidence(
             ticket = marker?.let { PowerDiagnosticCodec.safeToken(it, 12) }
@@ -82,6 +148,7 @@ object PowerDiagnosticRepository {
             exitReason = latestExitReason(context),
             events = scoped,
             testType = markerEvent?.payload?.get("testType") ?: "GENERAL",
+            vehicleAway = VehicleAwayDiagnosticSummary.fromEvents(recorderScope),
         )
     }
 
@@ -130,6 +197,15 @@ object PowerDiagnosticCodec {
             "test=${safeToken(evidence.testType, 24)}",
             "src=${safeToken(evidence.source, 12)}", "seg=${evidence.segment}",
             "wl=${if (evidence.wakeLock) 1 else 0}", "exit=${safeToken(evidence.exitReason, 70)}",
+            "va=${safeToken(evidence.vehicleAway.phase, 12)}",
+            "af=${if (evidence.vehicleAway.appForeground) 1 else 0}",
+            "scr=${if (evidence.vehicleAway.screenOn) 1 else 0}",
+            "dsp=${if (evidence.vehicleAway.mainDisplayOn) 1 else 0}",
+            "dark=${if (evidence.vehicleAway.backgroundPowerOffEvidence) 1 else 0}",
+            "ss=${if (evidence.vehicleAway.sawScreenOffWhileBackground) 1 else 0}",
+            "sd=${if (evidence.vehicleAway.sawMainDisplayOffWhileBackground) 1 else 0}",
+            "route=${safeToken(evidence.vehicleAway.cameraLossRoute, 24)}",
+            "vr=${safeToken(evidence.vehicleAway.lastReason, 48)}",
         )
         val now = System.currentTimeMillis()
         val tokens = evidence.events.asReversed().map { event ->
@@ -149,7 +225,9 @@ object PowerDiagnosticCodec {
         "detail", "probeId", "interactive", "displays", "appForeground", "activity",
         "recorder", "source", "camera", "segment", "wakeLock", "reason", "result",
         "attempt", "processStartId", "testType", "phase", "screenOn", "mainDisplayOn",
-        "pendingToken", "confirmAtElapsedMs",
+        "pendingToken", "confirmAtElapsedMs", "backgroundPowerOffEvidence",
+        "sawScreenOffWhileBackground", "sawMainDisplayOffWhileBackground", "route",
+        "decision", "signal", "value", "lastReason", "cameraLoss",
     ).mapNotNull { key -> event.payload[key]?.let { "$key=$it" } }.joinToString(" ")
 
     fun safeToken(value: String, maxLength: Int): String = value

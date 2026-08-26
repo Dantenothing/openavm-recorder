@@ -19,6 +19,11 @@ data class VehicleAwaySnapshot(
     val pendingToken: Long = 0L,
     val pendingSinceMs: Long? = null,
     val confirmAtMs: Long? = null,
+    val backgroundSinceMs: Long? = null,
+    val backgroundPowerOffEvidence: Boolean = false,
+    val sawScreenOffWhileBackground: Boolean = false,
+    val sawMainDisplayOffWhileBackground: Boolean = false,
+    val powerOffEvidenceAtMs: Long? = null,
     val lastReason: String? = null,
 )
 
@@ -62,27 +67,52 @@ class VehicleAwayStateMachine(
 
     fun onAppForeground(generation: Long, foreground: Boolean, nowMs: Long): VehicleAwayAction {
         if (!accepts(generation)) return VehicleAwayAction.None
-        snapshot = snapshot.copy(appForeground = foreground)
+        val enteringBackground = snapshot.appForeground && !foreground
+        snapshot = if (foreground) {
+            snapshot.copy(
+                appForeground = true,
+                backgroundSinceMs = null,
+                backgroundPowerOffEvidence = false,
+                sawScreenOffWhileBackground = false,
+                sawMainDisplayOffWhileBackground = false,
+                powerOffEvidenceAtMs = null,
+            )
+        } else {
+            snapshot.copy(
+                appForeground = false,
+                backgroundSinceMs = if (enteringBackground) nowMs else snapshot.backgroundSinceMs,
+            )
+        }
+        if (!foreground) latchBackgroundPowerOffEvidence(nowMs)
         return if (foreground) cancelPending("APP_FOREGROUND") else armIfReady(nowMs)
     }
 
     fun onScreenPower(generation: Long, screenOn: Boolean, nowMs: Long): VehicleAwayAction {
         if (!accepts(generation)) return VehicleAwayAction.None
         snapshot = snapshot.copy(screenOn = screenOn)
+        if (!screenOn) latchBackgroundPowerOffEvidence(nowMs)
         return if (screenOn) cancelPending("SCREEN_ON") else armIfReady(nowMs)
     }
 
     fun onMainDisplayPower(generation: Long, displayOn: Boolean, nowMs: Long): VehicleAwayAction {
         if (!accepts(generation)) return VehicleAwayAction.None
         snapshot = snapshot.copy(mainDisplayOn = displayOn)
+        if (!displayOn) latchBackgroundPowerOffEvidence(nowMs)
         return if (displayOn) cancelPending("MAIN_DISPLAY_ON") else armIfReady(nowMs)
     }
 
     fun onCameraLoss(generation: Long): VehicleAwayAction {
-        if (!isCurrent(generation) || snapshot.phase != VehicleAwayPhase.PENDING) {
+        if (!isCurrent(generation)) {
             return VehicleAwayAction.None
         }
-        return confirm("CAMERA_LOSS_DURING_PENDING")
+        return when {
+            snapshot.phase == VehicleAwayPhase.PENDING -> confirm("CAMERA_LOSS_DURING_PENDING")
+            snapshot.phase == VehicleAwayPhase.ACTIVE &&
+                !snapshot.appForeground && snapshot.backgroundPowerOffEvidence -> {
+                confirm("CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF")
+            }
+            else -> VehicleAwayAction.None
+        }
     }
 
     fun onTimer(generation: Long, pendingToken: Long, nowMs: Long): VehicleAwayAction {
@@ -115,6 +145,30 @@ class VehicleAwayStateMachine(
             lastReason = "POWER_SIGNALS_DETECTED",
         )
         return VehicleAwayAction.Schedule(snapshot.generation, token, confirmAt)
+    }
+
+    /**
+     * A lock/sleep power edge may bounce back to ON before the HAL reports Camera
+     * disconnect. Preserve that history for the current background episode so the
+     * later Camera loss is not misclassified as an OEM-camera interruption.
+     */
+    private fun latchBackgroundPowerOffEvidence(nowMs: Long) {
+        if (snapshot.appForeground) return
+        val screenEvidence = !snapshot.screenOn
+        val displayEvidence = !snapshot.mainDisplayOn
+        if (!screenEvidence && !displayEvidence) return
+        snapshot = snapshot.copy(
+            backgroundPowerOffEvidence = true,
+            sawScreenOffWhileBackground = snapshot.sawScreenOffWhileBackground || screenEvidence,
+            sawMainDisplayOffWhileBackground =
+                snapshot.sawMainDisplayOffWhileBackground || displayEvidence,
+            powerOffEvidenceAtMs = snapshot.powerOffEvidenceAtMs ?: nowMs,
+            lastReason = if (snapshot.phase == VehicleAwayPhase.ACTIVE) {
+                "BACKGROUND_POWER_OFF_EVIDENCE"
+            } else {
+                snapshot.lastReason
+            },
+        )
     }
 
     private fun cancelPending(reason: String): VehicleAwayAction {

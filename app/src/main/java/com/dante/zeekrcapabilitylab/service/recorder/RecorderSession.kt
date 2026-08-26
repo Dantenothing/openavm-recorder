@@ -698,37 +698,37 @@ class RecorderSession(
 
     fun onAppForegroundChanged(foreground: Boolean) {
         postCamera {
-            applyVehicleAwayAction(
-                vehicleAway.onAppForeground(
-                    manualSessionGeneration,
-                    foreground,
-                    SystemClock.elapsedRealtime(),
-                ),
+            val action = vehicleAway.onAppForeground(
+                manualSessionGeneration,
+                foreground,
+                SystemClock.elapsedRealtime(),
             )
+            logVehicleAwaySignal("APP_FOREGROUND", foreground.toString(), action)
+            applyVehicleAwayAction(action)
         }
     }
 
     fun onScreenPowerChanged(screenOn: Boolean) {
         postCamera {
-            applyVehicleAwayAction(
-                vehicleAway.onScreenPower(
-                    manualSessionGeneration,
-                    screenOn,
-                    SystemClock.elapsedRealtime(),
-                ),
+            val action = vehicleAway.onScreenPower(
+                manualSessionGeneration,
+                screenOn,
+                SystemClock.elapsedRealtime(),
             )
+            logVehicleAwaySignal("SCREEN_ON", screenOn.toString(), action)
+            applyVehicleAwayAction(action)
         }
     }
 
     fun onMainDisplayPowerChanged(displayOn: Boolean) {
         postCamera {
-            applyVehicleAwayAction(
-                vehicleAway.onMainDisplayPower(
-                    manualSessionGeneration,
-                    displayOn,
-                    SystemClock.elapsedRealtime(),
-                ),
+            val action = vehicleAway.onMainDisplayPower(
+                manualSessionGeneration,
+                displayOn,
+                SystemClock.elapsedRealtime(),
             )
+            logVehicleAwaySignal("MAIN_DISPLAY_ON", displayOn.toString(), action)
+            applyVehicleAwayAction(action)
         }
     }
 
@@ -1962,7 +1962,37 @@ class RecorderSession(
             "pendingToken" to away.pendingToken.toString(),
             "pendingSinceElapsedMs" to (away.pendingSinceMs?.toString() ?: "-"),
             "confirmAtElapsedMs" to (away.confirmAtMs?.toString() ?: "-"),
+            "backgroundSinceElapsedMs" to (away.backgroundSinceMs?.toString() ?: "-"),
+            "backgroundPowerOffEvidence" to away.backgroundPowerOffEvidence.toString(),
+            "sawScreenOffWhileBackground" to away.sawScreenOffWhileBackground.toString(),
+            "sawMainDisplayOffWhileBackground" to
+                away.sawMainDisplayOffWhileBackground.toString(),
+            "powerOffEvidenceAtElapsedMs" to (away.powerOffEvidenceAtMs?.toString() ?: "-"),
+            "lastReason" to (away.lastReason ?: "-"),
         )
+    }
+
+    private fun logVehicleAwaySignal(
+        signal: String,
+        value: String,
+        action: VehicleAwayAction,
+    ) {
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_VEHICLE_AWAY_SIGNAL",
+            payload = vehicleAwayDiagnosticPayload() + mapOf(
+                "signal" to signal,
+                "value" to value,
+                "decision" to vehicleAwayActionName(action),
+            ),
+        )
+    }
+
+    private fun vehicleAwayActionName(action: VehicleAwayAction): String = when (action) {
+        VehicleAwayAction.None -> "NONE"
+        is VehicleAwayAction.Schedule -> "SCHEDULE"
+        is VehicleAwayAction.Cancel -> "CANCEL_${action.reason}"
+        is VehicleAwayAction.Confirm -> "CONFIRM_${action.reason}"
     }
 
     private fun handleCameraLoss(
@@ -1975,7 +2005,19 @@ class RecorderSession(
         startInFlight = false
         cameraOpenInFlight = false
         val token = manualSessionGeneration
-        if (applyVehicleAwayAction(vehicleAway.onCameraLoss(token), cameraLossError = message)) {
+        val vehicleAwayAction = vehicleAway.onCameraLoss(token)
+        if (vehicleAwayAction is VehicleAwayAction.Confirm) {
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_CAMERA_LOSS_ROUTE",
+                payload = vehicleAwayDiagnosticPayload() + mapOf(
+                    "route" to "TERMINAL_STOP",
+                    "reason" to vehicleAwayAction.reason,
+                    "cameraLoss" to message,
+                ),
+            )
+        }
+        if (applyVehicleAwayAction(vehicleAwayAction, cameraLossError = message)) {
             return
         }
         val wasResuming = cameraRecovery.snapshot.phase == CameraRecoveryPhase.RESUMING
@@ -2004,6 +2046,15 @@ class RecorderSession(
         val recoveryArmed = BuildConfig.CAMERA_INTERRUPTION_RECOVERY_ENABLED &&
             recoverableContention &&
             cameraRecovery.beginRecoverableLoss(token, message, SystemClock.elapsedRealtime())
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_LOSS_ROUTE",
+            payload = vehicleAwayDiagnosticPayload() + mapOf(
+                "route" to if (recoveryArmed) "PR12_RECOVERY" else "TERMINAL_CAMERA_ERROR",
+                "reason" to if (recoveryArmed) "NO_VEHICLE_AWAY_EVIDENCE" else message,
+                "cameraLoss" to message,
+            ),
+        )
         EventLogger.logEvent(
             category = Categories.SYSTEM,
             eventName = "RECORDER_CAMERA_LOSS",

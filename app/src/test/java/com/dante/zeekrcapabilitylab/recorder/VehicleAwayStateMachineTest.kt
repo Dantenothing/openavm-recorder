@@ -5,6 +5,7 @@ import com.dante.zeekrcapabilitylab.service.recorder.VehicleAwayPhase
 import com.dante.zeekrcapabilitylab.service.recorder.VehicleAwayPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.VehicleAwayStateMachine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,6 +102,95 @@ class VehicleAwayStateMachineTest {
 
         assertEquals(VehicleAwayAction.None, machine.onCameraLoss(generation))
         assertEquals(VehicleAwayPhase.ACTIVE, machine.snapshot.phase)
+        assertFalse(machine.snapshot.backgroundPowerOffEvidence)
+    }
+
+    @Test
+    fun screenOffWhileBackgroundedMakesLaterCameraLossTerminalWithoutDisplayOff() {
+        val machine = activeMachine()
+        machine.onAppForeground(generation, false, 1_000L)
+        machine.onScreenPower(generation, screenOn = false, nowMs = 2_000L)
+
+        assertTrue(machine.snapshot.backgroundPowerOffEvidence)
+        assertTrue(machine.snapshot.sawScreenOffWhileBackground)
+        assertFalse(machine.snapshot.sawMainDisplayOffWhileBackground)
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF"),
+            machine.onCameraLoss(generation),
+        )
+    }
+
+    @Test
+    fun displayOffWhileBackgroundedMakesLaterCameraLossTerminalWithoutScreenOff() {
+        val machine = activeMachine()
+        machine.onAppForeground(generation, false, 1_000L)
+        machine.onMainDisplayPower(generation, displayOn = false, nowMs = 2_000L)
+
+        assertTrue(machine.snapshot.backgroundPowerOffEvidence)
+        assertFalse(machine.snapshot.sawScreenOffWhileBackground)
+        assertTrue(machine.snapshot.sawMainDisplayOffWhileBackground)
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF"),
+            machine.onCameraLoss(generation),
+        )
+    }
+
+    @Test
+    fun powerOnBounceDoesNotEraseEvidenceBeforeCameraLoss() {
+        val machine = pendingMachine()
+        machine.onScreenPower(generation, screenOn = true, nowMs = 4_000L)
+        machine.onMainDisplayPower(generation, displayOn = true, nowMs = 5_000L)
+
+        assertEquals(VehicleAwayPhase.ACTIVE, machine.snapshot.phase)
+        assertTrue(machine.snapshot.backgroundPowerOffEvidence)
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF"),
+            machine.onCameraLoss(generation),
+        )
+    }
+
+    @Test
+    fun foregroundClearsBackgroundEvidenceBeforeLaterCameraLoss() {
+        val machine = activeMachine()
+        machine.onAppForeground(generation, false, 1_000L)
+        machine.onScreenPower(generation, screenOn = false, nowMs = 2_000L)
+
+        machine.onAppForeground(generation, true, 3_000L)
+
+        assertFalse(machine.snapshot.backgroundPowerOffEvidence)
+        assertFalse(machine.snapshot.sawScreenOffWhileBackground)
+        assertEquals(VehicleAwayAction.None, machine.onCameraLoss(generation))
+        assertEquals(VehicleAwayPhase.ACTIVE, machine.snapshot.phase)
+    }
+
+    @Test
+    fun powerOffBeforeBackgroundIsLatchedWhenAppLeavesForeground() {
+        val machine = activeMachine()
+        machine.onScreenPower(generation, screenOn = false, nowMs = 1_000L)
+
+        machine.onAppForeground(generation, false, 2_000L)
+
+        assertTrue(machine.snapshot.backgroundPowerOffEvidence)
+        assertTrue(machine.snapshot.sawScreenOffWhileBackground)
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF"),
+            machine.onCameraLoss(generation),
+        )
+    }
+
+    @Test
+    fun newManualSessionCannotInheritOldBackgroundPowerEvidence() {
+        val machine = activeMachine()
+        machine.onAppForeground(generation, false, 1_000L)
+        machine.onScreenPower(generation, screenOn = false, nowMs = 2_000L)
+        machine.endSession(generation, "MANUAL_STOP")
+
+        machine.beginManualSession(generation + 1L)
+
+        assertFalse(machine.snapshot.backgroundPowerOffEvidence)
+        assertFalse(machine.snapshot.sawScreenOffWhileBackground)
+        assertFalse(machine.snapshot.sawMainDisplayOffWhileBackground)
+        assertEquals(VehicleAwayAction.None, machine.onCameraLoss(generation + 1L))
     }
 
     @Test

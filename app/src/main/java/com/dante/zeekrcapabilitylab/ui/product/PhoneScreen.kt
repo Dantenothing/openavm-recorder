@@ -62,7 +62,7 @@ fun PhoneScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("离车与预览诊断", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("请选择测试类型。锁车离开确认约 30 秒后会保存当前段并结束 Session；解锁后不会自动恢复。")
+        Text("请选择测试类型。锁车后，稳定离车信号或随后发生的车辆 Camera 断开都会结束 Session；解锁后不会自动恢复。")
 
         evidence?.let { current ->
             Card(Modifier.fillMaxWidth()) {
@@ -110,11 +110,11 @@ fun PhoneScreen() {
 
         Card(Modifier.fillMaxWidth()) {
             Text(
-                "锁车测试预期：约 30 秒后 Session 自动结束并释放 Camera/WakeLock。回来后应保持待机，必须再次手动 Start。",
+                "锁车测试预期：如果三项离车信号稳定，约 30 秒后停止；否则应在车辆自然切断 Camera（以往约 5 分钟）时停止。回来后应保持待机，必须再次手动 Start。",
                 Modifier.padding(18.dp),
             )
         }
-        Text("手机连接功能仍在开发中，本页只是 alpha8 的临时诊断入口。")
+        Text("手机连接功能仍在开发中，本页只是 alpha9 的临时诊断入口。")
     }
 }
 
