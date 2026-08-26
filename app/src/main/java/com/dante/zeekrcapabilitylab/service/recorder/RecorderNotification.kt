@@ -52,8 +52,6 @@ object RecorderNotification {
             append(state.cameraId ?: "?")
             append(" ")
             append(profile?.label ?: "")
-            append(Utils.t(" · segment ", " · 分段 "))
-            append(state.segmentNumber)
         }
         val text = buildString {
             append(statusLabel(state.status))
@@ -64,10 +62,6 @@ object RecorderNotification {
                     Utils.t(" | background idle", " | 后台待机")
                 },
             )
-            state.currentFile?.let {
-                append(" | ")
-                append(it.substringAfterLast('/'))
-            }
             state.segmentStartedAtEpochMs?.let {
                 append(" | ")
                 append(Utils.formatEpoch(it))

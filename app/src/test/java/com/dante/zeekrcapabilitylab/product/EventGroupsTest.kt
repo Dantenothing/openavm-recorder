@@ -19,14 +19,18 @@ class EventGroupsTest {
         stop: Long,
         protected: Boolean = false,
         eventId: String? = null,
+        segmentNumber: Int = 1,
+        recordingSessionId: String? = null,
+        processStartId: String = "1-1",
     ): EventGroups.Segment {
         val sidecar = SegmentSidecar(
             file = file.absolutePath,
             cameraId = "2",
             profile = profile,
             segmentSeconds = 60,
-            segmentNumber = 1,
-            processStartId = "1-1",
+            segmentNumber = segmentNumber,
+            processStartId = processStartId,
+            recordingSessionId = recordingSessionId,
             startedAtEpochMs = start,
             stoppedAtEpochMs = stop,
             result = SegmentSidecar.RESULT_SUCCESS,
@@ -88,5 +92,59 @@ class EventGroupsTest {
 
         assertEquals(1, incidents.size)
         assertEquals(listOf("before.mp4", "current.mp4", "next.mp4"), incidents[0].segments.map { it.file.name })
+    }
+
+    @Test
+    fun stableSessionIdPresentsManyInternalFilesAsOneRecording() {
+        val dir = File.createTempFile("event-groups", "").parentFile
+        val first = segment(File(dir, "a.mp4"), 1_000, 61_000, segmentNumber = 1, recordingSessionId = "session-a")
+        val second = segment(File(dir, "b.mp4"), 61_010, 121_010, segmentNumber = 2, recordingSessionId = "session-a")
+        val later = segment(File(dir, "c.mp4"), 200_000, 220_000, segmentNumber = 1, recordingSessionId = "session-b")
+
+        val recordings = EventGroups.groupRecordings(listOf(first, later, second))
+
+        assertEquals(2, recordings.size)
+        assertEquals(listOf("a.mp4", "b.mp4"), recordings[1].segments.map { it.file.name })
+        assertEquals(120_000L, recordings[1].durationMs)
+    }
+
+    @Test
+    fun legacySidecarsUseConsecutiveNumbersWithoutMergingLaterStart() {
+        val dir = File.createTempFile("event-groups", "").parentFile
+        val first = segment(File(dir, "a.mp4"), 1_000, 61_000, segmentNumber = 1)
+        val second = segment(File(dir, "b.mp4"), 61_010, 121_010, segmentNumber = 2)
+        val restarted = segment(File(dir, "c.mp4"), 121_020, 141_020, segmentNumber = 1)
+
+        val recordings = EventGroups.groupRecordings(listOf(first, second, restarted))
+
+        assertEquals(2, recordings.size)
+        assertEquals(listOf("a.mp4", "b.mp4"), recordings[1].segments.map { it.file.name })
+        assertEquals(listOf("c.mp4"), recordings[0].segments.map { it.file.name })
+    }
+
+    @Test
+    fun protectedSessionProducesOneSavedEventForTheWholeRecording() {
+        val dir = File.createTempFile("event-groups", "").parentFile
+        val first = segment(
+            File(dir, "a.mp4"),
+            1_000,
+            61_000,
+            protected = true,
+            segmentNumber = 1,
+            recordingSessionId = "session-a",
+        )
+        val second = segment(
+            File(dir, "b.mp4"),
+            61_010,
+            121_010,
+            protected = true,
+            segmentNumber = 2,
+            recordingSessionId = "session-a",
+        )
+
+        val incidents = EventGroups.groupIncidents(listOf(first, second))
+
+        assertEquals(1, incidents.size)
+        assertEquals(listOf("a.mp4", "b.mp4"), incidents.single().segments.map { it.file.name })
     }
 }

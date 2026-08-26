@@ -74,8 +74,7 @@ fun EventsScreen() {
     var segments by remember { mutableStateOf<List<EventGroups.Segment>>(emptyList()) }
     var covers by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
     var statusText by remember { mutableStateOf("") }
-    var playFile by remember { mutableStateOf<File?>(null) }
-    var pendingDeleteFile by remember { mutableStateOf<File?>(null) }
+    var playGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedNames by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -109,26 +108,6 @@ fun EventsScreen() {
         }
     }
 
-    fun toggleFileProtection(segment: EventGroups.Segment) {
-        scope.launch(Dispatchers.IO) {
-            val changed = if (segment.sidecar.protected) {
-                RecorderLibrary.unbookmark(segment.file)
-            } else {
-                RecorderLibrary.bookmark(segment.file)
-            }
-            withContext(Dispatchers.Main) {
-                statusText = if (!changed) {
-                    Utils.t("Unable to change protection", "保护状态修改失败")
-                } else if (segment.sidecar.protected) {
-                    Utils.t("Protection removed", "已取消保护")
-                } else {
-                    Utils.t("Recording protected", "录像已保护")
-                }
-            }
-            refresh()
-        }
-    }
-
     fun toggleGroupProtection(group: EventGroups.EventGroup) {
         scope.launch(Dispatchers.IO) {
             val protect = group.protectedCount == 0
@@ -137,22 +116,11 @@ fun EventsScreen() {
                 else RecorderLibrary.unbookmark(segment.file)
             }
             withContext(Dispatchers.Main) {
-                statusText = if (protect) Utils.t("Protected $changed segments", "已保护 $changed 个分段") else Utils.t("Removed protection from $changed segments", "已取消保护 $changed 个分段")
-            }
-            refresh()
-        }
-    }
-
-    fun deleteFile(file: File) {
-        scope.launch(Dispatchers.IO) {
-            thumbnailCache.remove(file)
-            val result = RecorderLibrary.deleteManagedByUser(segmentsDir, file)
-            withContext(Dispatchers.Main) {
-                if (result.deleted) {
-                    if (playFile == file) playFile = null
-                    statusText = Utils.t("Recording deleted", "录像已删除")
+                statusText = if (changed == group.segments.size) {
+                    if (protect) Utils.t("Recording protected", "录像已保护")
+                    else Utils.t("Protection removed", "已取消保护")
                 } else {
-                    statusText = deleteFailureText(result.reason)
+                    Utils.t("Unable to change protection", "保护状态修改失败")
                 }
             }
             refresh()
@@ -161,15 +129,18 @@ fun EventsScreen() {
 
     fun deleteGroup(group: EventGroups.EventGroup) {
         scope.launch(Dispatchers.IO) {
-            val results = group.segments.map { segment ->
-                thumbnailCache.remove(segment.file)
-                RecorderLibrary.deleteManaged(segmentsDir, segment.file)
-            }
-            val deleted = results.count { it.deleted }
-            val blocked = results.size - deleted
+            val attempts = RecorderLibrary.deleteManagedByUser(
+                segmentsDir,
+                group.segments.map { it.file },
+            )
+            attempts.filter { it.result.deleted }.forEach { thumbnailCache.remove(it.file) }
+            val blocked = attempts.count { !it.result.deleted }
             withContext(Dispatchers.Main) {
-                statusText = Utils.t("Deleted $deleted segments", "已删除 $deleted 个分段") +
-                    if (blocked > 0) Utils.t("; kept $blocked protected or locked segments", "；受保护或锁定中的 $blocked 个已保留") else ""
+                statusText = if (blocked == 0) {
+                    Utils.t("Video deleted", "视频已删除")
+                } else {
+                    Utils.t("Video could not be fully deleted because part is locked", "视频未能完整删除，部分内容正在使用中")
+                }
             }
             refresh()
         }
@@ -187,16 +158,13 @@ fun EventsScreen() {
             val deletedNames = deletedFiles.mapTo(mutableSetOf()) { it.name }
             val blocked = names.size - deletedNames.size
             withContext(Dispatchers.Main) {
-                statusText = Utils.t(
-                    "Deleted ${deletedNames.size} recordings",
-                    "已删除 ${deletedNames.size} 段录像",
-                ) + if (blocked > 0) {
+                statusText = if (blocked > 0) {
                     Utils.t(
-                        "; kept $blocked locked or unavailable recordings",
-                        "；已保留 $blocked 段锁定中或不可用的录像",
+                        "Some selected recordings could not be fully deleted because content is locked",
+                        "部分所选录像未能完整删除，部分内容正在使用中",
                     )
                 } else {
-                    ""
+                    Utils.t("Selected recordings deleted", "已删除所选录像")
                 }
             }
             refresh()
@@ -206,9 +174,10 @@ fun EventsScreen() {
     LaunchedEffect(libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
-    val dateGroups = remember(segments, languageMode) { EventGroups.groupByDate(segments) }
-    val playbackSegments = remember(segments) {
-        segments.sortedByDescending(::recordingEpoch)
+    val recordingGroups = remember(segments) { EventGroups.groupRecordings(segments) }
+    val dateGroups = remember(segments, languageMode) { EventGroups.groupRecordingsByDate(segments) }
+    val selectedRecordingCount = recordingGroups.count { group ->
+        group.segments.all { it.file.name in selectedNames }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -236,9 +205,9 @@ fun EventsScreen() {
                         Text(Utils.t("Recordings", "录像记录"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Text(
                             if (selectionMode) {
-                                Utils.t("${selectedNames.size} selected", "已选择 ${selectedNames.size} 项")
+                                Utils.t("$selectedRecordingCount selected", "已选择 $selectedRecordingCount 项")
                             } else {
-                                Utils.t("${segments.size} recordings", "${segments.size} 段录像")
+                                Utils.t("${recordingGroups.size} recordings", "${recordingGroups.size} 个录像")
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -247,7 +216,7 @@ fun EventsScreen() {
                     if (selectionMode) {
                         OutlinedButton(
                             onClick = {
-                                selectedNames = if (selectedNames.size == segments.size) {
+                                selectedNames = if (selectedRecordingCount == recordingGroups.size) {
                                     emptySet()
                                 } else {
                                     segments.mapTo(mutableSetOf()) { it.file.name }
@@ -255,7 +224,7 @@ fun EventsScreen() {
                             },
                         ) {
                             Text(
-                                if (selectedNames.size == segments.size) {
+                                if (selectedRecordingCount == recordingGroups.size) {
                                     Utils.t("Clear all", "全部取消")
                                 } else {
                                     Utils.t("Select all", "全选")
@@ -267,7 +236,7 @@ fun EventsScreen() {
                             enabled = selectedNames.isNotEmpty(),
                         ) {
                             Text(
-                                Utils.t("Delete (${selectedNames.size})", "删除 (${selectedNames.size})"),
+                                Utils.t("Delete ($selectedRecordingCount)", "删除 ($selectedRecordingCount)"),
                                 color = if (selectedNames.isNotEmpty()) {
                                     MaterialTheme.colorScheme.error
                                 } else {
@@ -284,7 +253,7 @@ fun EventsScreen() {
                     } else {
                         OutlinedButton(
                             onClick = { selectionMode = true },
-                            enabled = segments.isNotEmpty(),
+                            enabled = recordingGroups.isNotEmpty(),
                         ) { Text(Utils.t("Select", "选择")) }
                         OutlinedButton(onClick = { refresh() }) { Text(Utils.t("Refresh", "刷新")) }
                     }
@@ -305,19 +274,22 @@ fun EventsScreen() {
                 }
                 items(incidents, key = { "event:${it.segments.first().file.name}" }) { group ->
                     val first = group.segments.first()
-                    val groupNames = group.segments.mapTo(mutableSetOf()) { it.file.name }
-                    val selectedCount = groupNames.count { it in selectedNames }
+                    val eventNames = group.segments.mapTo(mutableSetOf()) { it.file.name }
+                    val groupNames = recordingGroups
+                        .filter { recording -> recording.segments.any { it.file.name in eventNames } }
+                        .flatMapTo(mutableSetOf()) { recording -> recording.segments.map { it.file.name } }
+                    val selected = groupNames.isNotEmpty() && groupNames.all { it in selectedNames }
                     LaunchedEffect(first.file.name) { loadCover(first.file) }
                     SavedEventCard(
                         group = group,
                         cover = covers[first.file.name],
-                        onPlay = { playFile = first.file },
+                        onPlay = { playGroup = group },
                         onToggleProtect = { toggleGroupProtection(group) },
                         onDelete = { pendingDeleteGroup = group },
                         selectionMode = selectionMode,
-                        selectedCount = selectedCount,
+                        selected = selected,
                         onToggleSelection = {
-                            selectedNames = if (selectedCount == groupNames.size) {
+                            selectedNames = if (selected) {
                                 selectedNames - groupNames
                             } else {
                                 selectedNames + groupNames
@@ -340,28 +312,31 @@ fun EventsScreen() {
                 }
             }
 
-            dateGroups.forEach { (date, group) ->
+            dateGroups.forEach { (date, recordings) ->
                 item(key = "date:$date", span = { GridItemSpan(maxLineSpan) }) {
-                    SectionTitle(formatDateHeader(date), Utils.t("${group.segments.size}", "${group.segments.size} 段"))
+                    SectionTitle(formatDateHeader(date), Utils.t("${recordings.size}", "${recordings.size} 个"))
                 }
                 items(
-                    items = group.segments.sortedByDescending { recordingEpoch(it) },
-                    key = { "recording:${it.file.name}" },
-                ) { segment ->
-                    LaunchedEffect(segment.file.name) { loadCover(segment.file) }
+                    items = recordings,
+                    key = { "recording:${it.segments.first().file.name}" },
+                ) { group ->
+                    val first = group.segments.first()
+                    val groupNames = group.segments.mapTo(mutableSetOf()) { it.file.name }
+                    val selected = groupNames.all { it in selectedNames }
+                    LaunchedEffect(first.file.name) { loadCover(first.file) }
                     RecordingCard(
-                        segment = segment,
-                        cover = covers[segment.file.name],
-                        onPlay = { playFile = segment.file },
-                        onToggleProtect = { toggleFileProtection(segment) },
-                        onDelete = { pendingDeleteFile = segment.file },
+                        group = group,
+                        cover = covers[first.file.name],
+                        onPlay = { playGroup = group },
+                        onToggleProtect = { toggleGroupProtection(group) },
+                        onDelete = { pendingDeleteGroup = group },
                         selectionMode = selectionMode,
-                        selected = segment.file.name in selectedNames,
+                        selected = selected,
                         onToggleSelection = {
-                            selectedNames = if (segment.file.name in selectedNames) {
-                                selectedNames - segment.file.name
+                            selectedNames = if (selected) {
+                                selectedNames - groupNames
                             } else {
-                                selectedNames + segment.file.name
+                                selectedNames + groupNames
                             }
                         },
                     )
@@ -370,47 +345,32 @@ fun EventsScreen() {
         }
     }
 
-    playFile?.let { file ->
-        val playbackIndex = playbackSegments.indexOfFirst { it.file == file }
-        val previousFile = playbackSegments.getOrNull(playbackIndex - 1)?.file
-        val nextFile = playbackSegments.getOrNull(playbackIndex + 1)?.file
+    playGroup?.let { group ->
+        val playbackIndex = recordingGroups.indexOfFirst { candidate ->
+            candidate.segments.map { it.file } == group.segments.map { it.file }
+        }
+        val previousGroup = playbackIndex.takeIf { it >= 0 }?.let { recordingGroups.getOrNull(it - 1) }
+        val nextGroup = playbackIndex.takeIf { it >= 0 }?.let { recordingGroups.getOrNull(it + 1) }
         FourLanePlayerDialog(
-            file = file,
-            onPrevious = previousFile?.let { previous -> { playFile = previous } },
-            onNext = nextFile?.let { next -> { playFile = next } },
+            files = group.segments.map { it.file },
+            onPrevious = previousGroup?.let { previous -> { playGroup = previous } },
+            onNext = nextGroup?.let { next -> { playGroup = next } },
             onSendToPhone = null,
             onDelete = {
-                // Close playback first so its MediaPlayer and playback pin are
-                // released before the single confirmation dialog can delete.
-                playFile = null
-                pendingDeleteFile = file
+                // Close playback first so every internal file pin is released
+                // before the single confirmation dialog can delete the recording.
+                playGroup = null
+                pendingDeleteGroup = group
             },
-            onDismiss = { playFile = null },
-        )
-    }
-
-    pendingDeleteFile?.let { file ->
-        AlertDialog(
-            onDismissRequest = { pendingDeleteFile = null },
-            title = { Text(Utils.t("Delete this recording?", "删除这段录像？")) },
-            text = { Text(Utils.t("This will permanently delete the recording, including a protected recording.", "这会永久删除该录像，包括已保护录像。")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDeleteFile = null
-                    deleteFile(file)
-                }) { Text(Utils.t("Delete", "删除"), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteFile = null }) { Text(Utils.t("Cancel", "取消")) }
-            },
+            onDismiss = { playGroup = null },
         )
     }
 
     pendingDeleteGroup?.let { group ->
         AlertDialog(
             onDismissRequest = { pendingDeleteGroup = null },
-            title = { Text(Utils.t("Delete ${group.segments.size} segments?", "删除 ${group.segments.size} 个分段？")) },
-            text = { Text(Utils.t("Protected events will be kept.", "已保护事件会被保留。")) },
+            title = { Text(Utils.t("Delete this video?", "删除这个视频？")) },
+            text = { Text(Utils.t("This will permanently delete all included video, including protected content.", "这会永久删除其中包含的全部视频，包括已保护内容。")) },
             confirmButton = {
                 TextButton(onClick = {
                     pendingDeleteGroup = null
@@ -424,13 +384,16 @@ fun EventsScreen() {
     }
 
     pendingDeleteSelection?.let { names ->
+        val recordingCount = recordingGroups.count { group ->
+            group.segments.all { it.file.name in names }
+        }
         AlertDialog(
             onDismissRequest = { pendingDeleteSelection = null },
             title = {
                 Text(
                     Utils.t(
-                        "Delete ${names.size} selected recordings?",
-                        "删除已选择的 ${names.size} 段录像？",
+                        "Delete $recordingCount selected recordings?",
+                        "删除已选择的 $recordingCount 个录像？",
                     ),
                 )
             },
@@ -478,7 +441,7 @@ private fun SectionTitle(title: String, count: String) {
 
 @Composable
 private fun RecordingCard(
-    segment: EventGroups.Segment,
+    group: EventGroups.EventGroup,
     cover: Bitmap?,
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
@@ -487,7 +450,8 @@ private fun RecordingCard(
     selected: Boolean,
     onToggleSelection: () -> Unit,
 ) {
-    var menuOpen by remember(segment.file.name) { mutableStateOf(false) }
+    val first = group.segments.first()
+    var menuOpen by remember(first.file.name) { mutableStateOf(false) }
     Card(
         Modifier
             .fillMaxWidth()
@@ -508,10 +472,10 @@ private fun RecordingCard(
                         .padding(9.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
-                    if (segment.sidecar.protected) StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
+                    if (group.protectedCount > 0) StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
                 }
                 StatusBadge(
-                    text = if (segment.sidecar.recordingMode == RecordingMode.FRONT_ONLY) {
+                    text = if (first.sidecar.recordingMode == RecordingMode.FRONT_ONLY) {
                         Utils.t("Front", "前方")
                     } else {
                         Utils.t("4 views", "四路")
@@ -542,7 +506,7 @@ private fun RecordingCard(
                         ) { Text("•••", color = Color.White) }
                         RecordingActionsMenu(
                             expanded = menuOpen,
-                            protected = segment.sidecar.protected,
+                            protected = group.protectedCount > 0,
                             onDismiss = { menuOpen = false },
                             onToggleProtect = onToggleProtect,
                             onDelete = onDelete,
@@ -552,12 +516,12 @@ private fun RecordingCard(
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Text(
-                    formatRecordingTime(recordingEpoch(segment)),
+                    formatRecordingTime(group.startedAtEpochMs),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "${formatDuration(segment)}  ·  ${formatBytes(segment.file.length())}",
+                    "${Utils.formatDuration(group.durationMs)}  ·  ${formatBytes(group.totalBytes)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -574,7 +538,7 @@ private fun SavedEventCard(
     onToggleProtect: () -> Unit,
     onDelete: () -> Unit,
     selectionMode: Boolean,
-    selectedCount: Int,
+    selected: Boolean,
     onToggleSelection: () -> Unit,
 ) {
     var menuOpen by remember(group.segments.first().file.name) { mutableStateOf(false) }
@@ -582,7 +546,7 @@ private fun SavedEventCard(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = if (selectionMode) onToggleSelection else onPlay),
-        border = if (selectedCount > 0) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
+        border = if (selected) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column {
             Box {
@@ -599,13 +563,10 @@ private fun SavedEventCard(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     StatusBadge(Utils.t("Saved", "已保存"), Color(0xFFFFB74D))
-                    if (selectionMode && selectedCount > 0) {
-                        StatusBadge("$selectedCount/${group.segments.size}", MaterialTheme.colorScheme.primary)
-                    }
                 }
                 if (selectionMode) {
                     Checkbox(
-                        checked = selectedCount == group.segments.size,
+                        checked = selected,
                         onCheckedChange = { onToggleSelection() },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -639,7 +600,7 @@ private fun SavedEventCard(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    Utils.t("${Utils.formatDuration(group.durationMs)}  ·  ${group.segments.size} segments  ·  ${group.laneCount} views", "${Utils.formatDuration(group.durationMs)}  ·  ${group.segments.size} 段  ·  ${group.laneCount} 路"),
+                    Utils.t("${Utils.formatDuration(group.durationMs)}  ·  ${group.laneCount} views", "${Utils.formatDuration(group.durationMs)}  ·  ${group.laneCount} 路"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -707,9 +668,6 @@ private fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifie
     )
 }
 
-private fun recordingEpoch(segment: EventGroups.Segment): Long =
-    segment.sidecar.startedAtEpochMs ?: segment.file.lastModified()
-
 private fun formatRecordingTime(epochMs: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
 
@@ -721,24 +679,8 @@ private fun formatDateHeader(value: String): String = runCatching {
     ).format(source)
 }.getOrDefault(value)
 
-private fun formatDuration(segment: EventGroups.Segment): String {
-    val duration = segment.sidecar.actualTrack?.durationMs
-        ?: run {
-            val start = segment.sidecar.startedAtEpochMs
-            val stop = segment.sidecar.stoppedAtEpochMs
-            if (start != null && stop != null) stop - start else segment.sidecar.segmentSeconds * 1000L
-        }
-    return Utils.formatDuration(duration)
-}
-
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
     bytes >= 1024L * 1024L -> "%.0f MB".format(bytes / (1024.0 * 1024.0))
     else -> "${bytes / 1024L} KB"
-}
-
-private fun deleteFailureText(reason: String?): String = when (reason) {
-    RecorderLibrary.DELETE_BOOKMARKED -> Utils.t("Recording is protected and was not deleted", "录像已保护，未删除")
-    RecorderLibrary.DELETE_UPLOAD_PINNED -> Utils.t("Recording is temporarily locked and was not deleted", "录像暂时锁定，未删除")
-    else -> Utils.t("Unable to delete recording", "录像删除失败")
 }

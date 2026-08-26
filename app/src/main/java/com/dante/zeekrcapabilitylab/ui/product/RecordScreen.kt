@@ -410,7 +410,7 @@ fun RecordScreen() {
 
             if (recordingActive) {
                 Text(
-                    Utils.t("Writing segment ${recorderState.segmentNumber}", "正在写入第 ${recorderState.segmentNumber} 段"),
+                    Utils.t("Saving recording safely", "正在安全保存录像"),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 5.dp),
@@ -514,7 +514,7 @@ fun RecordScreen() {
         AlertDialog(
             onDismissRequest = { confirmStop = false },
             title = { Text(Utils.t("Stop recording?", "停止录像？")) },
-            text = { Text(Utils.t("The current segment will be finalized and the camera released. Existing recordings will be kept.", "停止后将结束当前分段并释放摄像头。已录制的内容会保留。")) },
+            text = { Text(Utils.t("The current recording will be finalized and the camera released. Existing recordings will be kept.", "停止后将完成当前录像并释放摄像头。已录制的内容会保留。")) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmStop = false
@@ -678,7 +678,7 @@ private fun ProductStatusCard(
             ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
             ProductInfoRow(Utils.t("Estimated recording", "预计可录"), formatEstimatedMinutes(estimatedMinutes))
             ProductInfoRow(Utils.t("Protected usage", "受保护占用"), protectedSpace)
-            ProductInfoRow(Utils.t("Segment length", "分段时长"), formatSegmentDuration(segmentSeconds))
+            ProductInfoRow(Utils.t("Internal file interval", "内部文件间隔"), formatSegmentDuration(segmentSeconds))
             ProductInfoRow(
                 Utils.t("Keep ordinary recordings", "普通录像保留时长"),
                 Utils.t("Up to $retentionHours hours", "最多 $retentionHours 小时"),

@@ -26,6 +26,7 @@ import com.dante.zeekrcapabilitylab.product.CameraRuntime
 import com.dante.zeekrcapabilitylab.product.EmulatorTestRecording
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ConcurrentHashMap
@@ -73,6 +74,7 @@ class RecorderSession(
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private var config: RecorderConfig? = null
+    private var recordingSessionId: String? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var recordingPipeline: RecordingPipeline? = null
@@ -184,6 +186,7 @@ class RecorderSession(
                 return@postCamera
             }
             this.config = config
+            this.recordingSessionId = UUID.randomUUID().toString()
             registerAvailabilityCallback()
             this.previewOutputDesired = true
             releaseRecordingPreviewSurface()
@@ -1153,6 +1156,7 @@ class RecorderSession(
             segmentSeconds = cfg.segmentSeconds,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
+            recordingSessionId = recordingSessionId,
             requestedAtEpochMs = segmentStartedAtEpochMs,
             requestedAtElapsedRealtimeMs = segmentStartedAtElapsedMs,
             startedAtEpochMs = segmentStartedAtEpochMs,
@@ -1298,6 +1302,7 @@ class RecorderSession(
             segmentSeconds = cfg?.segmentSeconds ?: state.segmentSeconds,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
+            recordingSessionId = recordingSessionId,
             requestedAtEpochMs = requestedAtEpoch,
             requestedAtElapsedRealtimeMs = requestedAtElapsed,
             startedAtEpochMs = actualStartedEpoch,
@@ -1670,6 +1675,7 @@ class RecorderSession(
             segmentSeconds = s.segmentSeconds,
             segmentNumber = s.segmentNumber,
             processStartId = s.processStartId,
+            recordingSessionId = s.recordingSessionId,
             requestedAtEpochMs = s.requestedAtEpochMs,
             requestedAtElapsedRealtimeMs = s.requestedAtElapsedRealtimeMs,
             startedAtEpochMs = s.startedAtEpochMs,
@@ -2091,6 +2097,7 @@ class RecorderSession(
         val segmentSeconds: Int,
         val segmentNumber: Int,
         val processStartId: String,
+        val recordingSessionId: String?,
         val requestedAtEpochMs: Long?,
         val requestedAtElapsedRealtimeMs: Long?,
         val startedAtEpochMs: Long?,

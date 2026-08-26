@@ -370,7 +370,7 @@ fun SettingsScreen() {
                     }
                 }
                 OptionRow(
-                    label = Utils.t("Segment length", "分段长度"),
+                    label = Utils.t("Internal file interval", "内部文件间隔"),
                     options = SettingsStore.SEGMENT_OPTIONS.map { Utils.t("${it / 60} min", "${it / 60} 分钟") },
                     selectedIndex = SettingsStore.SEGMENT_OPTIONS.indexOf(segment).coerceAtLeast(0),
                     onSelect = { index ->

@@ -142,6 +142,17 @@ class SegmentSidecarTest {
     }
 
     @Test
+    fun recordingSessionIdRoundTripsAndDefaultsToNull() {
+        val mp4 = tempMp4()
+        val session = sampleSidecar(mp4).copy(recordingSessionId = "recording-123")
+
+        val decoded = SegmentSidecarIO.read(SegmentSidecarIO.writeAtomic(mp4, session))
+
+        assertEquals("recording-123", decoded?.recordingSessionId)
+        assertNull(sampleSidecar(mp4).recordingSessionId)
+    }
+
+    @Test
     fun legacySidecarDefaultsToSurroundWithoutInventingSourceIdentity() {
         val legacy = """
             {

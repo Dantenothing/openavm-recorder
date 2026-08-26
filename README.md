@@ -19,10 +19,10 @@ The current alpha provides:
 
 - a 2×2 live view labelled Front, Rear, Left and Right;
 - explicit `Front only` and `360°` recording modes; front-only remains an experimental vehicle-test path after parked visual calibration;
-- segmented recording to the app's internal storage;
+- one-minute internal MP4 rollover files in the app's internal storage, presented as one recording for each explicit Start/Stop session;
 - protected/saved events that automatic cleanup does not remove;
 - a thumbnail-based recording library with multi-select and confirmed batch deletion;
-- four-view playback, seeking, previous/next recording navigation and single-view zoom;
+- continuous four-view playback and seeking across each recording's internal files, previous/next recording navigation and single-view zoom;
 - optional display-only fisheye correction; and
 - automatic cleanup with a configurable ordinary-recording retention window (8 hours by default), storage limit and reserved free-space threshold.
 
@@ -359,7 +359,7 @@ Signing keys and credentials must never be committed to the repository.
 
 A debug build running on an Android Emulator automatically selects a conservative ordinary Camera2/MediaRecorder source (preferring the back virtual camera at `1280×720`). This path exists only to exercise recorder lifecycle, MP4 segmentation, sidecars, storage cleanup, the library and playback without a vehicle. It uses a debug-only `256 MB` free-space reserve so a standard AVD data partition can record; release builds reject that configuration and keep the normal vehicle reserve policy.
 
-Grant camera and notification permissions, tap **Start recording**, allow several seconds of capture, then tap **Stop** to finalize the segment before opening **Library**. Configure the AVD back camera as **VirtualScene** or a host webcam if the emulator does not already expose one.
+Grant camera and notification permissions, tap **Start recording**, allow several seconds of capture, then tap **Stop** to finalize the recording before opening **Library**. Configure the AVD back camera as **VirtualScene** or a host webcam if the emulator does not already expose one.
 
 The emulator produces one conventional camera image, not a `1280×5140` four-lane AVM composite. In `Front only`, the debug adapter previews and records that one image directly and marks its sidecar as `FRONT_ONLY` / `DIRECT_FRONT`. In `360°`, the four-lane preview/playback can show repeated or sliced portions of the same image. Emulator success does **not** validate Zeekr Camera HAL compatibility, composite geometry, OEM camera contention, encoder performance, thermal behaviour or real-vehicle safety.
 

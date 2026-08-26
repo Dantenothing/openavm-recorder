@@ -64,7 +64,8 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_CORRECTION_CENTER_X = "fisheye_correction_center_x"
         const val KEY_CORRECTION_CENTER_Y = "fisheye_correction_center_y"
 
-        val SEGMENT_OPTIONS = listOf(SEGMENT_1_MIN, SEGMENT_2_MIN, SEGMENT_3_MIN)
+        /** Internal rollover is fixed; the library presents a full Start/Stop session as one recording. */
+        val SEGMENT_OPTIONS = listOf(SEGMENT_1_MIN)
         val STORAGE_OPTIONS = listOf(STORAGE_5_GB, STORAGE_10_GB, STORAGE_15_GB, STORAGE_30_GB)
         val RESERVE_OPTIONS = listOf(RESERVE_10_GB, RESERVE_20_GB, RESERVE_30_GB)
         val RETENTION_HOURS_OPTIONS = listOf(1, 2, 4, 8, 12, 24)

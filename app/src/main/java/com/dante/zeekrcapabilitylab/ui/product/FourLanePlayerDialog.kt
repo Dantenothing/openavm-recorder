@@ -56,6 +56,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dante.zeekrcapabilitylab.player.PlaybackDiagnostics
 import com.dante.zeekrcapabilitylab.player.PlaybackInspector
+import com.dante.zeekrcapabilitylab.player.RecordingPlaybackTimeline
 import com.dante.zeekrcapabilitylab.util.Utils
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
@@ -77,6 +78,13 @@ private data class PlaybackControls(
     val isPlaying: () -> Boolean,
 )
 
+private data class RecordingPlaybackInfo(
+    val diagnostics: List<PlaybackDiagnostics>,
+    val durationsMs: List<Long>,
+    val frontOnly: List<Boolean>,
+    val recordedAtEpochMs: Long,
+)
+
 /**
  * Product playback surface. Composite sidecars use the four-lane redraw path;
  * FRONT_ONLY sidecars render the encoded square frame directly and never
@@ -84,48 +92,79 @@ private data class PlaybackControls(
  */
 @Composable
 fun FourLanePlayerDialog(
-    file: File,
+    files: List<File>,
     onPrevious: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
     onSendToPhone: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
+    require(files.isNotEmpty()) { "A recording must contain at least one segment" }
     val context = LocalContext.current
     val settings = remember { SettingsStore.get(context) }
     val languageMode by AppLanguage.mode.collectAsState()
-    val diagnostics by produceState<PlaybackDiagnostics?>(initialValue = null, file) {
-        value = withContext(Dispatchers.IO) { PlaybackInspector.inspect(file) }
-    }
-    val frontOnly by produceState(initialValue = false, file) {
+    val recordingFiles = remember(files) { files.distinctBy { it.absolutePath } }
+    val recordingKey = remember(recordingFiles) { recordingFiles.joinToString("|") { it.absolutePath } }
+    val playbackInfo by produceState<RecordingPlaybackInfo?>(initialValue = null, recordingKey) {
         value = withContext(Dispatchers.IO) {
-            SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.recordingMode ==
-                RecordingMode.FRONT_ONLY
+            val sidecars = recordingFiles.map { file ->
+                SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))
+            }
+            val diagnostics = recordingFiles.map(PlaybackInspector::inspect)
+            RecordingPlaybackInfo(
+                diagnostics = diagnostics,
+                durationsMs = recordingFiles.indices.map { index ->
+                    diagnostics[index].durationMs
+                        ?: sidecars[index]?.actualTrack?.durationMs
+                        ?: sidecars[index]?.let { sidecar ->
+                            val start = sidecar.startedAtEpochMs
+                            val stop = sidecar.stoppedAtEpochMs
+                            if (start != null && stop != null) stop - start else null
+                        }
+                        ?: sidecars[index]?.segmentSeconds?.times(1000L)
+                        ?: 0L
+                },
+                frontOnly = sidecars.map { it?.recordingMode == RecordingMode.FRONT_ONLY },
+                recordedAtEpochMs = recordingFiles.indices.minOf { index ->
+                    sidecars[index]?.startedAtEpochMs ?: recordingFiles[index].lastModified()
+                },
+            )
         }
     }
     val directionLabels = productDirectionLabels()
 
-    var controls by remember(file) { mutableStateOf<PlaybackControls?>(null) }
-    var playing by remember(file) { mutableStateOf(false) }
-    var firstFrame by remember(file) { mutableStateOf(false) }
-    var positionMs by remember(file) { mutableStateOf(0L) }
-    var durationMs by remember(file) { mutableStateOf(0L) }
-    var dragging by remember(file) { mutableStateOf(false) }
-    var draggedPositionMs by remember(file) { mutableStateOf(0L) }
-    var status by remember(file, languageMode) {
+    val timeline = remember(playbackInfo, recordingKey) {
+        RecordingPlaybackTimeline(playbackInfo?.durationsMs ?: List(recordingFiles.size) { 0L })
+    }
+    var activeIndex by remember(recordingKey) { mutableStateOf(0) }
+    val file = recordingFiles[activeIndex.coerceIn(recordingFiles.indices)]
+    val diagnostics = playbackInfo?.diagnostics?.getOrNull(activeIndex)
+    val frontOnly = playbackInfo?.frontOnly?.getOrNull(activeIndex) == true
+    val durationMs = timeline.totalDurationMs
+    val totalBytes = remember(recordingKey) { recordingFiles.sumOf { it.length().coerceAtLeast(0L) } }
+
+    var controls by remember(recordingKey) { mutableStateOf<PlaybackControls?>(null) }
+    var playing by remember(recordingKey) { mutableStateOf(false) }
+    var firstFrame by remember(recordingKey, activeIndex) { mutableStateOf(false) }
+    var positionMs by remember(recordingKey) { mutableStateOf(0L) }
+    var segmentStartPositionMs by remember(recordingKey) { mutableStateOf(0L) }
+    var autoPlaySegment by remember(recordingKey) { mutableStateOf(true) }
+    var dragging by remember(recordingKey) { mutableStateOf(false) }
+    var draggedPositionMs by remember(recordingKey) { mutableStateOf(0L) }
+    var status by remember(recordingKey, languageMode) {
         mutableStateOf(Utils.t("Opening recording…", "正在打开录像…"))
     }
-    var error by remember(file) { mutableStateOf<String?>(null) }
-    var displayMode by remember(file) { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
-    var lensMode by remember(file) { mutableStateOf(settings.lensMode) }
-    var zoom by remember(file) { mutableStateOf(1f) }
+    var error by remember(recordingKey, activeIndex) { mutableStateOf<String?>(null) }
+    var displayMode by remember(recordingKey) { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
+    var lensMode by remember(recordingKey) { mutableStateOf(settings.lensMode) }
+    var zoom by remember(recordingKey) { mutableStateOf(1f) }
     // AndroidView keeps the attached View across recompositions. Reuse that
     // same attached container when previous/next changes the media source.
     val playbackContainer = remember(context) { FourLaneTextureContainer(context) }
 
-    DisposableEffect(file.absolutePath) {
-        PlaybackPinRegistry.acquire(file)
-        onDispose { PlaybackPinRegistry.release(file) }
+    DisposableEffect(recordingKey) {
+        recordingFiles.forEach(PlaybackPinRegistry::acquire)
+        onDispose { recordingFiles.forEach(PlaybackPinRegistry::release) }
     }
 
     BackHandler(enabled = displayMode.singleLane != null) {
@@ -133,14 +172,29 @@ fun FourLanePlayerDialog(
         zoom = playbackContainer.resetViewport()
     }
 
-    LaunchedEffect(controls) {
+    LaunchedEffect(controls, activeIndex, timeline) {
         val active = controls ?: return@LaunchedEffect
         while (true) {
-            positionMs = runCatching { active.currentPosition() }.getOrDefault(positionMs)
-            durationMs = runCatching { active.duration() }.getOrDefault(durationMs)
+            val localPosition = runCatching { active.currentPosition() }.getOrDefault(0L)
+            positionMs = timeline.globalPosition(activeIndex, localPosition)
             playing = runCatching { active.isPlaying() }.getOrDefault(false)
             delay(250L)
         }
+    }
+
+    val seekRecordingTo: (Long) -> Unit = { requestedPosition ->
+        val target = requestedPosition.coerceIn(0L, durationMs)
+        val located = timeline.locate(target)
+        if (located.segmentIndex == activeIndex) {
+            controls?.seekTo(located.positionInSegmentMs)
+        } else {
+            val resume = playing
+            controls = null
+            segmentStartPositionMs = located.positionInSegmentMs
+            autoPlaySegment = resume
+            activeIndex = located.segmentIndex.coerceIn(recordingFiles.indices)
+        }
+        positionMs = target
     }
 
     Dialog(
@@ -176,7 +230,7 @@ fun FourLanePlayerDialog(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            Utils.formatEpoch(file.lastModified()),
+                            Utils.formatEpoch(playbackInfo?.recordedAtEpochMs ?: recordingFiles.first().lastModified()),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -224,21 +278,35 @@ fun FourLanePlayerDialog(
                                     lensMode = lensMode,
                                     correctionConfig = settings.fisheyeCorrection,
                                     directSingleView = frontOnly,
+                                    startPositionMs = segmentStartPositionMs,
+                                    autoPlay = autoPlaySegment,
                                     onControlsReady = { controls = it },
-                                    onPrepared = { playerDuration ->
-                                        durationMs = playerDuration
-                                        playing = true
-                                        status = Utils.t("Playing", "正在播放")
+                                    onPrepared = {
+                                        playing = autoPlaySegment
+                                        status = if (playing) {
+                                            Utils.t("Playing", "正在播放")
+                                        } else {
+                                            Utils.t("Paused", "已暂停")
+                                        }
                                     },
                                     onFirstFrame = {
                                         firstFrame = true
                                         error = null
-                                        status = Utils.t("Playing", "正在播放")
+                                        status = if (playing) Utils.t("Playing", "正在播放") else Utils.t("Paused", "已暂停")
                                     },
                                     onCompleted = {
-                                        positionMs = durationMs
-                                        playing = false
-                                        status = Utils.t("Playback complete", "播放完成")
+                                        if (activeIndex < recordingFiles.lastIndex) {
+                                            controls = null
+                                            positionMs = timeline.globalPosition(activeIndex + 1, 0L)
+                                            segmentStartPositionMs = 0L
+                                            autoPlaySegment = true
+                                            activeIndex += 1
+                                            status = Utils.t("Playing", "正在播放")
+                                        } else {
+                                            positionMs = durationMs
+                                            playing = false
+                                            status = Utils.t("Playback complete", "播放完成")
+                                        }
                                     },
                                     onError = { message ->
                                         error = message
@@ -299,7 +367,10 @@ fun FourLanePlayerDialog(
                     ) {
                         PlaybackInfoCard(
                             diagnostics = diagnostics,
-                            file = file,
+                            recordedAtEpochMs = playbackInfo?.recordedAtEpochMs
+                                ?: recordingFiles.first().lastModified(),
+                            durationMs = durationMs,
+                            totalBytes = totalBytes,
                             status = status,
                         )
                         error?.let {
@@ -350,24 +421,31 @@ fun FourLanePlayerDialog(
                     },
                     onDrag = { draggedPositionMs = it },
                     onDragFinished = {
-                        controls?.seekTo(draggedPositionMs)
-                        positionMs = draggedPositionMs
+                        seekRecordingTo(draggedPositionMs)
                         dragging = false
                     },
                     onSeekBy = { delta ->
                         val target = (positionMs + delta).coerceIn(0L, durationMs.coerceAtLeast(0L))
-                        controls?.seekTo(target)
-                        positionMs = target
+                        seekRecordingTo(target)
                     },
                     onToggle = {
-                        playing = controls?.toggle?.invoke() ?: false
+                        if (!playing && positionMs >= durationMs && durationMs > 0L) {
+                            segmentStartPositionMs = 0L
+                            autoPlaySegment = true
+                            controls = null
+                            activeIndex = 0
+                            positionMs = 0L
+                            playing = true
+                        } else {
+                            playing = controls?.toggle?.invoke() ?: false
+                            autoPlaySegment = playing
+                        }
                         status = if (playing) Utils.t("Playing", "正在播放") else Utils.t("Paused", "已暂停")
                     },
                 )
             }
         }
     }
-
 }
 
 @Composable
@@ -402,7 +480,9 @@ private fun PlaybackSequenceButton(
 @Composable
 private fun PlaybackInfoCard(
     diagnostics: PlaybackDiagnostics?,
-    file: File,
+    recordedAtEpochMs: Long,
+    durationMs: Long,
+    totalBytes: Long,
     status: String,
 ) {
     Card(Modifier.fillMaxWidth()) {
@@ -414,9 +494,9 @@ private fun PlaybackInfoCard(
             )
             Spacer(Modifier.height(10.dp))
             PlaybackInfoRow(Utils.t("Status", "状态"), status)
-            PlaybackInfoRow(Utils.t("Recorded", "录像时间"), Utils.formatEpoch(file.lastModified()))
-            PlaybackInfoRow(Utils.t("Duration", "时长"), formatPlaybackTime(diagnostics?.durationMs ?: 0L))
-            PlaybackInfoRow(Utils.t("File size", "文件大小"), formatPlaybackBytes(file.length()))
+            PlaybackInfoRow(Utils.t("Recorded", "录像时间"), Utils.formatEpoch(recordedAtEpochMs))
+            PlaybackInfoRow(Utils.t("Duration", "时长"), formatPlaybackTime(durationMs))
+            PlaybackInfoRow(Utils.t("File size", "文件大小"), formatPlaybackBytes(totalBytes))
             PlaybackInfoRow(
                 Utils.t("Resolution", "分辨率"),
                 if (diagnostics?.width != null && diagnostics.height != null) {
@@ -515,8 +595,10 @@ private fun FourLanePlaybackSurface(
     lensMode: FourLaneLensMode,
     correctionConfig: FisheyeCorrectionConfig,
     directSingleView: Boolean,
+    startPositionMs: Long,
+    autoPlay: Boolean,
     onControlsReady: (PlaybackControls?) -> Unit,
-    onPrepared: (Long) -> Unit,
+    onPrepared: () -> Unit,
     onFirstFrame: () -> Unit,
     onCompleted: () -> Unit,
     onError: (String) -> Unit,
@@ -589,8 +671,11 @@ private fun FourLanePlaybackSurface(
                             },
                         ),
                     )
-                    it.start()
-                    onPrepared(duration)
+                    if (startPositionMs > 0L) {
+                        runCatching { it.seekTo(startPositionMs.coerceIn(0L, duration).toInt()) }
+                    }
+                    if (autoPlay) it.start()
+                    onPrepared()
                 }
                 mediaPlayer.setOnInfoListener { _, what, _ ->
                     if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
