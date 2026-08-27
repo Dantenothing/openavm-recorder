@@ -28,6 +28,7 @@ class SegmentSidecarTest {
         segmentSeconds = 60,
         segmentNumber = 4,
         processStartId = "12345-1700000000000",
+        recordingSessionId = "session-1700000000000-a",
         startedAtEpochMs = 1000,
         stoppedAtEpochMs = 61_000,
         startedAtElapsedRealtimeMs = 500,
@@ -63,7 +64,8 @@ class SegmentSidecarTest {
         assertEquals(60_003L, decoded?.actualTrack?.durationMs)
         assertEquals(1800L, decoded?.frameStats?.count)
         assertEquals(5, decoded?.frameHealth?.maxHammingDistance)
-        assertEquals(4, decoded?.schemaVersion)
+        assertEquals(5, decoded?.schemaVersion)
+        assertEquals("session-1700000000000-a", decoded?.recordingSessionId)
         assertEquals(RecordingSourceRole.SURROUND, decoded?.sourceRole)
         assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded?.layoutKind)
     }
@@ -151,7 +153,7 @@ class SegmentSidecarTest {
             sampleSidecar(tempMp4()),
         )
         val legacy = encoded
-            .replace("\"schemaVersion\": 4", "\"schemaVersion\": 3")
+            .replace("\"schemaVersion\": 5", "\"schemaVersion\": 3")
             .lineSequence()
             .filterNot { line ->
                 line.contains("\"sourceRole\"") ||
@@ -164,6 +166,24 @@ class SegmentSidecarTest {
         assertEquals(3, decoded.schemaVersion)
         assertEquals(RecordingSourceRole.SURROUND, decoded.sourceRole)
         assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded.layoutKind)
+    }
+
+    @Test
+    fun schemaFourWithoutRecordingSessionIdRemainsReadable() {
+        val encoded = SegmentSidecarIO.json.encodeToString(
+            SegmentSidecar.serializer(),
+            sampleSidecar(tempMp4()),
+        )
+        val legacy = encoded
+            .replace("\"schemaVersion\": 5", "\"schemaVersion\": 4")
+            .lineSequence()
+            .filterNot { line -> line.contains("\"recordingSessionId\"") }
+            .joinToString("\n")
+
+        val decoded = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), legacy)
+
+        assertEquals(4, decoded.schemaVersion)
+        assertNull(decoded.recordingSessionId)
     }
 
     private fun tempMp4(): File {

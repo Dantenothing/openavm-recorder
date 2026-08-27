@@ -55,7 +55,7 @@ data class SegmentLaneInfo(
 
 @Serializable
 data class SegmentSidecar(
-    val schemaVersion: Int = 4,
+    val schemaVersion: Int = 5,
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
@@ -69,6 +69,8 @@ data class SegmentSidecar(
     val segmentNumber: Int,
     /** Stable ZeekrApp.processStartId ("pid-epoch"), never the per-command service startId. */
     val processStartId: String,
+    /** Stable identity shared by every segment in one manually started recording Session. */
+    val recordingSessionId: String? = null,
     /** When the partial file was requested (filename timestamp), kept as evidence. */
     val requestedAtEpochMs: Long? = null,
     val requestedAtElapsedRealtimeMs: Long? = null,

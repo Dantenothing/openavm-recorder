@@ -30,4 +30,14 @@ class UploadRequestAdapterTest {
         assertEquals("paired-car", result.request.carId)
         assertEquals("{}", result.request.sidecarJson)
     }
+
+    @Test
+    fun schemaFiveRecordingSessionMetadataPassesThroughUnchanged() {
+        val sidecar = """{"schemaVersion":5,"recordingSessionId":"session-a"}"""
+        val body = """{"clientTransferId":"task-8","fileName":"drive.mp4","sizeBytes":3,"sha256":"$sha","carId":"spoofed","sidecarJson":"${sidecar.replace("\"", "\\\"")}"}"""
+
+        val result = UploadRequestAdapter.decode(json, body, "paired-car")
+
+        assertEquals(sidecar, result.request.sidecarJson)
+    }
 }

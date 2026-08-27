@@ -59,6 +59,7 @@ class RecorderSession(
 
     /** Stable process identity captured once; never the per-command service startId. */
     private val processStartId: String = ZeekrApp.processStartId
+    private val recordingSessionIdentity = RecordingSessionIdentity()
     private val wakeLockHolder = RecorderWakeLockHolder(context) { event, message ->
         EventLogger.logEvent(
             Categories.SYSTEM,
@@ -167,6 +168,7 @@ class RecorderSession(
             this.currentConsumesPendingIncident = false
             this.segmentNumber = 0
             this.previousSegmentStoppedElapsedMs = null
+            val recordingSessionId = recordingSessionIdentity.beginNewSession()
             manualSessionGeneration++
             cameraRecovery.beginManualSession(manualSessionGeneration, config.cameraId)
             vehicleAway.beginManualSession(manualSessionGeneration)
@@ -213,6 +215,7 @@ class RecorderSession(
                     "segmentSeconds" to config.segmentSeconds.toString(),
                     "storageLimitBytes" to config.storageLimitBytes.toString(),
                     "processStartId" to processStartId,
+                    "recordingSessionId" to recordingSessionId,
                 ),
             )
             startCameraConflictDiagnostics(config)
@@ -682,6 +685,7 @@ class RecorderSession(
         if (currentPartial != null) {
             finalizeCurrentSegment(finalizeReason, forcedError)
         } else {
+            recordingSessionIdentity.endSession()
             closeCamera()
             stopCameraConflictDiagnostics()
             updateState(
@@ -849,6 +853,8 @@ class RecorderSession(
         cancelVehicleAwayTimer()
         if (currentPartial != null) {
             finalizeCurrentSegment("STOP", null)
+        } else {
+            recordingSessionIdentity.endSession()
         }
         closeCamera()
         stopCameraConflictDiagnostics()
@@ -1542,6 +1548,7 @@ class RecorderSession(
             segmentSeconds = cfg.segmentSeconds,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
+            recordingSessionId = recordingSessionIdentity.requireCurrentId(),
             requestedAtEpochMs = segmentStartedAtEpochMs,
             requestedAtElapsedRealtimeMs = segmentStartedAtElapsedMs,
             startedAtEpochMs = segmentStartedAtEpochMs,
@@ -1573,6 +1580,7 @@ class RecorderSession(
         frameStats = SegmentFrameStats()
         EventLogger.markError(Categories.SYSTEM, "RECORDER_SEGMENT_START_FAILED", message, null)
         runIo { writeSidecarAsync(buildSidecarFromSnapshot(snapshot, cfg.profile, null, null)) }
+        recordingSessionIdentity.endSession()
         setError("SEGMENT_START_FAILED: $message")
         closeCamera()
     }
@@ -1709,6 +1717,7 @@ class RecorderSession(
             segmentSeconds = cfg?.segmentSeconds ?: state.segmentSeconds,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
+            recordingSessionId = recordingSessionIdentity.requireCurrentId(),
             requestedAtEpochMs = requestedAtEpoch,
             requestedAtElapsedRealtimeMs = requestedAtElapsed,
             startedAtEpochMs = actualStartedEpoch,
@@ -1838,6 +1847,7 @@ class RecorderSession(
 
     private fun afterFinalize(reason: String, success: Boolean, error: String?) {
         if (reason == "STOP" || stopping) {
+            recordingSessionIdentity.endSession()
             closeCamera()
             stopCameraConflictDiagnostics()
             updateState(
@@ -1866,6 +1876,7 @@ class RecorderSession(
         }
         if (!success) {
             closeCamera()
+            recordingSessionIdentity.endSession()
             setError("SEGMENT_FAILED: ${error ?: "unknown"}")
             return
         }
@@ -2161,6 +2172,7 @@ class RecorderSession(
     }
 
     private fun terminateCameraUnavailable(message: String) {
+        recordingSessionIdentity.endSession()
         closeCamera()
         cancelCameraRecoveryTimer()
         cameraRecovery.terminateManualSession(manualSessionGeneration, message)
@@ -2308,6 +2320,7 @@ class RecorderSession(
     }
 
     private fun storageBlocked(reason: String) {
+        recordingSessionIdentity.endSession()
         cancelCameraRecoveryTimer()
         cameraRecovery.terminateManualSession(manualSessionGeneration, reason)
         closeCamera()
@@ -2489,6 +2502,7 @@ class RecorderSession(
             segmentSeconds = s.segmentSeconds,
             segmentNumber = s.segmentNumber,
             processStartId = s.processStartId,
+            recordingSessionId = s.recordingSessionId,
             requestedAtEpochMs = s.requestedAtEpochMs,
             requestedAtElapsedRealtimeMs = s.requestedAtElapsedRealtimeMs,
             startedAtEpochMs = s.startedAtEpochMs,
@@ -2808,6 +2822,7 @@ class RecorderSession(
         val segmentSeconds: Int,
         val segmentNumber: Int,
         val processStartId: String,
+        val recordingSessionId: String,
         val requestedAtEpochMs: Long?,
         val requestedAtElapsedRealtimeMs: Long?,
         val startedAtEpochMs: Long?,
