@@ -23,8 +23,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Phone build failed with exit code $LASTEXITCODE" }
 
     $sourceApk = Join-Path $projectRoot "app\build\outputs\apk\debug\app-debug.apk"
-    $artifactDir = Join-Path $projectRoot "release-artifacts"
-    $artifactApk = Join-Path $artifactDir "OpenAVM-Companion-v2.1.1-private-update.apk"
+    $artifactDir = Join-Path (Split-Path -Parent $projectRoot) "release-artifacts"
+    $artifactApk = Join-Path $artifactDir "OpenAVM-Companion-v2.2.2.apk"
     New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
     Copy-Item -LiteralPath $sourceApk -Destination $artifactApk -Force
 

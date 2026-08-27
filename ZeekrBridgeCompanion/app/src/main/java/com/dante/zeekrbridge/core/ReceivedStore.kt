@@ -49,11 +49,23 @@ object ReceivedStore {
     }
 
     fun moveToTrash(file: File) {
+        moveToTrash(listOf(file))
+    }
+
+    fun moveToTrash(files: Collection<File>): Int {
         val trash = File(appContext.filesDir, "trash").apply { mkdirs() }
-        (listOf(file) + ReceivedFiles.relatedMetadataFiles(file)).forEach { source ->
-            if (source.isFile) source.renameTo(uniqueTrashTarget(trash, source.name))
+        var movedVideos = 0
+        files.distinctBy { it.absoluteFile.normalize().path }.forEach { file ->
+            if (!file.isFile) return@forEach
+            if (file.renameTo(uniqueTrashTarget(trash, file.name))) {
+                movedVideos++
+                ReceivedFiles.relatedMetadataFiles(file).forEach { source ->
+                    if (source.isFile) source.renameTo(uniqueTrashTarget(trash, source.name))
+                }
+            }
         }
         refresh()
+        return movedVideos
     }
 
     private fun uniqueTrashTarget(trash: File, name: String): File {

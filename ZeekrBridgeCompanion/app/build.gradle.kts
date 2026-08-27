@@ -13,8 +13,8 @@ android {
         applicationId = "com.dante.zeekrbridge"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "2.2.1"
+        versionCode = 9
+        versionName = "2.2.2"
     }
 
     signingConfigs {
@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    implementation(libs.androidx.media3.exoplayer)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation("junit:junit:4.13.2")
 }

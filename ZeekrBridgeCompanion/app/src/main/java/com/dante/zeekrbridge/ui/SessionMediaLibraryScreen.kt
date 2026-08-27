@@ -10,10 +10,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,8 +32,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +47,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -60,6 +66,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,7 +87,11 @@ import com.dante.zeekrbridge.core.IndexedRecordingSession
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.core.MediaIndexStore
 import com.dante.zeekrbridge.core.MediaThumbnailCache
+import com.dante.zeekrbridge.core.LibraryBackAction
+import com.dante.zeekrbridge.core.MediaDeletePlan
+import com.dante.zeekrbridge.core.MediaDeletePlanner
 import com.dante.zeekrbridge.core.ReceivedStore
+import com.dante.zeekrbridge.core.resolveLibraryBackAction
 import com.dante.zeekrbridge.core.ServerLog
 import com.dante.zeekrbridge.core.WsType
 import com.dante.zeekrbridge.server.BridgeServer
@@ -112,6 +123,17 @@ private data class MediaDetail(
     val cover: IndexedMediaSegment get() = segments.first()
 }
 
+private data class SessionPlaybackRequest(
+    val detail: MediaDetail,
+    val initialIndex: Int,
+)
+
+private data class BatchDeleteRequest(
+    val logicalCount: Int,
+    val isEvent: Boolean,
+    val plan: MediaDeletePlan,
+)
+
 @Composable
 fun SessionMediaLibraryScreen() {
     val context = LocalContext.current
@@ -124,13 +146,19 @@ fun SessionMediaLibraryScreen() {
     val uploads by CarCatalogStore.uploads.collectAsState()
     val lastMessage by CarCatalogStore.lastMessage.collectAsState()
 
-    var section by remember { mutableStateOf(LibrarySection.ALL) }
+    var sectionName by rememberSaveable { mutableStateOf(LibrarySection.ALL.name) }
+    val section = LibrarySection.valueOf(sectionName)
     var detail by remember { mutableStateOf<MediaDetail?>(null) }
     var playSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
+    var sessionPlayback by remember { mutableStateOf<SessionPlaybackRequest?>(null) }
     var deleteSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
+    var batchDelete by remember { mutableStateOf<BatchDeleteRequest?>(null) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var noteSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
     var noteText by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("") }
+    val sessionGridState = rememberLazyGridState()
+    val eventGridState = rememberLazyGridState()
 
     var mediaPermissionGranted by remember {
         mutableStateOf(
@@ -154,12 +182,34 @@ fun SessionMediaLibraryScreen() {
     LaunchedEffect(section, mediaPermissionGranted) {
         if (section == LibrarySection.PHONE && mediaPermissionGranted) phoneVideos = queryPhoneVideos(context)
     }
+    LaunchedEffect(section) { selectedIds = emptySet() }
+    LaunchedEffect(index, section) {
+        val validIds = when (section) {
+            LibrarySection.ALL -> index.sessions.mapTo(hashSetOf()) { it.id }
+            LibrarySection.EVENTS -> index.events.mapTo(hashSetOf()) { it.id }
+            else -> emptySet()
+        }
+        selectedIds = selectedIds.intersect(validIds)
+    }
+
+    val playerOpen = sessionPlayback != null || playSegment != null
+    BackHandler(enabled = playerOpen || detail != null || selectedIds.isNotEmpty()) {
+        when (resolveLibraryBackAction(playerOpen, detail != null, selectedIds.size)) {
+            LibraryBackAction.CLOSE_PLAYER -> {
+                sessionPlayback = null
+                playSegment = null
+            }
+            LibraryBackAction.CLOSE_DETAIL -> detail = null
+            LibraryBackAction.CLEAR_SELECTION -> selectedIds = emptySet()
+            LibraryBackAction.EXIT_LIBRARY -> Unit
+        }
+    }
 
     detail?.let { selected ->
         MediaDetailScreen(
             detail = selected,
             onBack = { detail = null },
-            onPlay = { playSegment = it },
+            onPlay = { index -> sessionPlayback = SessionPlaybackRequest(selected, index) },
             onShare = { shareMediaFile(context, it.file) },
             onSave = { segment ->
                 scope.launch {
@@ -174,19 +224,48 @@ fun SessionMediaLibraryScreen() {
             onDelete = { deleteSegment = it },
         )
     } ?: Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(t("Library", "媒体库"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    t(
-                        "${index.sessions.size} sessions · ${index.events.size} events",
-                        "${index.sessions.size} 次录像 · ${index.events.size} 个事件",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        if (selectedIds.isNotEmpty()) {
+            val selectableIds = when (section) {
+                LibrarySection.ALL -> index.sessions.map { it.id }
+                LibrarySection.EVENTS -> index.events.map { it.id }
+                else -> emptyList()
             }
-            if (scanning) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    t("${selectedIds.size} selected", "已选择 ${selectedIds.size} 项"),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { selectedIds = selectableIds.toSet() }) { Text(t("Select all", "全选")) }
+                TextButton(onClick = {
+                    val selectedGroups = when (section) {
+                        LibrarySection.ALL -> index.sessions.filter { it.id in selectedIds }.map { it.segments }
+                        LibrarySection.EVENTS -> index.events.filter { it.id in selectedIds }.map { it.segments }
+                        else -> emptyList()
+                    }
+                    batchDelete = BatchDeleteRequest(
+                        logicalCount = selectedGroups.size,
+                        isEvent = section == LibrarySection.EVENTS,
+                        plan = MediaDeletePlanner.plan(selectedGroups),
+                    )
+                }) { Text(t("Trash", "移入回收站")) }
+                TextButton(onClick = { selectedIds = emptySet() }) { Text(t("Cancel", "取消")) }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(t("Library", "媒体库"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        t(
+                            "${index.sessions.size} sessions · ${index.events.size} events",
+                            "${index.sessions.size} 次录像 · ${index.events.size} 个事件",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (scanning) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            }
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp),
@@ -195,7 +274,7 @@ fun SessionMediaLibraryScreen() {
             LibrarySection.entries.forEach { item ->
                 FilterChip(
                     selected = section == item,
-                    onClick = { section = item },
+                    onClick = { sectionName = item.name },
                     label = { Text(t(item.en, item.zh)) },
                 )
             }
@@ -209,13 +288,31 @@ fun SessionMediaLibraryScreen() {
             when (section) {
                 LibrarySection.ALL -> SessionGrid(
                     sessions = index.sessions,
+                    state = sessionGridState,
                     emptyText = t("No OpenAVM recordings on this phone", "手机中还没有 OpenAVM 录像"),
+                    selectedIds = selectedIds,
+                    selectionMode = selectedIds.isNotEmpty(),
                     onOpen = { detail = it.toDetail() },
+                    onToggle = { id ->
+                        selectedIds = selectedIds.toMutableSet().apply {
+                            if (!add(id)) remove(id)
+                        }
+                    },
+                    onLongPress = { selectedIds = selectedIds + it },
                 )
                 LibrarySection.EVENTS -> EventGrid(
                     events = index.events,
+                    state = eventGridState,
                     emptyText = t("No saved incidents", "暂无保存的事件录像"),
+                    selectedIds = selectedIds,
+                    selectionMode = selectedIds.isNotEmpty(),
                     onOpen = { detail = it.toDetail() },
+                    onToggle = { id ->
+                        selectedIds = selectedIds.toMutableSet().apply {
+                            if (!add(id)) remove(id)
+                        }
+                    },
+                    onLongPress = { selectedIds = selectedIds + it },
                 )
                 LibrarySection.ON_VEHICLE -> OnVehicleList(
                     online = catalogOnline,
@@ -252,6 +349,14 @@ fun SessionMediaLibraryScreen() {
             onDismiss = { playSegment = null },
         )
     }
+    sessionPlayback?.let { request ->
+        MediaSessionPlaybackDialog(
+            segments = request.detail.segments,
+            initialIndex = request.initialIndex,
+            isEvent = request.detail.isEvent,
+            onDismiss = { sessionPlayback = null },
+        )
+    }
     deleteSegment?.let { segment ->
         AlertDialog(
             onDismissRequest = { deleteSegment = null },
@@ -266,6 +371,45 @@ fun SessionMediaLibraryScreen() {
                 }) { Text(t("Delete", "删除")) }
             },
             dismissButton = { TextButton(onClick = { deleteSegment = null }) { Text(t("Cancel", "取消")) } },
+        )
+    }
+    batchDelete?.let { request ->
+        AlertDialog(
+            onDismissRequest = { batchDelete = null },
+            title = { Text(t("Move selected recordings to trash?", "将所选录像移入回收站？")) },
+            text = {
+                Text(
+                    if (request.isEvent) {
+                        t(
+                            "${request.logicalCount} events reference ${request.plan.physicalVideoCount} physical videos. Moving them to trash can also remove those segments from their Sessions.",
+                            "${request.logicalCount} 个事件引用 ${request.plan.physicalVideoCount} 个物理视频。移入回收站后，这些片段也会从对应 Session 中消失。",
+                        )
+                    } else {
+                        t(
+                            "${request.logicalCount} Sessions contain ${request.plan.physicalVideoCount} unique physical videos. MP4 files and metadata will move to OpenAVM trash.",
+                            "${request.logicalCount} 个 Session 共包含 ${request.plan.physicalVideoCount} 个去重后的物理视频。MP4 和元数据将移入 OpenAVM 回收站。",
+                        )
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val files = request.plan.segments.map { it.file }
+                    scope.launch {
+                        val moved = withContext(Dispatchers.IO) { ReceivedStore.moveToTrash(files) }
+                        MediaIndexStore.invalidate()
+                        selectedIds = emptySet()
+                        batchDelete = null
+                        statusText = t(
+                            "Moved $moved videos to OpenAVM trash",
+                            "已将 $moved 个视频移入 OpenAVM 回收站",
+                        )
+                    }
+                }) { Text(t("Move to trash", "移入回收站")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { batchDelete = null }) { Text(t("Cancel", "取消")) }
+            },
         )
     }
     noteSegment?.let { segment ->
@@ -293,13 +437,19 @@ fun SessionMediaLibraryScreen() {
 @Composable
 private fun SessionGrid(
     sessions: List<IndexedRecordingSession>,
+    state: LazyGridState,
     emptyText: String,
+    selectedIds: Set<String>,
+    selectionMode: Boolean,
     onOpen: (IndexedRecordingSession) -> Unit,
+    onToggle: (String) -> Unit,
+    onLongPress: (String) -> Unit,
 ) {
     if (sessions.isEmpty()) return EmptyLibrary(emptyText)
     val groups = sessions.groupBy { dayLabel(it.startedAtEpochMs) }
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
+        state = state,
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -317,7 +467,11 @@ private fun SessionGrid(
                     sizeBytes = session.sizeBytes,
                     segmentCount = session.segments.size,
                     source = session.sourceRole,
-                    onClick = { onOpen(session) },
+                    selected = session.id in selectedIds,
+                    onClick = {
+                        if (selectionMode) onToggle(session.id) else onOpen(session)
+                    },
+                    onLongClick = { onLongPress(session.id) },
                 )
             }
         }
@@ -327,13 +481,19 @@ private fun SessionGrid(
 @Composable
 private fun EventGrid(
     events: List<IndexedRecordingEvent>,
+    state: LazyGridState,
     emptyText: String,
+    selectedIds: Set<String>,
+    selectionMode: Boolean,
     onOpen: (IndexedRecordingEvent) -> Unit,
+    onToggle: (String) -> Unit,
+    onLongPress: (String) -> Unit,
 ) {
     if (events.isEmpty()) return EmptyLibrary(emptyText)
     val groups = events.groupBy { dayLabel(it.startedAtEpochMs) }
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
+        state = state,
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -351,7 +511,11 @@ private fun EventGrid(
                     sizeBytes = event.sizeBytes,
                     segmentCount = event.segments.size,
                     source = event.sourceRole,
-                    onClick = { onOpen(event) },
+                    selected = event.id in selectedIds,
+                    onClick = {
+                        if (selectionMode) onToggle(event.id) else onOpen(event)
+                    },
+                    onLongClick = { onLongPress(event.id) },
                 )
             }
         }
@@ -367,11 +531,31 @@ private fun LibraryCard(
     sizeBytes: Long,
     segmentCount: Int,
     source: IndexedSourceRole,
+    selected: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    val shape = RoundedCornerShape(16.dp)
+    Card(
+        modifier = Modifier.fillMaxWidth()
+            .then(
+                if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shape)
+                else Modifier,
+            )
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        shape = shape,
+    ) {
         Column {
-            MediaCover(cover, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            Box {
+                MediaCover(cover, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                if (selected) {
+                    Checkbox(
+                        checked = true,
+                        onCheckedChange = null,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                    )
+                }
+            }
             Column(Modifier.padding(10.dp)) {
                 Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(formatClock(startedAt), style = MaterialTheme.typography.bodySmall)
@@ -416,7 +600,7 @@ private fun MediaCover(segment: IndexedMediaSegment, modifier: Modifier = Modifi
 private fun MediaDetailScreen(
     detail: MediaDetail,
     onBack: () -> Unit,
-    onPlay: (IndexedMediaSegment) -> Unit,
+    onPlay: (Int) -> Unit,
     onShare: (IndexedMediaSegment) -> Unit,
     onSave: (IndexedMediaSegment) -> Unit,
     onNote: (IndexedMediaSegment) -> Unit,
@@ -445,11 +629,12 @@ private fun MediaDetailScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
-                Text(
-                    t("Continuous session playback arrives in v2.2.2. You can play each segment below now.", "跨片段连续播放将在 v2.2.2 完成；现在可以播放下面的每个片段。"),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                Button(onClick = { onPlay(0) }, modifier = Modifier.padding(top = 10.dp)) {
+                    Text(
+                        if (detail.isEvent) t("Play incident continuously", "连续播放事件")
+                        else t("Play complete Session", "播放完整 Session"),
+                    )
+                }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -458,7 +643,7 @@ private fun MediaDetailScreen(
             SegmentCard(
                 index = index,
                 segment = segment,
-                onPlay = { onPlay(segment) },
+                onPlay = { onPlay(index) },
                 onShare = { onShare(segment) },
                 onSave = { onSave(segment) },
                 onNote = { onNote(segment) },
