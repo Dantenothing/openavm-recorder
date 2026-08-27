@@ -1,5 +1,7 @@
 package com.dante.zeekrcapabilitylab.transfer
 
+import io.github.dantenothing.avmtransfer.protocol.DiscoveryReply
+import io.github.dantenothing.avmtransfer.protocol.HealthResponse
 import io.github.dantenothing.avmtransfer.protocol.TransferProtocol
 import java.net.URI
 
@@ -31,10 +33,22 @@ object PhoneAddressParser {
 
 object DiscoveryTargetPolicy {
     private const val LIMITED_BROADCAST = "255.255.255.255"
+    private const val KNOWN_ZEEKR_HOTSPOT_HOST = "192.0.0.2"
 
-    fun targets(gateways: Collection<String>, directedBroadcasts: Collection<String>): List<String> =
+    fun healthCandidates(savedHost: String?, gateways: Collection<String>): List<String> =
         buildList {
+            savedHost?.takeIf(::isUsableIpv4)?.let(::add)
+            add(KNOWN_ZEEKR_HOTSPOT_HOST)
             gateways.filter(::isUsableIpv4).forEach(::add)
+        }.distinct()
+
+    fun targets(
+        savedHost: String?,
+        gateways: Collection<String>,
+        directedBroadcasts: Collection<String>,
+    ): List<String> =
+        buildList {
+            addAll(healthCandidates(savedHost, gateways))
             directedBroadcasts.filter(::isUsableIpv4).forEach(::add)
             add(LIMITED_BROADCAST)
         }.distinct()
@@ -54,5 +68,21 @@ object DiscoveryTargetPolicy {
         val octets = value.split('.').map { it.toIntOrNull() ?: return false }
         if (octets.size != 4 || octets.any { it !in 0..255 }) return false
         return octets[0] !in setOf(0, 127) && octets[0] < 224
+    }
+}
+
+object PhoneReconnectPolicy {
+    fun migrate(
+        saved: PhoneEndpoint,
+        discovery: DiscoveryReply,
+        health: HealthResponse,
+    ): PhoneEndpoint? {
+        if (health.service != TransferProtocol.SERVICE || health.phoneDeviceId != saved.phoneId) return null
+        if (discovery.service != TransferProtocol.SERVICE || discovery.port !in 1..65_535) return null
+        return saved.copy(
+            host = discovery.ip,
+            port = discovery.port,
+            phoneName = health.deviceName,
+        )
     }
 }

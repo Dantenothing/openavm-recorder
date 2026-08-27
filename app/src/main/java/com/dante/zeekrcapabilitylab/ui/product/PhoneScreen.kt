@@ -18,55 +18,85 @@ fun PhoneScreen() {
     val scope = rememberCoroutineScope()
     val connection by TransferRepository.connection.collectAsState()
     val tasks by TransferRepository.tasks.collectAsState()
-    var host by remember(connection.endpoint) {
-        mutableStateOf(connection.endpoint?.let { PhoneAddress(it.host, it.port).displayValue }.orEmpty())
+    val endpoint = connection.endpoint
+    var host by remember(endpoint) {
+        mutableStateOf(endpoint?.let { PhoneAddress(it.host, it.port).displayValue }.orEmpty())
     }
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var showPairing by remember { mutableStateOf(endpoint == null) }
 
-    LaunchedEffect(Unit) { if (connection.endpoint != null) TransferRepository.checkConnection() }
+    LaunchedEffect(Unit) { if (endpoint != null) TransferRepository.reconnectInBackground() }
+    LaunchedEffect(endpoint) {
+        if (endpoint != null) showPairing = false
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("手机传输", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(if (connection.connected) "已连接：${connection.endpoint?.phoneName}" else connection.message)
+        Text(
+            when {
+                connection.connected -> "已连接：${endpoint?.phoneName}"
+                endpoint != null -> "已配对：${endpoint.phoneName} · 当前未连接"
+                else -> "尚未配对手机"
+            },
+        )
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("连接手机", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("手机和车机需连接同一热点或可信局域网。先在手机 OpenAVM Companion 中启动接收并生成六位配对码。")
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(host, { host = it }, label = { Text("手机地址（IP 或 IP:端口）") }, singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("六位配对码") }, singleLine = true, modifier = Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        busy = true
-                        scope.launch {
-                            val result = TransferRepository.pair(host, code)
-                            message = result.fold({ "配对成功" }, { it.message ?: "配对失败" })
-                            if (result.isSuccess) code = ""
-                            busy = false
+                if (endpoint != null && !showPairing) {
+                    Text("已配对手机", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("${endpoint.phoneName} · ${PhoneAddress(endpoint.host, endpoint.port).displayValue}")
+                    Text("六位码只在首次配对时使用。以后打开热点和手机接收服务即可自动重连。")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            busy = true
+                            scope.launch {
+                                message = if (TransferRepository.checkConnection()) "连接正常" else "手机未连接，请确认手机接收服务正在运行"
+                                busy = false
+                            }
+                        }, enabled = !busy) { Text("立即重连") }
+                        OutlinedButton(onClick = { showPairing = true }, enabled = !busy) { Text("重新配对") }
+                    }
+                } else {
+                    Text(
+                        if (endpoint == null) "首次配对手机" else "重新配对手机",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text("手机和车机需连接同一热点或可信局域网。先在手机 OpenAVM Companion 中启动接收并生成六位配对码。")
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(host, { host = it }, label = { Text("手机地址（IP 或 IP:端口）") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("六位配对码") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            busy = true
+                            scope.launch {
+                                val result = TransferRepository.pair(host, code)
+                                message = result.fold({ "配对成功，以后无需再次输入六位码" }, { it.message ?: "配对失败" })
+                                if (result.isSuccess) code = ""
+                                busy = false
+                            }
+                        }, enabled = !busy && host.isNotBlank() && code.length == 6) { Text("配对") }
+                        OutlinedButton(onClick = {
+                            busy = true
+                            scope.launch {
+                                val result = TransferRepository.discover()
+                                result.onSuccess { host = it.displayValue }
+                                message = result.fold(
+                                    { "已找到手机：${it.displayValue}" },
+                                    { it.message ?: "未自动找到，请输入手机地址" },
+                                )
+                                busy = false
+                            }
+                        }, enabled = !busy) { Text("自动查找") }
+                        if (endpoint != null) {
+                            OutlinedButton(onClick = { showPairing = false }, enabled = !busy) { Text("取消") }
                         }
-                    }, enabled = !busy && host.isNotBlank() && code.length == 6) { Text("配对") }
-                    OutlinedButton(onClick = {
-                        busy = true
-                        scope.launch {
-                            val result = TransferRepository.discover()
-                            result.onSuccess { host = it.displayValue }
-                            message = result.fold(
-                                { "已找到手机：${it.displayValue}" },
-                                { it.message ?: "未自动找到，请输入手机地址" },
-                            )
-                            busy = false
-                        }
-                    }, enabled = !busy) { Text("自动查找") }
-                    OutlinedButton(onClick = {
-                        busy = true
-                        scope.launch { message = if (TransferRepository.checkConnection()) "连接正常" else "手机未连接"; busy = false }
-                    }, enabled = !busy && connection.endpoint != null) { Text("检查连接") }
+                    }
                 }
                 if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
             }

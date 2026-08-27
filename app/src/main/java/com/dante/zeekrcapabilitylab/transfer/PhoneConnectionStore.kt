@@ -79,8 +79,7 @@ object PhoneConnectionStore {
                 if (!response.isSuccessful) error("Pairing rejected (${response.code})")
                 val paired = json.decodeFromString(PairResponse.serializer(), response.body?.string().orEmpty())
                 val endpoint = PhoneEndpoint(host, port, paired.token, paired.deviceName, paired.phoneDeviceId)
-                prefs().edit().putString("host", host).putInt("port", port).putString("name", paired.deviceName)
-                    .putString("phoneId", paired.phoneDeviceId).putString("token", encrypt(paired.token)).apply()
+                persist(endpoint)
                 endpoint
             }
         }
@@ -110,7 +109,7 @@ object PhoneConnectionStore {
         runCatching {
             val network = discoveryNetwork()
             discoverUdp(network.targets)
-                ?: discoverHealth(network.gateways)
+                ?: discoverHealth(network.healthCandidates)
                 ?: error(
                     "未收到手机回应（已尝试 ${network.targets.take(6).joinToString()}）。" +
                         "请确认 OpenAVM Companion 显示“运行中”，或输入手机页显示的 IP / IP:8766",
@@ -118,7 +117,25 @@ object PhoneConnectionStore {
         }
     }
 
-    private data class DiscoveryNetwork(val targets: List<String>, val gateways: List<String>)
+    suspend fun reconnectSaved(): Result<PhoneEndpoint> {
+        val savedEndpoint = saved() ?: return Result.failure(IllegalStateException("Not paired"))
+        val currentHealth = health(savedEndpoint)
+        if (currentHealth.isSuccess) {
+            val refreshed = savedEndpoint.copy(phoneName = currentHealth.getOrThrow().deviceName)
+            persist(refreshed)
+            return Result.success(refreshed)
+        }
+
+        val discovery = discover().getOrElse { return Result.failure(it) }
+        val candidate = savedEndpoint.copy(host = discovery.ip, port = discovery.port)
+        val candidateHealth = health(candidate).getOrElse { return Result.failure(it) }
+        val migrated = PhoneReconnectPolicy.migrate(savedEndpoint, discovery, candidateHealth)
+            ?: return Result.failure(IllegalStateException("Discovered a different phone; saved pairing was not changed"))
+        persist(migrated)
+        return Result.success(migrated)
+    }
+
+    private data class DiscoveryNetwork(val targets: List<String>, val healthCandidates: List<String>)
 
     private fun discoveryNetwork(): DiscoveryNetwork {
         val gateways = linkedSetOf<String>()
@@ -156,9 +173,10 @@ object PhoneConnectionStore {
                 }
             }
         }
+        val savedHost = prefs().getString("host", null)
         return DiscoveryNetwork(
-            targets = DiscoveryTargetPolicy.targets(gateways, broadcasts),
-            gateways = DiscoveryTargetPolicy.targets(gateways, emptyList()).filterNot { it == "255.255.255.255" },
+            targets = DiscoveryTargetPolicy.targets(savedHost, gateways, broadcasts),
+            healthCandidates = DiscoveryTargetPolicy.healthCandidates(savedHost, gateways),
         )
     }
 
@@ -225,6 +243,16 @@ object PhoneConnectionStore {
         .port(port)
         .addPathSegments(path.trim('/'))
         .build()
+
+    private fun persist(endpoint: PhoneEndpoint) {
+        prefs().edit()
+            .putString("host", endpoint.host)
+            .putInt("port", endpoint.port)
+            .putString("name", endpoint.phoneName)
+            .putString("phoneId", endpoint.phoneId)
+            .putString("token", encrypt(endpoint.token))
+            .apply()
+    }
 
     fun forget() { prefs().edit().remove("host").remove("port").remove("name").remove("phoneId").remove("token").apply() }
     private fun prefs() = preferences

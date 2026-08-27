@@ -7,8 +7,15 @@ import java.nio.file.Files
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.StandardCopyOption
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -42,6 +49,9 @@ object TransferRepository {
     val tasks = _tasks.asStateFlow()
     private val _connection = MutableStateFlow(PhoneConnectionState())
     val connection = _connection.asStateFlow()
+    private val reconnectScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val connectionCheck = Mutex()
+    private val backgroundReconnectRunning = AtomicBoolean(false)
 
     fun init(appContext: Context) {
         filesRoot = appContext.applicationContext.filesDir
@@ -55,6 +65,7 @@ object TransferRepository {
         _tasks.value = loaded
         saveLocked()
         reconcileUploadPins()
+        reconnectInBackground()
     }
 
     suspend fun discover(): Result<PhoneAddress> = PhoneConnectionStore.discover().map { PhoneAddress(it.ip, it.port) }
@@ -73,17 +84,34 @@ object TransferRepository {
         return result
     }
 
-    suspend fun checkConnection(): Boolean {
+    suspend fun checkConnection(): Boolean = connectionCheck.withLock {
         val endpoint = PhoneConnectionStore.saved()
         if (endpoint == null) {
             _connection.value = PhoneConnectionState(message = "Not paired")
-            return false
+            return@withLock false
         }
-        val result = PhoneConnectionStore.health(endpoint)
-        _connection.value = if (result.isSuccess) PhoneConnectionState(endpoint, true, "Connected to ${result.getOrThrow().deviceName}")
+        val result = PhoneConnectionStore.reconnectSaved()
+        val connectedEndpoint = result.getOrNull()
+        _connection.value = if (connectedEndpoint != null) PhoneConnectionState(
+            connectedEndpoint,
+            true,
+            "Connected to ${connectedEndpoint.phoneName}",
+        )
         else PhoneConnectionState(endpoint, false, result.exceptionOrNull()?.message ?: "Phone unavailable")
         if (result.isSuccess && hasWork()) TransferService.start(ZeekrApp.appContext)
-        return result.isSuccess
+        result.isSuccess
+    }
+
+    fun reconnectInBackground() {
+        if (_connection.value.endpoint == null) return
+        if (!backgroundReconnectRunning.compareAndSet(false, true)) return
+        reconnectScope.launch {
+            try {
+                checkConnection()
+            } finally {
+                backgroundReconnectRunning.set(false)
+            }
+        }
     }
 
     fun enqueue(file: File): Result<String> = synchronized(lock) {

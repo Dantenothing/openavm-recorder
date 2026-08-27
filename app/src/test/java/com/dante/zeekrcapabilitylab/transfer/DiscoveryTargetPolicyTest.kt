@@ -6,12 +6,29 @@ import org.junit.Test
 
 class DiscoveryTargetPolicyTest {
     @Test
-    fun prioritizesHotspotGatewaysThenDirectedAndLimitedBroadcasts() {
+    fun prioritizesSavedThenKnownHotspotThenGatewaysAndBroadcasts() {
         assertEquals(
-            listOf("192.168.5.1", "192.168.5.255", "255.255.255.255"),
+            listOf("192.168.5.123", "192.0.0.2", "192.168.5.1", "192.168.5.255", "255.255.255.255"),
             DiscoveryTargetPolicy.targets(
+                savedHost = "192.168.5.123",
                 gateways = listOf("192.168.5.1", "192.168.5.1", "::1"),
                 directedBroadcasts = listOf("192.168.5.255", "255.255.255.255"),
+            ),
+        )
+        assertEquals(
+            listOf("192.168.5.123", "192.0.0.2", "192.168.5.1"),
+            DiscoveryTargetPolicy.healthCandidates("192.168.5.123", listOf("192.168.5.1")),
+        )
+    }
+
+    @Test
+    fun knownZeekrHotspotHostIsAlwaysProbedAndDeduplicated() {
+        assertEquals(
+            listOf("192.0.0.2", "255.255.255.255"),
+            DiscoveryTargetPolicy.targets(
+                savedHost = "192.0.0.2",
+                gateways = emptyList(),
+                directedBroadcasts = emptyList(),
             ),
         )
     }

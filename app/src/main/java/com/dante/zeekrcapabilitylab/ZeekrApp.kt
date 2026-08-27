@@ -61,6 +61,7 @@ class ZeekrApp : Application() {
             override fun onStart(owner: LifecycleOwner) {
                 _isForeground.value = true
                 VehicleAwayProbe.recordAppState(true)
+                TransferRepository.reconnectInBackground()
             }
 
             override fun onStop(owner: LifecycleOwner) {

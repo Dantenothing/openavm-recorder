@@ -215,6 +215,33 @@ fun EventsScreen(onOpenPhone: () -> Unit = {}) {
         }
     }
 
+    fun queueForPhone(files: List<File>): Boolean {
+        val uniqueFiles = files.distinctBy { it.absolutePath }
+        if (GalleryTransferActionPolicy.action(phoneConnection.connected) == GalleryTransferAction.OPEN_PHONE) {
+            playFile = null
+            statusText = Utils.t(
+                "Phone is not connected; opening the Phone page",
+                "手机尚未连接，正在打开手机页面",
+            )
+            TransferRepository.reconnectInBackground()
+            onOpenPhone()
+            return false
+        }
+        val results = uniqueFiles.map(TransferRepository::enqueue)
+        val queued = results.count(Result<String>::isSuccess)
+        statusText = when {
+            queued == uniqueFiles.size && queued == 1 -> Utils.t("Added to phone transfer queue", "已加入手机传输队列")
+            queued == uniqueFiles.size -> Utils.t("Queued $queued recordings for phone transfer", "已加入 $queued 段录像到手机传输队列")
+            queued > 0 -> Utils.t(
+                "Queued $queued recordings; ${uniqueFiles.size - queued} could not be added",
+                "已加入 $queued 段；${uniqueFiles.size - queued} 段未能加入",
+            )
+            else -> results.firstOrNull()?.exceptionOrNull()?.message
+                ?: Utils.t("Unable to queue transfer", "无法加入传输队列")
+        }
+        return queued > 0
+    }
+
     LaunchedEffect(recorderState.libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
@@ -292,6 +319,7 @@ fun EventsScreen(onOpenPhone: () -> Unit = {}) {
                         cover = covers[first.file.name],
                         onPlay = { playFile = first.file },
                         onToggleProtect = { toggleGroupProtection(group) },
+                        onSendToPhone = { queueForPhone(group.segments.map { it.file }) },
                         onDelete = { pendingDeleteGroup = group },
                     )
                 }
@@ -324,6 +352,7 @@ fun EventsScreen(onOpenPhone: () -> Unit = {}) {
                         cover = covers[segment.file.name],
                         onPlay = { playFile = segment.file },
                         onToggleProtect = { toggleFileProtection(segment) },
+                        onSendToPhone = { queueForPhone(listOf(segment.file)) },
                         onDelete = { pendingDeleteFile = segment.file },
                     )
                 }
@@ -344,18 +373,7 @@ fun EventsScreen(onOpenPhone: () -> Unit = {}) {
             onPrevious = previousFile?.let { previous -> { playFile = previous } },
             onNext = nextFile?.let { next -> { playFile = next } },
             onSendToPhone = {
-                if (!phoneConnection.connected) {
-                    playFile = null
-                    onOpenPhone()
-                    false
-                } else {
-                    val queued = TransferRepository.enqueue(file)
-                    statusText = queued.fold(
-                        onSuccess = { Utils.t("Added to phone transfer queue", "已加入手机传输队列") },
-                        onFailure = { it.message ?: Utils.t("Unable to queue transfer", "无法加入传输队列") },
-                    )
-                    queued.isSuccess
-                }
+                queueForPhone(listOf(file))
             },
             onDelete = {
                 // Close playback first so its MediaPlayer and playback pin are
@@ -481,6 +499,7 @@ private fun RecordingCard(
     cover: Bitmap?,
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
+    onSendToPhone: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember(segment.file.name) { mutableStateOf(false) }
@@ -526,6 +545,7 @@ private fun RecordingCard(
                         protected = segment.sidecar.protected,
                         onDismiss = { menuOpen = false },
                         onToggleProtect = onToggleProtect,
+                        onSendToPhone = onSendToPhone,
                         onDelete = onDelete,
                     )
                 }
@@ -552,6 +572,7 @@ private fun SavedEventCard(
     cover: Bitmap?,
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
+    onSendToPhone: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember(group.segments.first().file.name) { mutableStateOf(false) }
@@ -590,6 +611,7 @@ private fun SavedEventCard(
                         protected = group.protectedCount > 0,
                         onDismiss = { menuOpen = false },
                         onToggleProtect = onToggleProtect,
+                        onSendToPhone = onSendToPhone,
                         onDelete = onDelete,
                     )
                 }
@@ -619,6 +641,7 @@ private fun RecordingActionsMenu(
     protected: Boolean,
     onDismiss: () -> Unit,
     onToggleProtect: () -> Unit,
+    onSendToPhone: () -> Unit,
     onDelete: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -627,9 +650,9 @@ private fun RecordingActionsMenu(
             onClick = { onDismiss(); onToggleProtect() },
         )
         DropdownMenuItem(
-            text = { Text(Utils.t("Send to phone · In development", "发送到手机 · 开发中")) },
-            onClick = {},
-            enabled = false,
+            text = { Text(Utils.t("Send to phone", "发送到手机")) },
+            onClick = { onDismiss(); onSendToPhone() },
+            enabled = GalleryTransferActionPolicy.menuEnabled,
         )
         DropdownMenuItem(
             text = { Text(Utils.t("Delete", "删除")) },
