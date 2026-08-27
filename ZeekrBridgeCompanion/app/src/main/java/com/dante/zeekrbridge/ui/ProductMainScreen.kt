@@ -1,12 +1,11 @@
 package com.dante.zeekrbridge.ui
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -15,15 +14,24 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.sp
+import com.dante.zeekrbridge.R
 
-private data class PhoneNavItem(val icon: ImageVector, val en: String, val zh: String)
+private enum class PhoneTab(
+    @DrawableRes val icon: Int,
+    val en: String,
+    val zh: String,
+) {
+    VEHICLE(R.drawable.ic_openavm_vehicle, "Vehicle", "车辆"),
+    LIBRARY(R.drawable.ic_openavm_library, "Library", "媒体库"),
+    TOOLS(0, "Tools", "工具箱"),
+    SETTINGS(0, "Settings", "设置"),
+}
 
 /**
  * V2 product shell for the phone: four fixed bottom tabs (车辆/媒体库/工具箱/设置).
@@ -32,8 +40,8 @@ private data class PhoneNavItem(val icon: ImageVector, val en: String, val zh: S
 @Composable
 fun ProductMainScreen() {
     PhoneLanguage.mode
-    var tab by remember { mutableIntStateOf(0) }
-    var showLab by remember { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableStateOf(PhoneTab.VEHICLE) }
+    var showLab by rememberSaveable { mutableStateOf(false) }
 
     if (showLab) {
         LabScreen(onBack = { showLab = false })
@@ -43,18 +51,18 @@ fun ProductMainScreen() {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                val phoneNavItems = listOf(
-                    PhoneNavItem(Icons.Default.Home, "Vehicle", "车辆"),
-                    PhoneNavItem(Icons.Default.List, "Library", "媒体库"),
-                    PhoneNavItem(Icons.Default.Build, "Toolbox", "工具箱"),
-                    PhoneNavItem(Icons.Default.Settings, "Settings", "设置"),
-                )
-                phoneNavItems.forEachIndexed { index, item ->
+                PhoneTab.entries.forEach { item ->
                     val label = t(item.en, item.zh)
                     NavigationBarItem(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        icon = { Icon(item.icon, contentDescription = label) },
+                        selected = tab == item,
+                        onClick = { tab = item },
+                        icon = {
+                            when (item) {
+                                PhoneTab.TOOLS -> Icon(Icons.Default.Build, contentDescription = label)
+                                PhoneTab.SETTINGS -> Icon(Icons.Default.Settings, contentDescription = label)
+                                else -> Icon(painterResource(item.icon), contentDescription = label)
+                            }
+                        },
                         label = { Text(label, fontSize = 12.sp) },
                     )
                 }
@@ -67,10 +75,13 @@ fun ProductMainScreen() {
                 .padding(padding),
         ) {
             when (tab) {
-                0 -> VehicleScreen()
-                1 -> MediaLibraryScreen()
-                2 -> ToolboxScreen()
-                else -> PhoneSettingsScreen(onOpenLab = { showLab = true })
+                PhoneTab.VEHICLE -> VehicleScreen(
+                    onOpenLibrary = { tab = PhoneTab.LIBRARY },
+                    onOpenLab = { showLab = true },
+                )
+                PhoneTab.LIBRARY -> MediaLibraryScreen()
+                PhoneTab.TOOLS -> ToolboxScreen()
+                PhoneTab.SETTINGS -> PhoneSettingsScreen(onOpenLab = { showLab = true })
             }
         }
     }

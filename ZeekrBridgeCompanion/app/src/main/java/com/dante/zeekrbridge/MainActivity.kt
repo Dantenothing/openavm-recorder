@@ -70,6 +70,7 @@ import com.dante.zeekrbridge.server.BridgeServer
 import com.dante.zeekrbridge.server.BluetoothServer
 import com.dante.zeekrbridge.service.BridgeService
 import com.dante.zeekrbridge.ui.ProductMainScreen
+import com.dante.zeekrbridge.ui.OpenAvmTheme
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,7 +80,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            OpenAvmTheme {
                 ProductMainScreen()
             }
         }
