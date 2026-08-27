@@ -1,9 +1,26 @@
 package com.dante.zeekrbridge.player
 
+import com.dante.zeekrbridge.core.IndexedLayoutKind
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PlaybackTimelineTest {
+    @Test
+    fun fourLanePlaybackWaitsForItsCustomSurfaceBeforePreparing() {
+        assertEquals(
+            false,
+            canPreparePlayback(IndexedLayoutKind.FOUR_LANE_V1, customSurfaceAttached = false),
+        )
+        assertEquals(
+            true,
+            canPreparePlayback(IndexedLayoutKind.FOUR_LANE_V1, customSurfaceAttached = true),
+        )
+        assertEquals(
+            true,
+            canPreparePlayback(IndexedLayoutKind.SINGLE_V1, customSurfaceAttached = false),
+        )
+    }
+
     @Test
     fun mapsGlobalPositionAcrossSegmentBoundaries() {
         val timeline = PlaybackTimeline(listOf(60_000L, 30_000L, 90_000L))

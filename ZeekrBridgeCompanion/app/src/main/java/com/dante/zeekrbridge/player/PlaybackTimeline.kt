@@ -1,5 +1,12 @@
 package com.dante.zeekrbridge.player
 
+import com.dante.zeekrbridge.core.IndexedLayoutKind
+
+fun canPreparePlayback(
+    layoutKind: IndexedLayoutKind,
+    customSurfaceAttached: Boolean,
+): Boolean = layoutKind != IndexedLayoutKind.FOUR_LANE_V1 || customSurfaceAttached
+
 data class PlaylistPosition(
     val mediaItemIndex: Int,
     val positionMs: Long,

@@ -51,6 +51,7 @@ import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.player.FourLaneGlView
 import com.dante.zeekrbridge.player.PlaybackTimeline
+import com.dante.zeekrbridge.player.canPreparePlayback
 import java.io.File
 import kotlinx.coroutines.delay
 
@@ -186,7 +187,9 @@ private fun PlaylistPlaybackDialog(
             0L,
         )
         player.playWhenReady = true
-        player.prepare()
+        if (canPreparePlayback(first.layoutKind, customSurfaceAttached = false)) {
+            player.prepare()
+        }
         onDispose {
             player.removeListener(listener)
             player.clearVideoSurface()
@@ -362,6 +365,13 @@ private fun FourLaneVideoSurface(
             surface = nextSurface
             glView.setSource(created)
             player.setVideoSurface(nextSurface)
+            if (
+                canPreparePlayback(entry.layoutKind, customSurfaceAttached = true) &&
+                player.playbackState == Player.STATE_IDLE &&
+                player.mediaItemCount > 0
+            ) {
+                player.prepare()
+            }
         }
         onDispose {
             disposed = true
