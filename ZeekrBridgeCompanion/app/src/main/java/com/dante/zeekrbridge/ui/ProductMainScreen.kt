@@ -79,7 +79,7 @@ fun ProductMainScreen() {
                     onOpenLibrary = { tab = PhoneTab.LIBRARY },
                     onOpenLab = { showLab = true },
                 )
-                PhoneTab.LIBRARY -> MediaLibraryScreen()
+                PhoneTab.LIBRARY -> SessionMediaLibraryScreen()
                 PhoneTab.TOOLS -> ToolboxScreen()
                 PhoneTab.SETTINGS -> PhoneSettingsScreen(onOpenLab = { showLab = true })
             }

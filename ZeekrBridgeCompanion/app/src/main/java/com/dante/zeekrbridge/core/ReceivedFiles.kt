@@ -23,4 +23,9 @@ object ReceivedFiles {
             }
             .forEach { it.delete() }
     }
+
+    fun relatedMetadataFiles(video: File): List<File> = listOf(
+        File(video.absolutePath + ".sidecar.json"),
+        File(video.parentFile, video.nameWithoutExtension + ".json"),
+    ).distinctBy { it.absolutePath }.filter(File::isFile)
 }

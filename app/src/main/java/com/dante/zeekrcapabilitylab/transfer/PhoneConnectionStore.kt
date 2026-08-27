@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -71,7 +70,10 @@ object PhoneConnectionStore {
         runCatching {
             require(host.isNotBlank() && port in 1..65535) { "Invalid phone address" }
             require(Regex("^[0-9]{6}$").matches(code)) { "Enter the six-digit code" }
-            val payload = json.encodeToString(PairRequest.serializer(), PairRequest(code, Build.MODEL.ifBlank { "Zeekr" }, carId))
+            val payload = json.encodeToString(
+                PairRequest.serializer(),
+                PairRequest(code, CarPairingIdentity.DISPLAY_NAME, carId),
+            )
             val request = Request.Builder().url(endpointUrl(host, port, "api/pair"))
                 .header(TransferProtocol.HTTP_HEADER, TransferProtocol.HTTP_HEADER_VALUE)
                 .post(payload.toRequestBody("application/json".toMediaType())).build()

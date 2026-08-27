@@ -26,6 +26,18 @@ class ReceivedFilesTest {
     }
 
     @Test
+    fun relatedMetadataFindsBothSupportedSidecarNames() {
+        val video = tmp.newFile("drive.mp4")
+        val legacy = tmp.newFile("drive.mp4.sidecar.json")
+        val transferred = tmp.newFile("drive.json")
+
+        assertEquals(
+            setOf(legacy.absolutePath, transferred.absolutePath),
+            ReceivedFiles.relatedMetadataFiles(video).map { it.absolutePath }.toSet(),
+        )
+    }
+
+    @Test
     fun cleanupRemovesOnlyProtocolNamedPartials() {
         val root = tmp.newFolder("received")
         File(root, "a.mp4").writeBytes(ByteArray(1))

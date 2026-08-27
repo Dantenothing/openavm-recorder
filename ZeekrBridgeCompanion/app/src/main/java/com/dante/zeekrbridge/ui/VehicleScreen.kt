@@ -55,6 +55,7 @@ import com.dante.zeekrbridge.core.ReceivedStore
 import com.dante.zeekrbridge.core.VehicleConnectionStatus
 import com.dante.zeekrbridge.core.VehicleHomePolicy
 import com.dante.zeekrbridge.core.VehicleHomeSnapshot
+import com.dante.zeekrbridge.core.VehicleIdentityPolicy
 import com.dante.zeekrbridge.core.WsType
 import com.dante.zeekrbridge.server.BridgeServer
 import com.dante.zeekrbridge.server.BridgeServerState
@@ -76,6 +77,7 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
     val catalogOnline by CarCatalogStore.online.collectAsState()
     val carStatus by CarCatalogStore.carStatus.collectAsState()
     val receivedFiles by ReceivedStore.files.collectAsState()
+    val receivedVideos = receivedFiles.filter { it.extension.equals("mp4", ignoreCase = true) }
 
     var page by rememberSaveable { mutableStateOf(VehiclePage.OVERVIEW) }
     var statusText by remember { mutableStateOf("") }
@@ -96,7 +98,9 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
         }
     }
     val home = VehicleHomePolicy.resolve(
-        pairedVehicles = devices.map { PairedVehicleSummary(it.carDeviceId, it.name, it.lastSeen) },
+        pairedVehicles = devices.map {
+            PairedVehicleSummary(it.carDeviceId, VehicleIdentityPolicy.displayName(it.name), it.lastSeen)
+        },
         carOnline = catalogOnline,
         serviceRunning = running,
         endpointCandidates = serverState.endpointCandidates.map { "${it.ipv4}:${serverState.port}" },
@@ -167,7 +171,7 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
         if (!catalogOnline) return@LaunchedEffect
         val prefs = context.getSharedPreferences(PRODUCT_SETTINGS, Context.MODE_PRIVATE)
         if (!prefs.getBoolean("delete_car_copy", false)) return@LaunchedEffect
-        val names = receivedFiles.map { it.name }.toSet()
+        val names = receivedVideos.map { it.name }.toSet()
         val toSend = names - sentDeleteNames.value
         toSend.forEach { name ->
             BridgeServer.sendToCars(WsType.DELETE_RECORDING, mapOf("fileName" to name))
@@ -180,8 +184,8 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
             home = home,
             serverState = serverState,
             carStatus = carStatus,
-            receivedCount = receivedFiles.size,
-            receivedBytes = receivedFiles.sumOf { it.length() },
+            receivedCount = receivedVideos.size,
+            receivedBytes = receivedVideos.sumOf { it.length() },
             statusText = statusText,
             onConnectionDetails = { page = VehiclePage.CONNECTION_DETAILS },
             onReconnect = { prepareReconnect() },
@@ -480,7 +484,7 @@ private fun ConnectionDetails(
                     devices.sortedByDescending { it.lastSeen }.forEach { device ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(device.name)
+                                Text(VehicleIdentityPolicy.displayName(device.name))
                                 Text(t("Last connected ${formatLastSeen(device.lastSeen)}", "上次连接 ${formatLastSeen(device.lastSeen)}"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             TextButton(onClick = { onRevoke(device.carDeviceId) }) { Text(t("Unpair", "解除")) }

@@ -34,6 +34,7 @@ import com.dante.zeekrbridge.BuildConfig
 import com.dante.zeekrbridge.core.CarCatalogStore
 import com.dante.zeekrbridge.core.PairingManager
 import com.dante.zeekrbridge.core.ReceivedStore
+import com.dante.zeekrbridge.core.VehicleIdentityPolicy
 import com.dante.zeekrbridge.core.WsType
 import com.dante.zeekrbridge.server.BridgeServer
 import java.io.File
@@ -43,6 +44,7 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
     val context = LocalContext.current
     val devices by PairingManager.devices.collectAsState()
     val received by ReceivedStore.files.collectAsState()
+    val receivedVideos = received.filter { it.extension.equals("mp4", ignoreCase = true) }
     val online by CarCatalogStore.online.collectAsState()
     val prefs = remember { context.getSharedPreferences("phone_product_settings", Context.MODE_PRIVATE) }
 
@@ -140,7 +142,7 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(device.name)
+                            Text(VehicleIdentityPolicy.displayName(device.name))
                             Text(
                                 "配对于 ${java.util.Date(device.pairedAt)}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -185,9 +187,12 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
             Column(Modifier.padding(14.dp)) {
                 Text(t("Phone storage", "手机本地存储"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(4.dp))
-                val total = received.sumOf { it.length() }
+                val total = receivedVideos.sumOf { it.length() }
                 Text(
-                    "已接收文件 ${received.size} 个，共 ${formatBytes(total)}",
+                    t(
+                        "${receivedVideos.size} received videos · ${formatBytes(total)}",
+                        "已接收录像 ${receivedVideos.size} 个，共 ${formatBytes(total)}",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedButton(onClick = { clearTrashConfirm = true }) {
