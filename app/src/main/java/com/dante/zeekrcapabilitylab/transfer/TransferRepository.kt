@@ -57,10 +57,17 @@ object TransferRepository {
         reconcileUploadPins()
     }
 
-    suspend fun discover(): Result<String> = PhoneConnectionStore.discover().map { it.ip }
+    suspend fun discover(): Result<PhoneAddress> = PhoneConnectionStore.discover().map { PhoneAddress(it.ip, it.port) }
 
     suspend fun pair(host: String, code: String): Result<PhoneEndpoint> {
-        val result = PhoneConnectionStore.pair(host.trim(), code.trim())
+        val parsed = PhoneAddressParser.parse(host)
+        if (parsed.isFailure) {
+            val error = parsed.exceptionOrNull() ?: IllegalArgumentException("手机地址格式无效")
+            _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), false, error.message ?: "配对失败")
+            return Result.failure(error)
+        }
+        val address = parsed.getOrThrow()
+        val result = PhoneConnectionStore.pair(address.host, code.trim(), address.port)
         result.onSuccess { _connection.value = PhoneConnectionState(it, true, "Connected to ${it.phoneName}") }
             .onFailure { _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), false, it.message ?: "Pairing failed") }
         return result

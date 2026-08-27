@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.transfer.TransferRepository
+import com.dante.zeekrcapabilitylab.transfer.PhoneAddress
 import io.github.dantenothing.avmtransfer.protocol.TransferTaskState
 import kotlinx.coroutines.launch
 
@@ -17,7 +18,9 @@ fun PhoneScreen() {
     val scope = rememberCoroutineScope()
     val connection by TransferRepository.connection.collectAsState()
     val tasks by TransferRepository.tasks.collectAsState()
-    var host by remember(connection.endpoint?.host) { mutableStateOf(connection.endpoint?.host.orEmpty()) }
+    var host by remember(connection.endpoint) {
+        mutableStateOf(connection.endpoint?.let { PhoneAddress(it.host, it.port).displayValue }.orEmpty())
+    }
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
@@ -35,7 +38,7 @@ fun PhoneScreen() {
                 Text("连接手机", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text("手机和车机需连接同一热点或可信局域网。先在手机 OpenAVM Companion 中启动接收并生成六位配对码。")
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(host, { host = it }, label = { Text("手机 IP") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(host, { host = it }, label = { Text("手机地址（IP 或 IP:端口）") }, singleLine = true, modifier = Modifier.weight(1f))
                     OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("六位配对码") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -52,8 +55,11 @@ fun PhoneScreen() {
                         busy = true
                         scope.launch {
                             val result = TransferRepository.discover()
-                            result.onSuccess { host = it }
-                            message = result.fold({ "已找到手机：$it" }, { "未自动找到，请输入手机 IP" })
+                            result.onSuccess { host = it.displayValue }
+                            message = result.fold(
+                                { "已找到手机：${it.displayValue}" },
+                                { it.message ?: "未自动找到，请输入手机地址" },
+                            )
                             busy = false
                         }
                     }, enabled = !busy) { Text("自动查找") }

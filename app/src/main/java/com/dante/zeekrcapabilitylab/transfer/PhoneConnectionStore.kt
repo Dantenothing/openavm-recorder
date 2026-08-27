@@ -2,6 +2,8 @@ package com.dante.zeekrcapabilitylab.transfer
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -13,7 +15,10 @@ import io.github.dantenothing.avmtransfer.protocol.PairResponse
 import io.github.dantenothing.avmtransfer.protocol.TransferProtocol
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.NetworkInterface
+import java.net.SocketTimeoutException
 import java.security.KeyStore
 import java.util.UUID
 import javax.crypto.Cipher
@@ -24,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -37,12 +43,19 @@ object PhoneConnectionStore {
     private const val KEY_ALIAS = "openavm_car_phone_token"
     private val json = Json { ignoreUnknownKeys = true }
     private val client = OkHttpClient.Builder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(6, TimeUnit.SECONDS).build()
+    private val discoveryClient = OkHttpClient.Builder()
+        .connectTimeout(1, TimeUnit.SECONDS)
+        .readTimeout(1, TimeUnit.SECONDS)
+        .callTimeout(1_500, TimeUnit.MILLISECONDS)
+        .build()
     private lateinit var preferences: SharedPreferences
+    private lateinit var applicationContext: Context
 
     val carId: String get() = prefs().getString("carId", null) ?: error("not initialized")
 
     fun init(appContext: Context) {
-        preferences = appContext.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        applicationContext = appContext.applicationContext
+        preferences = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs().getString("carId", null) == null) prefs().edit().putString("carId", UUID.randomUUID().toString()).apply()
     }
 
@@ -59,7 +72,7 @@ object PhoneConnectionStore {
             require(host.isNotBlank() && port in 1..65535) { "Invalid phone address" }
             require(Regex("^[0-9]{6}$").matches(code)) { "Enter the six-digit code" }
             val payload = json.encodeToString(PairRequest.serializer(), PairRequest(code, Build.MODEL.ifBlank { "Zeekr" }, carId))
-            val request = Request.Builder().url("http://$host:$port/api/pair")
+            val request = Request.Builder().url(endpointUrl(host, port, "api/pair"))
                 .header(TransferProtocol.HTTP_HEADER, TransferProtocol.HTTP_HEADER_VALUE)
                 .post(payload.toRequestBody("application/json".toMediaType())).build()
             client.newCall(request).execute().use { response ->
@@ -80,7 +93,7 @@ object PhoneConnectionStore {
 
     suspend fun health(endpoint: PhoneEndpoint): Result<HealthResponse> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = Request.Builder().url("http://${endpoint.host}:${endpoint.port}/health")
+            val request = Request.Builder().url(endpointUrl(endpoint.host, endpoint.port, "health"))
                 .header(TransferProtocol.HTTP_HEADER, TransferProtocol.HTTP_HEADER_VALUE)
                 .get()
                 .build()
@@ -95,18 +108,123 @@ object PhoneConnectionStore {
 
     suspend fun discover(): Result<DiscoveryReply> = withContext(Dispatchers.IO) {
         runCatching {
-            DatagramSocket().use { socket ->
-                socket.broadcast = true
-                socket.soTimeout = 3_000
-                val bytes = TransferProtocol.DISCOVERY_REQUEST.toByteArray()
-                socket.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName("255.255.255.255"), TransferProtocol.UDP_PORT))
-                val buffer = ByteArray(2048)
-                val packet = DatagramPacket(buffer, buffer.size)
-                socket.receive(packet)
-                json.decodeFromString(DiscoveryReply.serializer(), String(packet.data, packet.offset, packet.length))
-            }
+            val network = discoveryNetwork()
+            discoverUdp(network.targets)
+                ?: discoverHealth(network.gateways)
+                ?: error(
+                    "未收到手机回应（已尝试 ${network.targets.take(6).joinToString()}）。" +
+                        "请确认 OpenAVM Companion 显示“运行中”，或输入手机页显示的 IP / IP:8766",
+                )
         }
     }
+
+    private data class DiscoveryNetwork(val targets: List<String>, val gateways: List<String>)
+
+    private fun discoveryNetwork(): DiscoveryNetwork {
+        val gateways = linkedSetOf<String>()
+        val broadcasts = linkedSetOf<String>()
+        runCatching {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.interfaceAddresses }
+                .forEach { address ->
+                    (address.broadcast as? Inet4Address)?.hostAddress?.let(broadcasts::add)
+                    (address.address as? Inet4Address)?.hostAddress
+                        ?.let { DiscoveryTargetPolicy.directedBroadcast(it, address.networkPrefixLength.toInt()) }
+                        ?.let(broadcasts::add)
+                }
+        }
+        runCatching {
+            val connectivity = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivity.allNetworks.sortedByDescending { network ->
+                when {
+                    connectivity.getNetworkCapabilities(network)
+                        ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> 2
+                    network == connectivity.activeNetwork -> 1
+                    else -> 0
+                }
+            }.forEach { network ->
+                connectivity.getLinkProperties(network)?.let { properties ->
+                    properties.routes.mapNotNull { it.gateway as? Inet4Address }
+                        .mapNotNull { it.hostAddress }
+                        .forEach(gateways::add)
+                    properties.linkAddresses.forEach { link ->
+                        (link.address as? Inet4Address)?.hostAddress
+                            ?.let { DiscoveryTargetPolicy.directedBroadcast(it, link.prefixLength) }
+                            ?.let(broadcasts::add)
+                    }
+                }
+            }
+        }
+        return DiscoveryNetwork(
+            targets = DiscoveryTargetPolicy.targets(gateways, broadcasts),
+            gateways = DiscoveryTargetPolicy.targets(gateways, emptyList()).filterNot { it == "255.255.255.255" },
+        )
+    }
+
+    private fun discoverUdp(targets: List<String>): DiscoveryReply? = DatagramSocket().use { socket ->
+        socket.broadcast = true
+        val request = TransferProtocol.DISCOVERY_REQUEST.toByteArray()
+        repeat(2) {
+            targets.forEach { target ->
+                runCatching {
+                    socket.send(
+                        DatagramPacket(request, request.size, InetAddress.getByName(target), TransferProtocol.UDP_PORT),
+                    )
+                }
+            }
+            val roundDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1_500)
+            while (true) {
+                val remainingMs = TimeUnit.NANOSECONDS.toMillis(roundDeadline - System.nanoTime()).toInt()
+                if (remainingMs <= 0) break
+                socket.soTimeout = remainingMs.coerceAtLeast(1)
+                val buffer = ByteArray(2_048)
+                val packet = DatagramPacket(buffer, buffer.size)
+                try {
+                    socket.receive(packet)
+                } catch (_: SocketTimeoutException) {
+                    break
+                }
+                val reply = runCatching {
+                    json.decodeFromString(
+                        DiscoveryReply.serializer(),
+                        String(packet.data, packet.offset, packet.length, Charsets.UTF_8),
+                    )
+                }.getOrNull() ?: continue
+                if (reply.service != TransferProtocol.SERVICE || reply.port !in 1..65_535) continue
+                val sourceIp = (packet.address as? Inet4Address)?.hostAddress.orEmpty()
+                return@use reply.copy(ip = sourceIp.ifBlank { reply.ip })
+            }
+        }
+        null
+    }
+
+    private fun discoverHealth(gateways: List<String>): DiscoveryReply? {
+        gateways.take(4).forEach { host ->
+            val reply = runCatching {
+                val request = Request.Builder()
+                    .url(endpointUrl(host, TransferProtocol.PORT, "health"))
+                    .header(TransferProtocol.HTTP_HEADER, TransferProtocol.HTTP_HEADER_VALUE)
+                    .get()
+                    .build()
+                discoveryClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use null
+                    val health = json.decodeFromString(HealthResponse.serializer(), response.body?.string().orEmpty())
+                    if (health.service != TransferProtocol.SERVICE) return@use null
+                    DiscoveryReply(deviceName = health.deviceName, ip = host, port = TransferProtocol.PORT)
+                }
+            }.getOrNull()
+            if (reply != null) return reply
+        }
+        return null
+    }
+
+    private fun endpointUrl(host: String, port: Int, path: String): HttpUrl = HttpUrl.Builder()
+        .scheme("http")
+        .host(host)
+        .port(port)
+        .addPathSegments(path.trim('/'))
+        .build()
 
     fun forget() { prefs().edit().remove("host").remove("port").remove("name").remove("phoneId").remove("token").apply() }
     private fun prefs() = preferences
