@@ -290,9 +290,13 @@ fun RecordScreen() {
                     }
                     val ready = configState as? RecordConfigState.Ready
                     if (ready != null) {
-                        previewController.clearRecorderPreviewHandoff()
-                        previewEnabled = false
-                        CameraRecordingService.start(context, ready.config, previewSurface = null)
+                        val recorderPreviewSurface = previewController.acquireRecorderPreviewSurface()
+                        previewEnabled = recorderPreviewSurface != null
+                        CameraRecordingService.start(
+                            context,
+                            ready.config,
+                            previewSurface = recorderPreviewSurface,
+                        )
                     } else if (cameraPermission) {
                         previewEnabled = true
                         previewController.startPreview()
@@ -362,9 +366,6 @@ fun RecordScreen() {
                     EmulatorTestRecording.effectiveMode(settings.recordingMode)
                 } else settings.recordingMode,
                 sourceVerified = emulatorTestMode || settings.sourceFingerprint != null,
-                calibrationValid = emulatorTestMode ||
-                    settings.recordingMode != com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY ||
-                    settings.frontCalibration != null,
                 protectedSpace = formatBytes(diskStats.protectedBytes),
             )
             Spacer(Modifier.height(14.dp))
@@ -540,8 +541,9 @@ private fun HomePreviewPane(
     modifier: Modifier = Modifier,
 ) {
     var lensMode by remember(settings) { mutableStateOf(settings.lensMode) }
-    val singleEmulatorCamera = EmulatorTestRecording.isAvailable() &&
-        settings.recordingMode == com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY
+    val frontOnly = settings.recordingMode ==
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.FRONT_ONLY
+    val directFrontCamera = EmulatorTestRecording.isAvailable() && frontOnly
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center,
@@ -552,7 +554,7 @@ private fun HomePreviewPane(
                 !recordingActive || (recorderPreviewRequested && !recorderPreviewFallbackUsed)
                 )
             if (showLivePreview) {
-                if (singleEmulatorCamera) {
+                if (directFrontCamera) {
                     ManualSingleCameraPreviewPanel(
                         controller = controller,
                         state = state,
@@ -563,17 +565,18 @@ private fun HomePreviewPane(
                         controller = controller,
                         state = state,
                         lensMode = lensMode,
+                        frontOnly = frontOnly,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
             } else {
-                if (singleEmulatorCamera) {
+                if (frontOnly) {
                     StaticFrontPreview(modifier = Modifier.fillMaxSize())
                 } else {
                     StaticLaneGrid(modifier = Modifier.fillMaxSize())
                 }
             }
-            if (!singleEmulatorCamera) {
+            if (!directFrontCamera) {
                 FourLaneLensToggle(
                     mode = lensMode,
                     onModeChanged = { selected ->
@@ -653,7 +656,6 @@ private fun ProductStatusCard(
     retentionHours: Int,
     recordingMode: com.dante.zeekrcapabilitylab.service.recorder.RecordingMode?,
     sourceVerified: Boolean,
-    calibrationValid: Boolean,
     protectedSpace: String,
 ) {
     Card(Modifier.fillMaxWidth()) {
@@ -674,7 +676,6 @@ private fun ProductStatusCard(
                 },
             )
             ProductInfoRow(Utils.t("Source", "来源"), if (sourceVerified) Utils.t("Verified", "已确认") else Utils.t("Setup required", "需要设置"))
-            ProductInfoRow(Utils.t("Front calibration", "前方校准"), if (calibrationValid) Utils.t("Ready", "就绪") else Utils.t("Required", "需要校准"))
             ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
             ProductInfoRow(Utils.t("Estimated recording", "预计可录"), formatEstimatedMinutes(estimatedMinutes))
             ProductInfoRow(Utils.t("Protected usage", "受保护占用"), protectedSpace)
@@ -715,22 +716,28 @@ private fun ManualPreviewPanel(
     controller: SafeManualPreviewController,
     state: ManualPreviewState,
     lensMode: FourLaneLensMode,
+    frontOnly: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val correctionConfig = SettingsStore.get(context).fisheyeCorrection
     val previewView = remember(controller) { FourLaneTextureContainer(context) }
-    var displayMode by remember(controller) { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
+    val defaultDisplayMode = if (frontOnly) {
+        FourLaneDisplayMode.LANE_1
+    } else {
+        FourLaneDisplayMode.FOUR_GRID
+    }
+    var displayMode by remember(controller, frontOnly) { mutableStateOf(defaultDisplayMode) }
     var zoom by remember(controller) { mutableStateOf(1f) }
 
     LaunchedEffect(state.active) {
         if (!state.active) {
-            displayMode = FourLaneDisplayMode.FOUR_GRID
+            displayMode = defaultDisplayMode
             zoom = previewView.resetViewport()
         }
     }
 
-    BackHandler(enabled = displayMode.singleLane != null) {
+    BackHandler(enabled = !frontOnly && displayMode.singleLane != null) {
         displayMode = FourLaneDisplayMode.FOUR_GRID
         zoom = previewView.resetViewport()
     }
@@ -759,9 +766,13 @@ private fun ManualPreviewPanel(
                 displayMode = displayMode,
                 interactionEnabled = state.active && state.firstFrame,
                 zoom = zoom,
-                onLaneTapped = { lane ->
-                    displayMode = displayMode.toggleLane(lane)
-                    zoom = previewView.resetViewport()
+                onLaneTapped = if (frontOnly) {
+                    null
+                } else {
+                    { lane ->
+                        displayMode = displayMode.toggleLane(lane)
+                        zoom = previewView.resetViewport()
+                    }
                 },
                 onTransformGesture = { zoomChange, panX, panY ->
                     zoom = previewView.applyViewportGesture(zoomChange, panX, panY)

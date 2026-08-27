@@ -140,6 +140,18 @@ class ProductHomeCameraPolicyTest {
         assertTrue(source.contains("serviceRunning && RecorderCommandPolicy.isActive"))
         assertTrue(source.contains("HomePreviewPane("))
         assertTrue(source.contains("ProductStatusCard("))
+        assertTrue(
+            "recording must hand the surviving TextureView surface to the service",
+            source.contains("previewController.acquireRecorderPreviewSurface()"),
+        )
+        assertFalse(
+            "recording must not intentionally start with a null preview surface",
+            source.contains("previewSurface = null"),
+        )
+        assertTrue(
+            "front-only mode must render the fixed front lane rather than the four-lane grid",
+            source.contains("FourLaneDisplayMode.LANE_1"),
+        )
         assertTrue(source.contains(".weight(1.75f)"))
         assertTrue(source.contains("手机传输"))
         assertTrue(source.contains("可用空间"))
@@ -150,5 +162,12 @@ class ProductHomeCameraPolicyTest {
         assertFalse(source.contains("查看原始长条"))
         assertFalse(source.contains("显示：四格"))
         assertFalse(source.contains("Surface ${'$'}{it.width}"))
+
+        val settingsSource =
+            File("src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt")
+                .readText()
+        assertFalse(settingsSource.contains("FrontCalibrationPreview("))
+        assertFalse(settingsSource.contains("Front calibration"))
+        assertFalse(settingsSource.contains("前方校准"))
     }
 }

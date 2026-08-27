@@ -81,6 +81,18 @@ class FrontFirstPolicyTest {
     }
 
     @Test
+    fun fixedFrontSelectionAlwaysUsesFirstLaneWithoutRotation() {
+        val selection = requireNotNull(FrontCropPolicy.fixedFrontSelection(fingerprint, composite))
+
+        assertEquals(FrontCropPolicy.FIXED_FRONT_LANE, selection.frontLane)
+        assertEquals(1, selection.frontLane)
+        assertEquals(FrontCropPolicy.FIXED_FRONT_ROTATION_DEGREES, selection.rotationDegrees)
+        assertEquals(requireNotNull(FrontCropPolicy.laneCrop(composite, 1)), selection.crop)
+        assertTrue(selection.matches(fingerprint, composite))
+        assertNull(FrontCropPolicy.fixedFrontSelection(fingerprint, ProfileSize(1920, 1080)))
+    }
+
+    @Test
     fun calibrationRequiresVisibleFirstFrameFromUnchangedSource() {
         assertTrue(FrontCalibrationConfirmationPolicy.canSave(true, true, true, true))
         assertFalse(FrontCalibrationConfirmationPolicy.canSave(false, true, true, true))

@@ -18,7 +18,7 @@ AVM Recorder records and displays the surround-view video stream exposed to a th
 The current alpha provides:
 
 - a 2×2 live view labelled Front, Rear, Left and Right;
-- explicit `Front only` and `360°` recording modes; front-only remains an experimental vehicle-test path after parked visual calibration;
+- explicit `Front only` and `360°` recording modes; front-only uses the fixed first/front lane and remains an experimental vehicle-test path;
 - one-minute internal MP4 rollover files in the app's internal storage, presented as one recording for each explicit Start/Stop session;
 - protected/saved events that automatic cleanup does not remove;
 - a thumbnail-based recording library with multi-select and confirmed batch deletion;
@@ -40,11 +40,11 @@ AVM Recorder:
 
 1. requests that single composite stream through standard Android Camera2 APIs;
 2. identifies and maps the four image regions into a 2×2 display;
-3. in `Front only`, crops the user-confirmed raw front lane in memory through a service-owned `SurfaceTexture` and EGL/OpenGL ES, then encodes only that view with a capability-checked H.264 surface encoder;
+3. in `Front only`, crops the fixed first/front raw lane in memory through a service-owned `SurfaceTexture` and EGL/OpenGL ES, previews only that lane, then encodes only that view with a capability-checked H.264 surface encoder;
 4. in `360°`, records the verified composite stream directly; and
 5. applies preview/playback layout, zoom and optional lens correction only at the display layer.
 
-Recording is fail-closed. A first run, OTA/source fingerprint change, ambiguous source, missing parked live visual calibration, a preview that cannot render the exact selected source geometry, or an unavailable validated H.264 profile blocks recording instead of guessing, changing quality, or silently recording the full composite. Recording starts only after the user taps Start; app launch and process/service restart never auto-start capture. The recording service owns every required camera and encoder surface, so an activity preview is optional and may be destroyed without being part of the recording path.
+Recording is fail-closed. A first run, OTA/source fingerprint change, ambiguous source, composite geometry that cannot produce the fixed front crop, or an unavailable validated H.264 profile blocks recording instead of guessing, changing quality, or silently recording the full composite. Recording starts only after the user taps Start; app launch and process/service restart never auto-start capture. While the activity is visible, its preview surface is included in the recorder capture session so the selected view remains visible; the service-owned encoder path remains independent and continues if the preview output must be dropped.
 
 Front-only is an implemented engineering path, not yet a vehicle-validated stability claim. Because the observed source is still the composite stream, the GPU crop may reduce encoder load and file writes without reducing upstream camera, ISP, memory-bandwidth, thermal or other shared-resource cost.
 

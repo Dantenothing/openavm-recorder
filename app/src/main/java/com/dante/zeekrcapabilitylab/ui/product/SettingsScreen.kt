@@ -1,12 +1,6 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -26,7 +19,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,28 +27,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.dante.zeekrcapabilitylab.BuildConfig
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.CameraRuntime
 import com.dante.zeekrcapabilitylab.product.RuntimeCameraSource
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
-import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
 import com.dante.zeekrcapabilitylab.product.EmulatorTestRecording
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
-import com.dante.zeekrcapabilitylab.service.CameraRecordingService
-import com.dante.zeekrcapabilitylab.service.recorder.FrontCalibrationConfirmationPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceKind
 import com.dante.zeekrcapabilitylab.util.Utils
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -68,11 +54,6 @@ fun SettingsScreen() {
     val emulatorTestMode = remember { EmulatorTestRecording.isAvailable() }
     val scope = rememberCoroutineScope()
     val languageMode by AppLanguage.mode.collectAsState()
-    val calibrationPreviewController = remember {
-        SafeManualPreviewController(context.applicationContext)
-    }
-    val calibrationPreviewState by calibrationPreviewController.state.collectAsState()
-
     var segment by remember { mutableStateOf(settings.segmentSeconds) }
     var storage by remember { mutableStateOf(settings.storageLimitBytes) }
     var safety by remember { mutableStateOf(settings.minFreeBytes) }
@@ -81,37 +62,10 @@ fun SettingsScreen() {
     var recordingMode by remember { mutableStateOf(settings.recordingMode) }
     var sources by remember { mutableStateOf<List<RuntimeCameraSource>>(emptyList()) }
     var sourceMessage by remember { mutableStateOf<String?>(null) }
-    var frontLane by remember { mutableStateOf(settings.frontCalibration?.frontLane ?: 1) }
-    var frontRotation by remember { mutableStateOf(settings.frontCalibration?.rotationDegrees ?: 0) }
-    var calibrationSourceSize by remember {
-        mutableStateOf(
-            settings.frontCalibration?.let { ProfileSize(it.sourceWidth, it.sourceHeight) },
-        )
-    }
-    var calibrationSourceFingerprint by remember {
-        mutableStateOf(settings.frontCalibration?.sourceFingerprint)
-    }
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var correctionTuningVisible by remember { mutableStateOf(false) }
     var versionTapCount by remember { mutableStateOf(0) }
     var logsVisible by remember { mutableStateOf(false) }
-
-    val calibrationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) {
-            calibrationSourceSize?.let(calibrationPreviewController::startPreview)
-        } else {
-            sourceMessage = Utils.t(
-                "Camera permission is required for parked visual calibration.",
-                "停车可视校准需要摄像头权限。",
-            )
-        }
-    }
-
-    DisposableEffect(calibrationPreviewController) {
-        onDispose { calibrationPreviewController.release() }
-    }
 
     Column(
         Modifier
@@ -177,12 +131,9 @@ fun SettingsScreen() {
                     onSelect = { index ->
                         val selected = if (index == 0) RecordingMode.FRONT_ONLY else RecordingMode.SURROUND_360
                         if (recordingMode != selected) {
-                            calibrationPreviewController.stopPreview()
                             recordingMode = selected
                             settings.setRecordingMode(selected)
                             sources = emptyList()
-                            calibrationSourceSize = null
-                            calibrationSourceFingerprint = null
                             sourceMessage = Utils.t(
                                 "Confirm the camera source for this mode.",
                                 "请为此模式确认摄像头来源。",
@@ -192,8 +143,8 @@ fun SettingsScreen() {
                 )
                 Text(
                     Utils.t(
-                        "Front only is an experimental vehicle-test path. It requires parked visual calibration; 360 uses substantially more storage and may use more shared resources.",
-                        "“仅前方”是尚待实车验证的实验路径，必须先停车完成可视校准；360° 会占用更多存储空间，也可能使用更多共享资源。",
+                        "Front only automatically uses the first (front) lane of the verified composite source. It remains an experimental vehicle-test path; 360 uses substantially more storage and may use more shared resources.",
+                        "“仅前方”会自动使用已确认合成来源的第一个（前方）画面。该路径仍属于尚待实车验证的实验功能；360° 会占用更多存储空间，也可能使用更多共享资源。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -237,10 +188,7 @@ fun SettingsScreen() {
                     val composite = preferredCompositeSize(source.sizesFor(kind))
                     OutlinedButton(
                         onClick = {
-                            calibrationPreviewController.stopPreview()
                             settings.confirmSource(source.cameraId, source.fingerprint, kind)
-                            calibrationSourceSize = composite
-                            calibrationSourceFingerprint = source.fingerprint
                             sourceMessage = Utils.t(
                                 "Source ${source.cameraId} confirmed (${composite ?: "unknown"}).",
                                 "已确认来源 ${source.cameraId}（${composite ?: "未知"}）。",
@@ -252,122 +200,6 @@ fun SettingsScreen() {
                 }
                 sourceMessage?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-                }
-                if (!emulatorTestMode && recordingMode == RecordingMode.FRONT_ONLY) {
-                    val sourceSize = calibrationSourceSize
-                    if (sourceSize != null && calibrationSourceFingerprint == settings.sourceFingerprint) {
-                        Text(
-                            Utils.t(
-                                "Park, start the live preview, then select the lane and rotation that visibly show the forward road.",
-                                "请先停车并启动实时预览，再选择确实显示前方道路的画面与旋转方向。",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        FrontCalibrationPreview(
-                            controller = calibrationPreviewController,
-                            state = calibrationPreviewState,
-                            sourceSize = sourceSize,
-                            lane = frontLane,
-                            rotationDegrees = frontRotation,
-                        )
-                        OutlinedButton(
-                            onClick = {
-                                if (calibrationPreviewState.active) {
-                                    calibrationPreviewController.stopPreview()
-                                } else if (CameraRecordingService.isRunning()) {
-                                    sourceMessage = Utils.t(
-                                        "Stop recording before calibration.",
-                                        "请先停止录像，再进行校准。",
-                                    )
-                                } else if (context.checkSelfPermission(Manifest.permission.CAMERA) ==
-                                    PackageManager.PERMISSION_GRANTED
-                                ) {
-                                    calibrationPreviewController.startPreview(sourceSize)
-                                } else {
-                                    calibrationPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                }
-                            },
-                        ) {
-                            Text(
-                                if (calibrationPreviewState.active) {
-                                    Utils.t("Stop calibration preview", "停止校准预览")
-                                } else {
-                                    Utils.t("I am parked — start live calibration", "车辆已停稳——启动实时校准")
-                                },
-                            )
-                        }
-                    } else {
-                        Text(
-                            Utils.t(
-                                "Discover and confirm a compatible source before calibration.",
-                                "请先检测并确认兼容的摄像头来源，再进行校准。",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    OptionRow(
-                        label = Utils.t("Actual front lane", "实际前方画面"),
-                        options = (1..4).map { Utils.t("View $it", "视角$it") },
-                        selectedIndex = frontLane - 1,
-                        onSelect = {
-                            val selected = it + 1
-                            if (frontLane != selected) settings.clearFrontCalibration()
-                            frontLane = selected
-                        },
-                    )
-                    OptionRow(
-                        label = Utils.t("Record rotation", "录像旋转"),
-                        options = listOf("0°", "90°", "180°", "270°"),
-                        selectedIndex = listOf(0, 90, 180, 270).indexOf(frontRotation),
-                        onSelect = {
-                            val selected = listOf(0, 90, 180, 270)[it]
-                            if (frontRotation != selected) settings.clearFrontCalibration()
-                            frontRotation = selected
-                        },
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            scope.launch {
-                                val expectedFingerprint = calibrationSourceFingerprint
-                                val sourceUnchanged = !expectedFingerprint.isNullOrBlank() &&
-                                    expectedFingerprint == settings.sourceFingerprint &&
-                                    settings.selectedCameraId != null
-                                val previewMatchesSource = calibrationPreviewState.forcedBufferSize?.let {
-                                    it.width == calibrationSourceSize?.width &&
-                                        it.height == calibrationSourceSize?.height
-                                } == true && !calibrationPreviewState.fallbackUsed
-                                val confirmed = FrontCalibrationConfirmationPolicy.canSave(
-                                    previewActive = calibrationPreviewState.active,
-                                    firstFrameVisible = calibrationPreviewState.firstFrame,
-                                    sourceUnchanged = sourceUnchanged,
-                                    previewMatchesSource = previewMatchesSource,
-                                )
-                                val size = calibrationSourceSize
-                                val calibrated = confirmed && size != null && expectedFingerprint != null &&
-                                    withContext(Dispatchers.IO) {
-                                        settings.saveFrontCalibration(
-                                            sourceSize = size,
-                                            lane = frontLane,
-                                            rotationDegrees = frontRotation,
-                                            visuallyConfirmed = confirmed,
-                                            expectedSourceFingerprint = expectedFingerprint,
-                                        )
-                                    }
-                                sourceMessage = if (calibrated) {
-                                    Utils.t("Front calibration saved for this source.", "已为此来源保存前方校准。")
-                                } else {
-                                    Utils.t(
-                                        "Calibration blocked: keep the vehicle parked and confirm the selected live crop after its first frame appears.",
-                                        "校准已阻止：请保持停车，并在实时画面首帧出现后确认所选裁切画面。",
-                                    )
-                                }
-                            }
-                        },
-                    ) {
-                        Text(Utils.t("Save the visible front crop", "保存当前可见前方画面"))
-                    }
                 }
                 OptionRow(
                     label = Utils.t("Internal file interval", "内部文件间隔"),
@@ -428,8 +260,8 @@ fun SettingsScreen() {
                 }
                 Text(
                     Utils.t(
-                        "Recording preview is disabled. The service-owned recording path never depends on an activity surface.",
-                        "录像期间预览已关闭；服务自有的录像路径不依赖 Activity 表面。",
+                        "Recording keeps the visible preview when the camera accepts the combined outputs. If preview output fails, recording continues on the service-owned path.",
+                        "当摄像头支持组合输出时，录像期间会保留可见预览；如果预览输出失败，服务自有的录像路径仍会继续录像。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -562,62 +394,6 @@ fun SettingsScreen() {
 
     if (logsVisible) {
         LogsDialog(onDismiss = { logsVisible = false })
-    }
-}
-
-@Composable
-private fun FrontCalibrationPreview(
-    controller: SafeManualPreviewController,
-    state: ManualPreviewState,
-    sourceSize: ProfileSize,
-    lane: Int,
-    rotationDegrees: Int,
-) {
-    val context = LocalContext.current
-    val previewView = remember(controller) { FourLaneTextureContainer(context) }
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-        ) {
-            AndroidView(
-                factory = {
-                    previewView.also { controller.attach(it.textureView) }
-                },
-                update = {
-                    it.sourceWidth = sourceSize.width
-                    it.sourceHeight = sourceSize.height
-                    it.displayMode = FourLaneDisplayMode.forLane(lane)
-                    it.previewRotationDegrees = rotationDegrees
-                    it.lensMode = FourLaneLensMode.FISHEYE
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (!state.firstFrame) {
-                Text(
-                    text = state.error?.let { Utils.t("Preview unavailable", "预览暂不可用") }
-                        ?: Utils.t("Start the parked live preview", "请启动停车实时预览"),
-                    color = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .background(Color(0xC0000000))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                )
-            }
-            Text(
-                Utils.t("Selected raw view $lane · $rotationDegrees°", "已选原始视角$lane · $rotationDegrees°"),
-                color = Color.White,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .background(Color(0xC0000000))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-            )
-        }
     }
 }
 

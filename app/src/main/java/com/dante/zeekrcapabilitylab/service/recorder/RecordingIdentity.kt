@@ -124,7 +124,10 @@ object CameraSourceFingerprint {
 }
 
 object FrontCropPolicy {
-    /** Equal-lane calibration seed. The user still has to confirm the actual lane. */
+    const val FIXED_FRONT_LANE = 1
+    const val FIXED_FRONT_ROTATION_DEGREES = 0
+
+    /** Equal-lane crop for the fixed composite ordering: front, rear, left, right. */
     fun laneCrop(size: ProfileSize, lane: Int): NormalizedCropRect? {
         if (size.width <= 0 || size.height <= 0 || lane !in 1..4) return null
         val vertical = size.height.toDouble() / size.width >= 3.2
@@ -154,6 +157,17 @@ object FrontCropPolicy {
             rotationDegrees = ((rotationDegrees % 360) + 360) % 360,
         ).takeIf { it.validate().isEmpty() }
     }
+
+    /** Builds the deterministic front selection used by front-only recording. */
+    fun fixedFrontSelection(
+        fingerprint: String,
+        size: ProfileSize,
+    ): FrontCalibration? = calibration(
+        fingerprint = fingerprint,
+        size = size,
+        lane = FIXED_FRONT_LANE,
+        rotationDegrees = FIXED_FRONT_ROTATION_DEGREES,
+    )
 }
 
 /** A front calibration is durable only after the selected live crop produced a frame. */

@@ -2,6 +2,7 @@ package com.dante.zeekrcapabilitylab.product
 
 import android.content.Context
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
+import com.dante.zeekrcapabilitylab.service.recorder.FrontCropPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceKind
@@ -80,9 +81,10 @@ object ProductRecorderConfigFactory {
                         val sourceProfile = compositeSize
                             ?.let { CameraProfileCatalog.productPreferredProfile(listOf(it)) }
                             ?: return RecorderConfigResolution.Blocked("VERIFIED_COMPOSITE_PROFILE_UNAVAILABLE")
-                        val calibration = settings.frontCalibration
-                            ?.takeIf { it.matches(expectedFingerprint, sourceProfile.size) }
-                            ?: return RecorderConfigResolution.Blocked("FRONT_CALIBRATION_REQUIRED")
+                        val frontSelection = FrontCropPolicy.fixedFrontSelection(
+                            fingerprint = expectedFingerprint,
+                            size = sourceProfile.size,
+                        ) ?: return RecorderConfigResolution.Blocked("FIXED_FRONT_CROP_UNAVAILABLE")
                         RecorderConfig(
                             cameraId = cameraId,
                             profile = output,
@@ -93,9 +95,9 @@ object ProductRecorderConfigFactory {
                             sourceFingerprint = expectedFingerprint,
                             sourceKind = sourceKind,
                             sourceProfile = sourceProfile,
-                            frontCalibration = calibration,
+                            frontCalibration = frontSelection,
                             encoderProfile = encoder,
-                            calibrationVersion = calibration.calibrationVersion,
+                            calibrationVersion = frontSelection.calibrationVersion,
                         )
                     }
 
