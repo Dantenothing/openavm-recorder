@@ -31,15 +31,28 @@ class CameraRecordingService : Service() {
 
     private lateinit var session: RecorderSession
     private var foreground = false
+    private var notificationFailureLogged = false
 
     override fun onCreate() {
         super.onCreate()
         RecorderNotification.ensureChannel(this)
         instance = this
         session = RecorderSession(this, ::publishState, ::onStopped)
+        EventLogger.logEvent(Categories.SYSTEM, "RECORDER_SERVICE_CREATED")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_SERVICE_COMMAND",
+            payload = mapOf(
+                "action" to (intent?.action ?: "NULL_RESTART"),
+                "flags" to flags.toString(),
+                "startId" to startId.toString(),
+                "foreground" to foreground.toString(),
+                "state" to state.value.status,
+            ),
+        )
         when (intent?.action) {
             RecorderCommands.ACTION_START -> {
                 val previewSurface = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -98,6 +111,11 @@ class CameraRecordingService : Service() {
             return
         }
         val notification = RecorderNotification.build(this, state.value)
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_FOREGROUND_START_REQUESTED",
+            payload = mapOf("status" to state.value.status),
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(
                 RecorderNotification.NOTIFICATION_ID,
@@ -108,6 +126,7 @@ class CameraRecordingService : Service() {
             startForeground(RecorderNotification.NOTIFICATION_ID, notification)
         }
         foreground = true
+        EventLogger.logEvent(Categories.SYSTEM, "RECORDER_FOREGROUND_STARTED")
     }
 
     private fun refreshNotification() {
@@ -117,8 +136,18 @@ class CameraRecordingService : Service() {
                 RecorderNotification.NOTIFICATION_ID,
                 RecorderNotification.build(this, state.value),
             )
+            notificationFailureLogged = false
         } catch (t: Throwable) {
-            // Notification updates must never crash the recorder.
+            // Notification updates must never crash or flood the recorder log.
+            if (!notificationFailureLogged) {
+                notificationFailureLogged = true
+                EventLogger.markError(
+                    Categories.SYSTEM,
+                    "RECORDER_NOTIFICATION_UPDATE_FAILED",
+                    t.message ?: t.javaClass.simpleName,
+                    t,
+                )
+            }
         }
     }
 
@@ -129,6 +158,11 @@ class CameraRecordingService : Service() {
     }
 
     private fun onStopped() {
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_SERVICE_STOPPING",
+            payload = mapOf("status" to state.value.status),
+        )
         stopForeground(STOP_FOREGROUND_REMOVE)
         foreground = false
         stopSelf()
@@ -137,9 +171,19 @@ class CameraRecordingService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Deliberately do NOT stop here; the foreground service keeps segmenting
         // while the user drives away from the launcher/home screen.
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_TASK_REMOVED_CONTINUING",
+            payload = mapOf("status" to state.value.status),
+        )
     }
 
     override fun onDestroy() {
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_SERVICE_DESTROYING",
+            payload = mapOf("status" to state.value.status, "foreground" to foreground.toString()),
+        )
         session.release()
         instance = null
         super.onDestroy()
@@ -213,6 +257,12 @@ class CameraRecordingService : Service() {
                 context.startService(intent)
             } catch (t: Throwable) {
                 // In-process fallback when the platform rejects background startService.
+                EventLogger.markError(
+                    Categories.SYSTEM,
+                    "RECORDER_COMMAND_DELIVERY_FALLBACK",
+                    "$action: ${t.message ?: t.javaClass.simpleName}",
+                    t,
+                )
                 instance?.onCommand(action)
             }
         }

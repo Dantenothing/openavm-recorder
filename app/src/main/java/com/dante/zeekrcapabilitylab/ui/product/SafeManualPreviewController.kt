@@ -15,6 +15,7 @@ import android.util.Size
 import android.view.Surface
 import android.view.TextureView
 import com.dante.zeekrcapabilitylab.data.Categories
+import com.dante.zeekrcapabilitylab.data.Severity
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.product.CompositePreviewSizePolicy
@@ -639,7 +640,9 @@ class SafeManualPreviewController(context: Context) {
         EventLogger.logEvent(
             category = Categories.SYSTEM,
             eventName = "PRODUCT_MANUAL_PREVIEW_FAILED",
+            severity = Severity.ERROR,
             payload = mapOf("message" to message),
+            errorMessage = message,
         )
     }
 

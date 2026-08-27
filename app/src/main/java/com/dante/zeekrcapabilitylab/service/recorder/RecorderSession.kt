@@ -19,6 +19,7 @@ import android.os.SystemClock
 import android.view.Surface
 import com.dante.zeekrcapabilitylab.ZeekrApp
 import com.dante.zeekrcapabilitylab.data.Categories
+import com.dante.zeekrcapabilitylab.data.Severity
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
@@ -782,6 +783,21 @@ class RecorderSession(
         val partial = prepared.partial
         currentPartial = partial
         currentJournal = journal
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_SEGMENT_SETUP_BEGIN",
+            payload = mapOf(
+                "segment" to segmentNumber.toString(),
+                "segmentGeneration" to generation.toString(),
+                "cameraGeneration" to openGeneration.toString(),
+                "mode" to cfg.recordingMode.name,
+                "sourceKind" to cfg.sourceKind.name,
+                "sourceProfile" to cfg.effectiveSourceProfile.key,
+                "outputProfile" to cfg.profile.key,
+                "previewRequested" to (recordingPreviewSurface != null).toString(),
+                "previousSessionPresent" to (captureSession != null).toString(),
+            ),
+        )
         try {
             partial.parentFile?.mkdirs()
             scheduleSetupWatchdog(generation)
@@ -789,6 +805,17 @@ class RecorderSession(
                 outputFile = partial,
                 config = cfg,
                 onRuntimeError = { message ->
+                    EventLogger.logEvent(
+                        category = Categories.SYSTEM,
+                        eventName = "RECORDER_PIPELINE_RUNTIME_ERROR",
+                        severity = Severity.ERROR,
+                        payload = mapOf(
+                            "segment" to prepared.segmentNumber.toString(),
+                            "segmentGeneration" to generation.toString(),
+                            "file" to partial.name,
+                        ),
+                        errorMessage = message,
+                    )
                     cameraHandler?.post {
                         if (generation == segmentGeneration && currentPartial === partial && !stopping && !releasing) {
                             finalizeCurrentSegment("PIPELINE_ERROR", message)
@@ -799,7 +826,24 @@ class RecorderSession(
             val surface = pipeline.cameraSurface
             recordingPipeline = pipeline
             activeEncoderSurface = surface
-            captureSession?.close()
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_PIPELINE_PREPARED",
+                payload = mapOf(
+                    "segment" to segmentNumber.toString(),
+                    "segmentGeneration" to generation.toString(),
+                    "cameraSurfaceValid" to surface.isValid.toString(),
+                ) + pipeline.diagnostics.eventPayload(),
+            )
+            runCatching { captureSession?.close() }
+                .onFailure { error ->
+                    EventLogger.markError(
+                        Categories.SYSTEM,
+                        "RECORDER_PREVIOUS_SESSION_CLOSE_FAILED",
+                        "segment=$segmentNumber: ${error.message ?: error.javaClass.simpleName}",
+                        error,
+                    )
+                }
             captureSession = null
             fun configureSession(includePreview: Boolean) {
                 if (!ownsSetup(generation, partial, pipeline)) return
@@ -821,6 +865,16 @@ class RecorderSession(
                             }
                             captureSession = session
                             val previewTarget = preview?.takeIf { previewOutputDesired }
+                            EventLogger.logEvent(
+                                Categories.SYSTEM,
+                                "RECORDER_CAPTURE_SESSION_CONFIGURED",
+                                payload = mapOf(
+                                    "segment" to segmentNumber.toString(),
+                                    "segmentGeneration" to generation.toString(),
+                                    "previewTarget" to (previewTarget != null).toString(),
+                                    "encoderSurfaceValid" to surface.isValid.toString(),
+                                ) + pipeline.diagnostics.eventPayload(),
+                            )
                             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                                 addTarget(surface)
                                 previewTarget?.let(::addTarget)
@@ -830,6 +884,15 @@ class RecorderSession(
                                     request,
                                     createFrameCaptureCallback(generation),
                                     cameraHandler,
+                                )
+                                EventLogger.logEvent(
+                                    Categories.SYSTEM,
+                                    "RECORDER_REPEATING_REQUEST_SET",
+                                    payload = mapOf(
+                                        "segment" to segmentNumber.toString(),
+                                        "segmentGeneration" to generation.toString(),
+                                        "targets" to if (previewTarget != null) "encoder+preview" else "encoder",
+                                    ),
                                 )
                             } catch (t: Throwable) {
                                 captureSession = null
@@ -877,7 +940,7 @@ class RecorderSession(
                                         "pipelineVersion" to cfg.pipelineVersion.toString(),
                                         "processStartId" to processStartId,
                                         "previewActive" to (previewTarget != null).toString(),
-                                    ),
+                                    ) + pipelineEventPayload(pipeline, pipeline.progress, partial.length()),
                                 )
                                 scheduleEncodedWatchdog(generation)
                                 scheduleKeyFrame(generation, cfg.segmentSeconds * 1000L - 250L)
@@ -905,6 +968,19 @@ class RecorderSession(
                                 cancelSetupWatchdog()
                                 failSegmentStart(generation, partial, "RECORD_SESSION_CONFIGURE_FAILED")
                             }
+                        }
+
+                        override fun onClosed(session: CameraCaptureSession) {
+                            EventLogger.logEvent(
+                                Categories.SYSTEM,
+                                "RECORDER_CAPTURE_SESSION_CLOSED",
+                                payload = mapOf(
+                                    "segment" to prepared.segmentNumber.toString(),
+                                    "segmentGeneration" to generation.toString(),
+                                    "currentGeneration" to segmentGeneration.toString(),
+                                    "wasCurrentSession" to (captureSession === session).toString(),
+                                ),
+                            )
                         }
                     },
                     cameraHandler,
@@ -1087,6 +1163,20 @@ class RecorderSession(
                 ),
             )
             if (stalled) {
+                EventLogger.logEvent(
+                    category = Categories.SYSTEM,
+                    eventName = "RECORDER_ENCODED_OUTPUT_STALLED",
+                    severity = Severity.ERROR,
+                    payload = mapOf(
+                        "segment" to segmentNumber.toString(),
+                        "segmentGeneration" to generation.toString(),
+                        "elapsedSinceProgressMs" to (now - lastEncodedProgressAtElapsedMs).toString(),
+                        "captureFrames" to frameStats.count.toString(),
+                        "previewActive" to state.previewActive.toString(),
+                        "encoderSurfaceValid" to (activeEncoderSurface?.isValid == true).toString(),
+                    ) + pipelineEventPayload(recordingPipeline, progress, fileBytes),
+                    errorMessage = "No encoded-frame or output-file progress",
+                )
                 finalizeCurrentSegment("PIPELINE_ERROR", "ENCODED_OUTPUT_STALLED")
             } else {
                 cameraHandler?.postDelayed(runnable, EncodedOutputWatchdogPolicy.CHECK_INTERVAL_MS)
@@ -1141,8 +1231,17 @@ class RecorderSession(
         cancelTimeout()
         recording = false
         runCatching { recordingPipeline?.release() }
+            .onFailure { error ->
+                EventLogger.markError(
+                    Categories.SYSTEM,
+                    "RECORDER_FAILED_START_PIPELINE_RELEASE_ERROR",
+                    error.message ?: error.javaClass.simpleName,
+                    error,
+                )
+            }
         recordingPipeline = null
-        captureSession?.close()
+        runCatching { captureSession?.close() }
+            .onFailure { logCloseFailure("failedStartCaptureSession", it) }
         captureSession = null
         activeEncoderSurface = null
         val effectiveFile = quarantine(partial) ?: partial
@@ -1241,17 +1340,48 @@ class RecorderSession(
         segmentRecordingStartedAtElapsedMs = null
         updateState(state.copy(status = RecorderStatus.FINALIZING))
 
+        val finalizeStartedElapsedMs = SystemClock.elapsedRealtime()
+        val pipeline = recordingPipeline
+        val progressBeforeStop = pipeline?.progress
+        val diagnosticsBeforeStop = pipeline?.diagnostics
+        val fileBytesBeforeStop = if (partial.exists()) partial.length() else 0L
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_SEGMENT_FINALIZE_BEGIN",
+            payload = mapOf(
+                "segment" to segmentNumber.toString(),
+                "segmentGeneration" to segmentGeneration.toString(),
+                "reason" to reason,
+                "forcedError" to (forcedError ?: "-"),
+                "wasRecording" to wasRecording.toString(),
+                "captureFrames" to stats.count.toString(),
+            ) + pipelineEventPayload(pipeline, progressBeforeStop, fileBytesBeforeStop),
+        )
         var stopError: String? = forcedError
         var pipelineEvidence: PipelineStopEvidence? = null
         if (RecorderTransitionPolicy.shouldInvokeStop(wasRecording)) {
             try {
-                pipelineEvidence = recordingPipeline?.stop()
+                pipelineEvidence = pipeline?.stop()
             } catch (t: Throwable) {
                 stopError = stopError ?: (t.message ?: "recorder.stop failed")
+                EventLogger.markError(
+                    Categories.SYSTEM,
+                    "RECORDER_PIPELINE_STOP_FAILED",
+                    "segment=$segmentNumber reason=$reason: ${t.message ?: t.javaClass.simpleName}",
+                    t,
+                )
             }
         }
         journal?.let { queueJournalStage(it, SegmentJournalStage.ENCODER_STOPPED) }
-        runCatching { recordingPipeline?.release() }
+        runCatching { pipeline?.release() }
+            .onFailure { error ->
+                EventLogger.markError(
+                    Categories.SYSTEM,
+                    "RECORDER_PIPELINE_RELEASE_FAILED",
+                    "segment=$segmentNumber: ${error.message ?: error.javaClass.simpleName}",
+                    error,
+                )
+            }
         recordingPipeline = null
         pipelineEvidence?.progress?.let { progress ->
             updateState(
@@ -1261,7 +1391,15 @@ class RecorderSession(
                 ),
             )
         }
-        captureSession?.close()
+        runCatching { captureSession?.close() }
+            .onFailure { error ->
+                EventLogger.markError(
+                    Categories.SYSTEM,
+                    "RECORDER_CAPTURE_SESSION_CLOSE_FAILED",
+                    "segment=$segmentNumber: ${error.message ?: error.javaClass.simpleName}",
+                    error,
+                )
+            }
         captureSession = null
         activeEncoderSurface = null
 
@@ -1346,6 +1484,13 @@ class RecorderSession(
                 "bytes" to snapshot.fileBytes.toString(),
                 "frames" to snapshot.frameStats.count.toString(),
                 "gapMs" to (snapshot.gapFromPreviousMs?.toString() ?: "-"),
+                "reason" to reason,
+                "finalizeDurationMs" to (stoppedElapsed - finalizeStartedElapsedMs).toString(),
+            ) + pipelineEventPayload(
+                pipeline = null,
+                progress = pipelineEvidence?.progress ?: progressBeforeStop,
+                fileBytes = snapshot.fileBytes,
+                diagnostics = diagnosticsBeforeStop,
             ),
         )
         runWork(RecorderWorkKind.COMPLETED_SEGMENT_ANALYSIS) {
@@ -1975,15 +2120,22 @@ class RecorderSession(
     private fun closeCamera() {
         cancelEncodedWatchdog()
         cameraOpenInFlight = false
-        try {
-            captureSession?.close()
-            captureSession = null
-            activeEncoderSurface = null
-            cameraDevice?.close()
-            cameraDevice = null
-        } catch (t: Throwable) {
-            // Ignore.
-        }
+        runCatching { captureSession?.close() }
+            .onFailure { logCloseFailure("captureSession", it) }
+        captureSession = null
+        activeEncoderSurface = null
+        runCatching { cameraDevice?.close() }
+            .onFailure { logCloseFailure("cameraDevice", it) }
+        cameraDevice = null
+    }
+
+    private fun logCloseFailure(resource: String, error: Throwable) {
+        EventLogger.markError(
+            Categories.SYSTEM,
+            "RECORDER_RESOURCE_CLOSE_FAILED",
+            "$resource: ${error.message ?: error.javaClass.simpleName}",
+            error,
+        )
     }
 
     private fun releaseRecordingPreviewSurface() {
@@ -2124,4 +2276,21 @@ class RecorderSession(
         val pipelineEvidence: PipelineStopEvidence?,
         val journalFile: File?,
     )
+}
+
+/** Common bounded evidence attached to segment lifecycle and failure events. */
+private fun pipelineEventPayload(
+    pipeline: RecordingPipeline?,
+    progress: PipelineProgress?,
+    fileBytes: Long,
+    diagnostics: PipelineRuntimeDiagnostics? = pipeline?.diagnostics,
+): Map<String, String> = buildMap {
+    put("encodedFileBytes", fileBytes.coerceAtLeast(0L).toString())
+    progress?.let {
+        put("encodedFrames", it.encodedFrameCount.toString())
+        put("encodedBytes", it.encodedBytes.toString())
+        put("firstPtsUs", it.firstPresentationTimeUs?.toString() ?: "-")
+        put("lastPtsUs", it.lastPresentationTimeUs?.toString() ?: "-")
+    }
+    diagnostics?.eventPayload()?.let(::putAll)
 }

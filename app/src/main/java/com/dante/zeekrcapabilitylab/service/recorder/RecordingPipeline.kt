@@ -36,9 +36,38 @@ data class PipelineStopEvidence(
     val actualFormat: String? = null,
 )
 
+/**
+ * Bounded, allocation-light snapshot used only at lifecycle boundaries and on
+ * failures. Frame counters are aggregated; no per-frame data is retained.
+ */
+data class PipelineRuntimeDiagnostics(
+    val kind: String,
+    val started: Boolean,
+    val stopping: Boolean,
+    val released: Boolean,
+    val inputFramesReceived: Long? = null,
+    val inputFramesRendered: Long? = null,
+    val muxerStarted: Boolean? = null,
+    val drainThreadAlive: Boolean? = null,
+    val runtimeFailure: String? = null,
+) {
+    fun eventPayload(prefix: String = "pipeline"): Map<String, String> = buildMap {
+        put("${prefix}Kind", kind)
+        put("${prefix}Started", started.toString())
+        put("${prefix}Stopping", stopping.toString())
+        put("${prefix}Released", released.toString())
+        inputFramesReceived?.let { put("${prefix}InputFrames", it.toString()) }
+        inputFramesRendered?.let { put("${prefix}RenderedFrames", it.toString()) }
+        muxerStarted?.let { put("${prefix}MuxerStarted", it.toString()) }
+        drainThreadAlive?.let { put("${prefix}DrainAlive", it.toString()) }
+        runtimeFailure?.let { put("${prefix}Failure", it) }
+    }
+}
+
 interface RecordingPipeline {
     val cameraSurface: Surface
     val progress: PipelineProgress
+    val diagnostics: PipelineRuntimeDiagnostics
     fun start()
     fun requestKeyFrame(): Boolean
     @Throws(Exception::class)
@@ -100,9 +129,17 @@ private class MediaRecorderPipeline(
         prepare()
     }
     private val started = AtomicBoolean(false)
+    private val released = AtomicBoolean(false)
     override val cameraSurface: Surface = recorder.surface
     override val progress: PipelineProgress
         get() = PipelineProgress(0, 0, null, null)
+    override val diagnostics: PipelineRuntimeDiagnostics
+        get() = PipelineRuntimeDiagnostics(
+            kind = "MEDIA_RECORDER",
+            started = started.get(),
+            stopping = false,
+            released = released.get(),
+        )
 
     override fun start() {
         recorder.start()
@@ -117,6 +154,7 @@ private class MediaRecorderPipeline(
     override fun requestKeyFrame(): Boolean = false
 
     override fun release() {
+        if (!released.compareAndSet(false, true)) return
         runCatching { recorder.reset() }
         runCatching { recorder.release() }
     }
@@ -130,6 +168,8 @@ private class DirectFrontCodecPipeline(
     private val encoder = SurfaceVideoEncoder(outputFile, requireNotNull(config.encoderProfile), onRuntimeError)
     override val cameraSurface: Surface get() = encoder.inputSurface
     override val progress: PipelineProgress get() = encoder.progress
+    override val diagnostics: PipelineRuntimeDiagnostics
+        get() = encoder.diagnostics("DIRECT_FRONT_CODEC")
     override fun start() = encoder.start()
     override fun requestKeyFrame(): Boolean = encoder.requestKeyFrame()
     override fun stop(): PipelineStopEvidence = encoder.stop()
@@ -163,6 +203,16 @@ private class FrontCropCodecPipeline(
     }
     override val cameraSurface: Surface get() = bridge.cameraSurface
     override val progress: PipelineProgress get() = encoder.progress
+    override val diagnostics: PipelineRuntimeDiagnostics
+        get() {
+            val encoderDiagnostics = encoder.diagnostics("FRONT_CROP_CODEC")
+            val bridgeDiagnostics = bridge.diagnostics
+            return encoderDiagnostics.copy(
+                inputFramesReceived = bridgeDiagnostics.receivedFrames,
+                inputFramesRendered = bridgeDiagnostics.renderedFrames,
+                runtimeFailure = bridgeDiagnostics.runtimeFailure ?: encoderDiagnostics.runtimeFailure,
+            )
+        }
 
     override fun start() {
         encoder.start()
@@ -199,6 +249,7 @@ private class SurfaceVideoEncoder(
     private val firstPtsUs = AtomicLong(NO_TIMESTAMP)
     private val lastPtsUs = AtomicLong(NO_TIMESTAMP)
     private val submittedTimestampNs = AtomicLong(NO_TIMESTAMP)
+    private val muxerHasStarted = AtomicBoolean(false)
     private var drainThread: Thread? = null
     @Volatile private var actualFormat: String? = null
 
@@ -228,6 +279,16 @@ private class SurfaceVideoEncoder(
             firstPresentationTimeUs = firstPtsUs.get().takeUnless { it == NO_TIMESTAMP },
             lastPresentationTimeUs = lastPtsUs.get().takeUnless { it == NO_TIMESTAMP },
         )
+
+    fun diagnostics(kind: String): PipelineRuntimeDiagnostics = PipelineRuntimeDiagnostics(
+        kind = kind,
+        started = started.get(),
+        stopping = stopping.get(),
+        released = released.get(),
+        muxerStarted = muxerHasStarted.get(),
+        drainThreadAlive = drainThread?.isAlive == true,
+        runtimeFailure = failure.get()?.let { it.message ?: it.javaClass.simpleName },
+    )
 
     fun noteSubmittedFrame(timestampNs: Long) {
         submittedTimestampNs.set(timestampNs)
@@ -279,6 +340,7 @@ private class SurfaceVideoEncoder(
                         trackIndex = muxer.addTrack(format)
                         muxer.start()
                         muxerStarted = true
+                        muxerHasStarted.set(true)
                     }
                     else -> if (index >= 0) {
                         val buffer = codec.getOutputBuffer(index)
@@ -339,7 +401,10 @@ private class GlCropBridge(
     private val initialized = CountDownLatch(1)
     private val released = AtomicBoolean(false)
     private val renderQueued = AtomicBoolean(false)
-    private var active = false
+    private val receivedFrames = AtomicLong(0)
+    private val renderedFrames = AtomicLong(0)
+    private val runtimeFailure = AtomicReference<String?>(null)
+    @Volatile private var active = false
     private var eglDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface = EGL14.EGL_NO_SURFACE
@@ -349,12 +414,21 @@ private class GlCropBridge(
     lateinit var cameraSurface: Surface
         private set
 
+    val diagnostics: GlBridgeDiagnostics
+        get() = GlBridgeDiagnostics(
+            receivedFrames = receivedFrames.get(),
+            renderedFrames = renderedFrames.get(),
+            runtimeFailure = runtimeFailure.get(),
+        )
+
     init {
         handler.post {
             try {
                 initializeGl()
             } catch (t: Throwable) {
-                onRuntimeError("FRONT_CROP_GL_INIT_FAILED: ${t.message ?: t.javaClass.simpleName}")
+                val message = "FRONT_CROP_GL_INIT_FAILED: ${t.message ?: t.javaClass.simpleName}"
+                runtimeFailure.compareAndSet(null, message)
+                onRuntimeError(message)
             } finally {
                 initialized.countDown()
             }
@@ -435,13 +509,16 @@ private class GlCropBridge(
     }
 
     private fun queueLatestFrame() {
+        receivedFrames.incrementAndGet()
         if (!active || released.get() || !renderQueued.compareAndSet(false, true)) return
         handler.post {
             try {
                 if (active && !released.get()) renderFrame()
             } catch (t: Throwable) {
                 active = false
-                onRuntimeError("FRONT_CROP_GL_RUNTIME_ERROR: ${t.message ?: t.javaClass.simpleName}")
+                val message = "FRONT_CROP_GL_RUNTIME_ERROR: ${t.message ?: t.javaClass.simpleName}"
+                runtimeFailure.compareAndSet(null, message)
+                onRuntimeError(message)
             } finally {
                 renderQueued.set(false)
             }
@@ -477,6 +554,7 @@ private class GlCropBridge(
         val timestampNs = texture.timestamp
         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, timestampNs)
         check(EGL14.eglSwapBuffers(eglDisplay, eglSurface)) { "EGL swap failed" }
+        renderedFrames.incrementAndGet()
         onFrameRendered(timestampNs)
     }
 
@@ -552,6 +630,12 @@ private class GlCropBridge(
         """
     }
 }
+
+private data class GlBridgeDiagnostics(
+    val receivedFrames: Long,
+    val renderedFrames: Long,
+    val runtimeFailure: String?,
+)
 
 /** Pure crop/rotation math in triangle-strip order: bottom-left, bottom-right, top-left, top-right. */
 object FrontTextureCoordinates {

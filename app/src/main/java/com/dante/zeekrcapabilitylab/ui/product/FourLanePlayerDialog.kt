@@ -54,10 +54,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.dante.zeekrcapabilitylab.data.Categories
+import com.dante.zeekrcapabilitylab.data.Severity
+import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.player.PlaybackDiagnostics
 import com.dante.zeekrcapabilitylab.player.PlaybackInspector
 import com.dante.zeekrcapabilitylab.player.RecordingPlaybackTimeline
-import com.dante.zeekrcapabilitylab.util.Utils
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
@@ -65,6 +67,7 @@ import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.service.recorder.PlaybackPinRegistry
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
+import com.dante.zeekrcapabilitylab.util.Utils
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -309,6 +312,18 @@ fun FourLanePlayerDialog(
                                         }
                                     },
                                     onError = { message ->
+                                        EventLogger.logEvent(
+                                            category = Categories.MEDIA_SESSION,
+                                            eventName = "RECORDING_PLAYBACK_FAILED",
+                                            severity = Severity.ERROR,
+                                            payload = mapOf(
+                                                "file" to file.name,
+                                                "segmentIndex" to activeIndex.toString(),
+                                                "segmentCount" to recordingFiles.size.toString(),
+                                                "inspectionError" to (diagnostics?.error ?: "-"),
+                                            ),
+                                            errorMessage = message,
+                                        )
                                         error = message
                                         playing = false
                                         status = Utils.t("Unable to play", "无法播放")

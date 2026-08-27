@@ -2,6 +2,7 @@ package com.dante.zeekrcapabilitylab
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -51,16 +52,32 @@ class ZeekrApp : Application() {
                 "processStartId" to processStartId,
                 "pid" to Process.myPid().toString(),
                 "elapsedRealtimeMs" to SystemClock.elapsedRealtime().toString(),
+                "applicationId" to BuildConfig.APPLICATION_ID,
+                "versionName" to BuildConfig.VERSION_NAME,
+                "versionCode" to BuildConfig.VERSION_CODE.toString(),
+                "buildType" to BuildConfig.BUILD_TYPE,
+                "sdk" to Build.VERSION.SDK_INT.toString(),
+                "device" to "${Build.MANUFACTURER}/${Build.MODEL}",
             ),
         )
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 _isForeground.value = true
+                EventLogger.logEvent(
+                    Categories.LIFECYCLE,
+                    "PROCESS_FOREGROUND",
+                    payload = mapOf("recorderStatus" to CameraRecordingService.state.value.status),
+                )
             }
 
             override fun onStop(owner: LifecycleOwner) {
                 _isForeground.value = false
+                EventLogger.logEvent(
+                    Categories.LIFECYCLE,
+                    "PROCESS_BACKGROUND",
+                    payload = mapOf("recorderStatus" to CameraRecordingService.state.value.status),
+                )
             }
         })
 
