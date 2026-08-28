@@ -374,6 +374,12 @@ macOS 或 Linux：
 
 签名密钥和凭证**绝不能提交到代码仓库中**。
 
+`sideBySide` 构建使用独立应用 ID `io.github.dantenothing.openavmrecorder.frontfirst`，
+应用名称显示为 **AVM Recorder 开发版**。因此，本地签名 APK 可以与官方版本
+同时安装，不会替换官方版本，也不会共用其应用内部录像和设置。macOS / Linux
+使用 `./gradlew :app:assembleSideBySide` 构建；Windows 使用
+`.\gradlew.bat :app:assembleSideBySide`。
+
 ### 调试版模拟器录像
 
 当调试版运行在 Android Emulator 中时，应用会自动选择一路保守的普通 Camera2 / MediaRecorder 来源（优先使用 `1280×720` 的后置虚拟摄像头）。此路径仅用于在没有车辆的情况下测试录像生命周期、MP4 分段、sidecar、存储清理、媒体库与播放。它只对已明确标记的调试模拟器配置使用 `256 MB` 剩余空间阈值；正式发布版会拒绝该配置，并继续执行正常的实车预留空间策略。

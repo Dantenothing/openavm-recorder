@@ -355,6 +355,13 @@ Without a locally configured private signing key, Gradle produces `app-release-u
 
 Signing keys and credentials must never be committed to the repository.
 
+The `sideBySide` build uses the separate application ID
+`io.github.dantenothing.openavmrecorder.frontfirst` and the label **AVM Recorder
+Dev**. This allows a locally signed APK to be installed alongside the official
+release without replacing it or sharing its app-internal recordings and
+settings. Build it with `./gradlew :app:assembleSideBySide` (or
+`.\gradlew.bat :app:assembleSideBySide` on Windows).
+
 ### Debug emulator recording
 
 A debug build running on an Android Emulator automatically selects a conservative ordinary Camera2/MediaRecorder source (preferring the back virtual camera at `1280×720`). This path exists only to exercise recorder lifecycle, MP4 segmentation, sidecars, storage cleanup, the library and playback without a vehicle. It uses a debug-only `256 MB` free-space reserve so a standard AVD data partition can record; release builds reject that configuration and keep the normal vehicle reserve policy.

@@ -27,6 +27,15 @@ android {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        create("sideBySide") {
+            initWith(getByName("release"))
+            // Keep this local build independent from the official release so
+            // both can be installed without sharing app-internal recordings.
+            applicationIdSuffix = ".frontfirst"
+            versionNameSuffix = "-front-first"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
