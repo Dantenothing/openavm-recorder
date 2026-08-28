@@ -317,6 +317,9 @@ object SegmentGuardPolicy {
 object SegmentPreviewPolicy {
     fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean): Boolean =
         previewConfigured && previewDesired
+
+    /** A preview output is optional; its setup failure must not abort the encoder segment. */
+    fun shouldRetryRecorderOnly(previewIncluded: Boolean): Boolean = previewIncluded
 }
 
 /** Guards an in-flight preview swap from ever taking ownership of a newer encoder segment. */

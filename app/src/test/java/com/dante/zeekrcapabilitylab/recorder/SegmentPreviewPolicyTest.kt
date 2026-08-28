@@ -22,4 +22,10 @@ class SegmentPreviewPolicyTest {
             SegmentPreviewPolicy.includeInNewSession(previewConfigured = false, previewDesired = false),
         )
     }
+
+    @Test
+    fun previewSessionFailureRetriesOnlyWhenPreviewWasIncluded() {
+        assertTrue(SegmentPreviewPolicy.shouldRetryRecorderOnly(previewIncluded = true))
+        assertFalse(SegmentPreviewPolicy.shouldRetryRecorderOnly(previewIncluded = false))
+    }
 }

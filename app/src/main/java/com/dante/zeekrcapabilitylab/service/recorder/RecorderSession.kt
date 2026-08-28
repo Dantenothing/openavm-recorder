@@ -963,8 +963,7 @@ class RecorderSession(
                     return
                 }
                 val outputs = if (preview != null) listOf(surface, preview) else listOf(surface)
-                device.createCaptureSession(
-                    outputs,
+                val callback =
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
                             if (!ownsSetup(generation, partial, pipeline)) {
@@ -1005,7 +1004,7 @@ class RecorderSession(
                             } catch (t: Throwable) {
                                 captureSession = null
                                 closeQuietlySession(session)
-                                if (previewTarget != null) {
+                                if (SegmentPreviewPolicy.shouldRetryRecorderOnly(previewTarget != null)) {
                                     fallbackToRecorderOnly(
                                         generation = generation,
                                         partial = partial,
@@ -1065,7 +1064,7 @@ class RecorderSession(
                                 return
                             }
                             closeQuietlySession(session)
-                            if (preview != null) {
+                            if (SegmentPreviewPolicy.shouldRetryRecorderOnly(preview != null)) {
                                 fallbackToRecorderOnly(
                                     generation = generation,
                                     partial = partial,
@@ -1090,9 +1089,23 @@ class RecorderSession(
                                 ),
                             )
                         }
-                    },
-                    cameraHandler,
-                )
+                    }
+                try {
+                    device.createCaptureSession(outputs, callback, cameraHandler)
+                } catch (t: Throwable) {
+                    if (!ownsSetup(generation, partial, pipeline)) return
+                    val message = t.message ?: "record session creation failed"
+                    if (SegmentPreviewPolicy.shouldRetryRecorderOnly(preview != null)) {
+                        fallbackToRecorderOnly(
+                            generation = generation,
+                            partial = partial,
+                            pipeline = pipeline,
+                            reason = "PREVIEW_RECORD_SESSION_CREATE_FAILED: $message",
+                        ) { configureSession(includePreview = false) }
+                    } else {
+                        failSegmentStart(generation, partial, message)
+                    }
+                }
             }
             configureSession(includePreview = recordingPreviewSurface != null)
         } catch (t: Throwable) {
