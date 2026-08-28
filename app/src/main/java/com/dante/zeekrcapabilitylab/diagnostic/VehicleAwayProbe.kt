@@ -145,6 +145,8 @@ object VehicleAwayProbe {
                 put("camera", recorder.cameraId ?: "NONE")
                 put("segment", recorder.segmentNumber.toString())
                 put("wakeLock", recorder.wakeLockHeld.toString())
+                put("recordingMode", recorder.recordingMode.name)
+                put("timeLapseMultiplier", recorder.timeLapseMultiplier.toString())
                 detail?.let { put("detail", it) }
                 testType?.let { put("testType", it) }
             },

@@ -6,8 +6,11 @@ import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommands
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapsePolicy
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,16 +25,22 @@ class RecorderConfigTest {
         segmentSeconds: Int = 60,
         storageLimitBytes: Long = 15L * gb,
         minFreeBytes: Long = 20L * gb,
+        sourceRole: RecordingSourceRole = RecordingSourceRole.SURROUND,
+        layoutKind: RecordingLayoutKind = RecordingLayoutKind.FOUR_LANE_V1,
+        recordingMode: RecordingMode = RecordingMode.NORMAL,
+        timeLapseMultiplier: Int = 1,
     ) = RecorderConfig(
         source = SessionSourceSnapshot(
-            sourceRole = RecordingSourceRole.SURROUND,
+            sourceRole = sourceRole,
             cameraId = cameraId,
             profile = profile,
-            layoutKind = RecordingLayoutKind.FOUR_LANE_V1,
+            layoutKind = layoutKind,
         ),
         segmentSeconds = segmentSeconds,
         storageLimitBytes = storageLimitBytes,
         minFreeBytes = minFreeBytes,
+        recordingMode = recordingMode,
+        timeLapseMultiplier = timeLapseMultiplier,
     )
 
     @Test
@@ -107,5 +116,62 @@ class RecorderConfigTest {
         assertTrue(decoded == expected)
         assertTrue(decoded.source.sourceRole == RecordingSourceRole.SURROUND)
         assertTrue(decoded.source.layoutKind == RecordingLayoutKind.FOUR_LANE_V1)
+    }
+
+    @Test
+    fun normalModeNeverRequestsCaptureRateAndKeepsConfiguredSegmentLength() {
+        val value = config(segmentSeconds = 180)
+
+        assertEquals(null, value.captureRateFpsOrNull())
+        assertEquals(180, value.effectiveSegmentSeconds())
+        assertEquals(180, value.estimatedEncodedSeconds())
+        assertTrue(value.validate().isEmpty())
+        assertFalse(config(recordingMode = RecordingMode.NORMAL, timeLapseMultiplier = 30).validate().isEmpty())
+    }
+
+    @Test
+    fun everyTimeLapseMultiplierWorksWithEveryLogicalSource() {
+        val sources = listOf(
+            Triple(RecordingSourceRole.SURROUND, RecordingLayoutKind.FOUR_LANE_V1, "2"),
+            Triple(RecordingSourceRole.CABIN, RecordingLayoutKind.SINGLE_V1, "1"),
+            Triple(RecordingSourceRole.IR, RecordingLayoutKind.SINGLE_V1, "0"),
+        )
+        sources.forEach { (role, layout, cameraId) ->
+            TimeLapsePolicy.MULTIPLIERS.forEach { multiplier ->
+                val value = config(
+                    cameraId = cameraId,
+                    profile = if (role == RecordingSourceRole.SURROUND) {
+                        CameraFormatProfile(ProfileSize(1280, 5140), 14_000_000)
+                    } else {
+                        CameraFormatProfile(ProfileSize(3840, 2160), 28_000_000)
+                    },
+                    sourceRole = role,
+                    layoutKind = layout,
+                    recordingMode = RecordingMode.TIME_LAPSE,
+                    timeLapseMultiplier = multiplier,
+                )
+                assertTrue("$role ${multiplier}x: ${value.validate()}", value.validate().isEmpty())
+                assertEquals(TimeLapsePolicy.SAFETY_CHUNK_SECONDS, value.effectiveSegmentSeconds())
+                assertEquals(30.0 / multiplier, value.captureRateFpsOrNull()!!, 0.000_001)
+                assertEquals(
+                    (TimeLapsePolicy.SAFETY_CHUNK_SECONDS + multiplier - 1) / multiplier,
+                    value.estimatedEncodedSeconds(),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun unsupportedTimeLapseMultiplierIsRejected() {
+        assertFalse(
+            config(recordingMode = RecordingMode.TIME_LAPSE, timeLapseMultiplier = 1)
+                .validate()
+                .isEmpty(),
+        )
+        assertFalse(
+            config(recordingMode = RecordingMode.TIME_LAPSE, timeLapseMultiplier = 200)
+                .validate()
+                .isEmpty(),
+        )
     }
 }

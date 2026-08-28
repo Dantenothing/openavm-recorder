@@ -169,6 +169,7 @@ class RecorderSession(
             this.segmentNumber = 0
             this.previousSegmentStoppedElapsedMs = null
             val recordingSessionId = recordingSessionIdentity.beginNewSession()
+            val sessionStartedAtEpochMs = System.currentTimeMillis()
             manualSessionGeneration++
             cameraRecovery.beginManualSession(manualSessionGeneration, config.cameraId)
             vehicleAway.beginManualSession(manualSessionGeneration)
@@ -204,6 +205,11 @@ class RecorderSession(
                     previewRequested = this.recordingPreviewSurface != null,
                     previewActive = false,
                     previewFallbackUsed = false,
+                    recordingSessionId = recordingSessionId,
+                    sessionStartedAtEpochMs = sessionStartedAtEpochMs,
+                    recordingMode = config.recordingMode,
+                    timeLapseMultiplier = config.timeLapseMultiplier,
+                    effectiveSegmentSeconds = config.effectiveSegmentSeconds(),
                 ),
             )
             EventLogger.logEvent(
@@ -213,6 +219,10 @@ class RecorderSession(
                     "cameraId" to config.cameraId,
                     "profile" to config.profile.key,
                     "segmentSeconds" to config.segmentSeconds.toString(),
+                    "effectiveSegmentSeconds" to config.effectiveSegmentSeconds().toString(),
+                    "recordingMode" to config.recordingMode.name,
+                    "timeLapseMultiplier" to config.timeLapseMultiplier.toString(),
+                    "captureRateFps" to (config.captureRateFpsOrNull()?.toString() ?: "-"),
                     "storageLimitBytes" to config.storageLimitBytes.toString(),
                     "processStartId" to processStartId,
                     "recordingSessionId" to recordingSessionId,
@@ -1196,6 +1206,8 @@ class RecorderSession(
         try {
             partial.parentFile?.mkdirs()
             val recorder = MediaRecorder()
+            // Assign before configuration so every prepare/configuration failure releases it.
+            mediaRecorder = recorder
             recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
@@ -1205,11 +1217,20 @@ class RecorderSession(
             } catch (t: Throwable) {
                 // Keep recorder default when 30fps is rejected.
             }
+            cfg.captureRateFpsOrNull()?.let { captureRate ->
+                try {
+                    recorder.setCaptureRate(captureRate)
+                } catch (t: Throwable) {
+                    throw IllegalStateException(
+                        "TIME_LAPSE_CAPTURE_RATE_REJECTED source=${cfg.source.sourceRole} rate=$captureRate",
+                        t,
+                    )
+                }
+            }
             recorder.setVideoEncodingBitRate(cfg.profile.bitrateBps)
             recorder.setOutputFile(partial.absolutePath)
             recorder.prepare()
             val surface = recorder.surface
-            mediaRecorder = recorder
             activeEncoderSurface = surface
             captureSession?.close()
             captureSession = null
@@ -1291,6 +1312,9 @@ class RecorderSession(
                                         "segment" to segmentNumber.toString(),
                                         "file" to partial.name,
                                         "profile" to cfg.profile.key,
+                                        "recordingMode" to cfg.recordingMode.name,
+                                        "timeLapseMultiplier" to cfg.timeLapseMultiplier.toString(),
+                                        "captureRateFps" to (cfg.captureRateFpsOrNull()?.toString() ?: "-"),
                                         "processStartId" to processStartId,
                                         "previewActive" to (previewTarget != null).toString(),
                                     ),
@@ -1305,7 +1329,7 @@ class RecorderSession(
                                     )
                                 }
                                 scheduleCameraRecoveryTimer()
-                                scheduleTimeout(generation, cfg.segmentSeconds * 1000L)
+                                scheduleTimeout(generation, cfg.effectiveSegmentSeconds() * 1000L)
                             } catch (t: Throwable) {
                                 failSegmentStart(generation, partial, t.message ?: "recorder.start failed")
                             }
@@ -1546,6 +1570,11 @@ class RecorderSession(
             mappingRevision = cfg.source.mappingRevision,
             laneLayout = cfg.source.laneLayout,
             segmentSeconds = cfg.segmentSeconds,
+            effectiveSegmentSeconds = cfg.effectiveSegmentSeconds(),
+            recordingMode = cfg.recordingMode,
+            timeLapseMultiplier = cfg.timeLapseMultiplier,
+            requestedCaptureRateFps = cfg.captureRateFpsOrNull(),
+            finalizeReason = "START_FAILED",
             segmentNumber = segmentNumber,
             processStartId = processStartId,
             recordingSessionId = recordingSessionIdentity.requireCurrentId(),
@@ -1715,6 +1744,11 @@ class RecorderSession(
             mappingRevision = cfg?.source?.mappingRevision ?: 0,
             laneLayout = cfg?.source?.laneLayout,
             segmentSeconds = cfg?.segmentSeconds ?: state.segmentSeconds,
+            effectiveSegmentSeconds = cfg?.effectiveSegmentSeconds() ?: state.effectiveSegmentSeconds,
+            recordingMode = cfg?.recordingMode ?: state.recordingMode,
+            timeLapseMultiplier = cfg?.timeLapseMultiplier ?: state.timeLapseMultiplier,
+            requestedCaptureRateFps = cfg?.captureRateFpsOrNull(),
+            finalizeReason = reason,
             segmentNumber = segmentNumber,
             processStartId = processStartId,
             recordingSessionId = recordingSessionIdentity.requireCurrentId(),
@@ -2492,6 +2526,26 @@ class RecorderSession(
         actualTrack: ActualTrackInfo?,
         health: FrameHealthReport?,
     ): SegmentSidecar {
+        val realDurationMs = if (
+            s.startedAtElapsedRealtimeMs != null &&
+            s.stoppedAtElapsedRealtimeMs != null
+        ) {
+            (s.stoppedAtElapsedRealtimeMs - s.startedAtElapsedRealtimeMs).coerceAtLeast(0L)
+        } else {
+            null
+        }
+        val measurement = if (
+            s.recordingMode == RecordingMode.TIME_LAPSE &&
+            realDurationMs != null
+        ) {
+            TimeLapseMeasurementPolicy.measure(
+                requestedMultiplier = s.timeLapseMultiplier,
+                realDurationMs = realDurationMs,
+                encodedDurationMs = actualTrack?.durationMs,
+            )
+        } else {
+            null
+        }
         return SegmentSidecar(
             file = s.file.absolutePath,
             cameraId = s.cameraId,
@@ -2503,6 +2557,10 @@ class RecorderSession(
             segmentNumber = s.segmentNumber,
             processStartId = s.processStartId,
             recordingSessionId = s.recordingSessionId,
+            recordingMode = s.recordingMode,
+            timeLapseMultiplier = s.timeLapseMultiplier,
+            requestedCaptureRateFps = s.requestedCaptureRateFps,
+            effectiveSegmentSeconds = s.effectiveSegmentSeconds,
             requestedAtEpochMs = s.requestedAtEpochMs,
             requestedAtElapsedRealtimeMs = s.requestedAtElapsedRealtimeMs,
             startedAtEpochMs = s.startedAtEpochMs,
@@ -2521,6 +2579,11 @@ class RecorderSession(
             frameStats = s.frameStats,
             frameHealth = health,
             laneLayout = s.laneLayout,
+            realDurationMs = realDurationMs,
+            measuredMultiplier = measurement?.measuredMultiplier,
+            timeLapseRelativeError = measurement?.relativeError,
+            timeLapseAccuracy = measurement?.accuracy,
+            finalizeReason = s.finalizeReason,
         )
     }
 
@@ -2629,7 +2692,10 @@ class RecorderSession(
      */
     private fun prepareStorage(cfg: RecorderConfig): StorageDecision {
         return try {
-            val estimated = StoragePolicy.estimateSegmentBytes(cfg.profile.bitrateBps, cfg.segmentSeconds)
+            val estimated = StoragePolicy.estimateSegmentBytes(
+                cfg.profile.bitrateBps,
+                cfg.estimatedEncodedSeconds(),
+            )
             if (SettingsStore.get(context).autoCleanupEnabled) {
                 enforceAutomaticCleanup(
                     limitBytes = cfg.storageLimitBytes,
@@ -2820,6 +2886,11 @@ class RecorderSession(
         val mappingRevision: Int,
         val laneLayout: SegmentLaneLayout?,
         val segmentSeconds: Int,
+        val effectiveSegmentSeconds: Int,
+        val recordingMode: RecordingMode,
+        val timeLapseMultiplier: Int,
+        val requestedCaptureRateFps: Double?,
+        val finalizeReason: String,
         val segmentNumber: Int,
         val processStartId: String,
         val recordingSessionId: String,

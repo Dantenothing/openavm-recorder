@@ -75,13 +75,15 @@ data class PowerDiagnosticEvidence(
     val events: List<ProbeEvent>,
     val testType: String = "GENERAL",
     val vehicleAway: VehicleAwayDiagnosticSummary = VehicleAwayDiagnosticSummary(),
+    val recordingMode: String = "NORMAL",
+    val timeLapseMultiplier: Int = 1,
 ) {
     fun humanText(nowMs: Long = System.currentTimeMillis()): String = buildString {
         appendLine("诊断编号：$ticket")
         appendLine("版本：$version ($versionCode) · $gitSha")
         appendLine("进程：$processId")
         appendLine("测试类型：$testType")
-        appendLine("录像：$recorder · $source · segment $segment · WakeLock $wakeLock")
+        appendLine("录像：$recorder · $source · $recordingMode ${timeLapseMultiplier}× · segment $segment · WakeLock $wakeLock")
         appendLine(
             "离车判定：${vehicleAway.phase} · powerEvidence=${vehicleAway.backgroundPowerOffEvidence} " +
                 "· route=${vehicleAway.cameraLossRoute} · reason=${vehicleAway.lastReason}",
@@ -149,6 +151,8 @@ object PowerDiagnosticRepository {
             events = scoped,
             testType = markerEvent?.payload?.get("testType") ?: "GENERAL",
             vehicleAway = VehicleAwayDiagnosticSummary.fromEvents(recorderScope),
+            recordingMode = state.recordingMode.name,
+            timeLapseMultiplier = state.timeLapseMultiplier,
         )
     }
 
@@ -196,6 +200,7 @@ object PowerDiagnosticCodec {
             "p=${safeToken(evidence.processId, 30)}", "st=${safeToken(evidence.recorder, 20)}",
             "test=${safeToken(evidence.testType, 24)}",
             "src=${safeToken(evidence.source, 12)}", "seg=${evidence.segment}",
+            "m=${safeToken(evidence.recordingMode, 16)}", "x=${evidence.timeLapseMultiplier}",
             "wl=${if (evidence.wakeLock) 1 else 0}", "exit=${safeToken(evidence.exitReason, 70)}",
             "va=${safeToken(evidence.vehicleAway.phase, 12)}",
             "af=${if (evidence.vehicleAway.appForeground) 1 else 0}",
@@ -228,6 +233,7 @@ object PowerDiagnosticCodec {
         "pendingToken", "confirmAtElapsedMs", "backgroundPowerOffEvidence",
         "sawScreenOffWhileBackground", "sawMainDisplayOffWhileBackground", "route",
         "decision", "signal", "value", "lastReason", "cameraLoss",
+        "recordingMode", "timeLapseMultiplier", "captureRateFps",
     ).mapNotNull { key -> event.payload[key]?.let { "$key=$it" } }.joinToString(" ")
 
     fun safeToken(value: String, maxLength: Int): String = value

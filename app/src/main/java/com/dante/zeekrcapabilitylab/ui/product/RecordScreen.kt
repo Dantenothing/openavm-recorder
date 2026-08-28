@@ -31,6 +31,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,8 +66,10 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommandPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapsePolicy
 import com.dante.zeekrcapabilitylab.util.Utils
 import com.dante.zeekrcapabilitylab.ZeekrApp
 import com.dante.zeekrcapabilitylab.data.Categories
@@ -76,6 +79,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.roundToInt
 
 private const val CONFIG_TIMEOUT_MS = 8_000L
 private const val DEFAULT_ESTIMATED_BITRATE_BPS = 28_000_000L
@@ -131,6 +135,9 @@ fun RecordScreen() {
     var startupPermissionPrompted by rememberSaveable { mutableStateOf(false) }
     // Deliberately not persisted: every fresh app process returns to 360°.
     var selectedSourceRole by remember { mutableStateOf(RecordingSourceRole.SURROUND) }
+    // Deliberately not persisted: a fresh process always returns to normal recording.
+    var selectedRecordingMode by remember { mutableStateOf(RecordingMode.NORMAL) }
+    var selectedTimeLapseMultiplier by remember { mutableStateOf(settings.timeLapseMultiplier) }
     var pendingWarningRole by remember { mutableStateOf<RecordingSourceRole?>(null) }
     var surroundPreviewGeneration by remember { mutableStateOf(0) }
     var previousAppForeground by remember { mutableStateOf(appForeground) }
@@ -165,6 +172,16 @@ fun RecordScreen() {
         recorderState.sourceRole ?: selectedSourceRole
     } else {
         selectedSourceRole
+    }
+    val activeRecordingMode = if (recordingActive) {
+        recorderState.recordingMode
+    } else {
+        selectedRecordingMode
+    }
+    val activeTimeLapseMultiplier = if (recordingActive) {
+        recorderState.timeLapseMultiplier
+    } else {
+        selectedTimeLapseMultiplier
     }
     val serviceRunning = CameraRecordingService.isRunning()
     val latestRecorderState by rememberUpdatedState(recorderState)
@@ -291,7 +308,8 @@ fun RecordScreen() {
     val canStart = RecorderCommandPolicy.canStart(recorderState.status, serviceRunning) &&
         configState !is RecordConfigState.Loading
     val canStop = RecorderCommandPolicy.canStop(recorderState.status, serviceRunning)
-    val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning)
+    val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning) &&
+        activeRecordingMode == RecordingMode.NORMAL
 
     val estimatedBitrateBps = recorderState.profile?.bitrateBps
         ?.takeIf { it > 0 }
@@ -300,15 +318,28 @@ fun RecordScreen() {
             ?.takeIf { it > 0 }
             ?.toLong()
         ?: DEFAULT_ESTIMATED_BITRATE_BPS
+    val estimatedCapacityMultiplier = if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
+        activeTimeLapseMultiplier.toLong()
+    } else {
+        1L
+    }
     val estimatedMinutes = if (diskStats.freeBytes > 0) {
-        diskStats.freeBytes * 8 / estimatedBitrateBps / 60
+        diskStats.freeBytes * 8 / estimatedBitrateBps / 60 * estimatedCapacityMultiplier
     } else {
         null
     }
-    val recordingElapsed = recorderState.segmentStartedAtEpochMs?.let { now - it }
+    val recordingElapsed = (recorderState.sessionStartedAtEpochMs ?: recorderState.segmentStartedAtEpochMs)
+        ?.let { now - it }
     val recorderStatusText = when (recorderState.status) {
         RecorderStatus.STARTING -> Utils.t("Preparing", "正在准备")
-        RecorderStatus.RECORDING -> Utils.t("Recording ${Utils.formatDuration(recordingElapsed)}", "录像中 ${Utils.formatDuration(recordingElapsed)}")
+        RecorderStatus.RECORDING -> if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
+            Utils.t(
+                "Time-lapse ${activeTimeLapseMultiplier}× · ${Utils.formatDuration(recordingElapsed)}",
+                "延时摄影 ${activeTimeLapseMultiplier}× · ${Utils.formatDuration(recordingElapsed)}",
+            )
+        } else {
+            Utils.t("Recording ${Utils.formatDuration(recordingElapsed)}", "录像中 ${Utils.formatDuration(recordingElapsed)}")
+        }
         RecorderStatus.FINALIZING -> Utils.t("Saving", "正在保存")
         RecorderStatus.WAITING_CAMERA -> Utils.t("Waiting for camera", "正在等待摄像头")
         RecorderStatus.RESUMING -> Utils.t("Recovering recording", "正在恢复录像")
@@ -335,6 +366,8 @@ fun RecordScreen() {
             ) -> Unit
             configState is RecordConfigState.Loading -> Unit
             else -> {
+                val requestedMode = selectedRecordingMode
+                val requestedMultiplier = selectedTimeLapseMultiplier
                 configState = RecordConfigState.Loading
                 scope.launch {
                     if (previewEnabled) {
@@ -347,7 +380,12 @@ fun RecordScreen() {
                     val lookup = withTimeoutOrNull(CONFIG_TIMEOUT_MS) {
                         withContext(Dispatchers.IO) {
                             ConfigLookup(
-                                ProductRecorderConfigFactory.create(context, selectedSourceRole),
+                                ProductRecorderConfigFactory.create(
+                                    context = context,
+                                    role = selectedSourceRole,
+                                    recordingMode = requestedMode,
+                                    timeLapseMultiplier = requestedMultiplier,
+                                ),
                             )
                         }
                     }
@@ -436,6 +474,21 @@ fun RecordScreen() {
             }
 
             Spacer(Modifier.height(14.dp))
+            RecordingModeCard(
+                mode = activeRecordingMode,
+                multiplier = activeTimeLapseMultiplier,
+                enabled = !recordingActive && configState !is RecordConfigState.Loading,
+                onModeChanged = { mode ->
+                    selectedRecordingMode = mode
+                    configState = RecordConfigState.Idle
+                },
+                onMultiplierChanged = { multiplier ->
+                    selectedTimeLapseMultiplier = multiplier
+                    settings.setTimeLapseMultiplier(multiplier)
+                    configState = RecordConfigState.Idle
+                },
+            )
+            Spacer(Modifier.height(14.dp))
             RecordingSourceSelector(
                 selected = if (recordingActive) {
                     recorderState.sourceRole ?: selectedSourceRole
@@ -474,8 +527,13 @@ fun RecordScreen() {
                     Utils.t("Unknown", "未知")
                 },
                 estimatedMinutes = estimatedMinutes,
-                segmentSeconds = settings.segmentSeconds,
+                segmentSeconds = if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
+                    TimeLapsePolicy.SAFETY_CHUNK_SECONDS
+                } else {
+                    settings.segmentSeconds
+                },
                 autoCleanupEnabled = settings.autoCleanupEnabled,
+                timeLapse = activeRecordingMode == RecordingMode.TIME_LAPSE,
             )
             Spacer(Modifier.height(14.dp))
 
@@ -492,6 +550,8 @@ fun RecordScreen() {
                     when {
                         configState is RecordConfigState.Loading -> Utils.t("Preparing…", "准备中…")
                         recordingActive -> Utils.t("Recording", "录像中")
+                        selectedRecordingMode == RecordingMode.TIME_LAPSE ->
+                            Utils.t("Start time-lapse", "开始延时摄影")
                         else -> Utils.t("Start recording", "开始录像")
                     },
                     fontSize = 18.sp,
@@ -515,7 +575,15 @@ fun RecordScreen() {
                     .fillMaxWidth()
                     .height(48.dp),
             ) {
-                Text(Utils.t("Save clip", "保存片段"), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
+                        Utils.t("Protect after stopping in Library", "停止后可在录像记录中保护")
+                    } else {
+                        Utils.t("Save clip", "保存片段")
+                    },
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
 
             if (recordingActive) {
@@ -774,6 +842,71 @@ private fun RecordingSourceSelector(
 }
 
 @Composable
+private fun RecordingModeCard(
+    mode: RecordingMode,
+    multiplier: Int,
+    enabled: Boolean,
+    onModeChanged: (RecordingMode) -> Unit,
+    onMultiplierChanged: (Int) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text(
+                Utils.t("Recording mode", "录像模式"),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(9.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                RecordingMode.entries.forEach { option ->
+                    OutlinedButton(
+                        onClick = { onModeChanged(option) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        val label = when (option) {
+                            RecordingMode.NORMAL -> Utils.t("Normal", "普通录像")
+                            RecordingMode.TIME_LAPSE -> Utils.t("Time-lapse", "延时摄影")
+                        }
+                        Text(if (option == mode) "$label ✓" else label)
+                    }
+                }
+            }
+            if (mode == RecordingMode.TIME_LAPSE) {
+                Spacer(Modifier.height(12.dp))
+                val index = TimeLapsePolicy.MULTIPLIERS.indexOf(multiplier).coerceAtLeast(0)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(Utils.t("Speed", "倍率"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
+                    Text("${TimeLapsePolicy.MULTIPLIERS[index]}×", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = index.toFloat(),
+                    onValueChange = { value ->
+                        val selected = value.roundToInt().coerceIn(TimeLapsePolicy.MULTIPLIERS.indices)
+                        onMultiplierChanged(TimeLapsePolicy.MULTIPLIERS[selected])
+                    },
+                    valueRange = 0f..TimeLapsePolicy.MULTIPLIERS.lastIndex.toFloat(),
+                    steps = TimeLapsePolicy.MULTIPLIERS.size - 2,
+                    enabled = enabled,
+                )
+                Text(
+                    Utils.t(
+                        "One Start is one Session. A safety file is finalized every 5 minutes until Stop, vehicle-away termination, or an unrecoverable camera error.",
+                        "一次开始就是一条 Session。底层每 5 分钟安全封存一次，直到停止、离车终止或摄像头发生不可恢复故障。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SinglePreviewPanel(
     controller: SafeManualPreviewController,
     state: ManualPreviewState,
@@ -813,6 +946,7 @@ private fun ProductStatusCard(
     estimatedMinutes: Long?,
     segmentSeconds: Int,
     autoCleanupEnabled: Boolean,
+    timeLapse: Boolean,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -825,7 +959,10 @@ private fun ProductStatusCard(
             ProductInfoRow(Utils.t("Phone transfer", "手机传输"), Utils.t("In development", "开发中"))
             ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
             ProductInfoRow(Utils.t("Estimated recording", "预计可录"), formatEstimatedMinutes(estimatedMinutes))
-            ProductInfoRow(Utils.t("Segment length", "分段时长"), formatSegmentDuration(segmentSeconds))
+            ProductInfoRow(
+                if (timeLapse) Utils.t("Safety chunk", "安全分段") else Utils.t("Segment length", "分段时长"),
+                formatSegmentDuration(segmentSeconds),
+            )
             ProductInfoRow(Utils.t("Automatic cleanup", "自动清理"), if (autoCleanupEnabled) Utils.t("On", "已开启") else Utils.t("Off", "已关闭"))
         }
     }

@@ -55,7 +55,7 @@ data class SegmentLaneInfo(
 
 @Serializable
 data class SegmentSidecar(
-    val schemaVersion: Int = 5,
+    val schemaVersion: Int = 6,
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
@@ -71,6 +71,12 @@ data class SegmentSidecar(
     val processStartId: String,
     /** Stable identity shared by every segment in one manually started recording Session. */
     val recordingSessionId: String? = null,
+    /** Recording behavior frozen at manual Start; old sidecars safely default to NORMAL. */
+    val recordingMode: RecordingMode = RecordingMode.NORMAL,
+    val timeLapseMultiplier: Int = 1,
+    val requestedCaptureRateFps: Double? = null,
+    /** Real-time safety boundary. Differs from [segmentSeconds] only for time-lapse. */
+    val effectiveSegmentSeconds: Int = segmentSeconds,
     /** When the partial file was requested (filename timestamp), kept as evidence. */
     val requestedAtEpochMs: Long? = null,
     val requestedAtElapsedRealtimeMs: Long? = null,
@@ -101,6 +107,13 @@ data class SegmentSidecar(
     val frameHealth: FrameHealthReport? = null,
     /** Frozen four-lane calibration; null for SINGLE_V1 and legacy recordings. */
     val laneLayout: SegmentLaneLayout? = null,
+    /** Monotonic elapsed time represented by this physical safety chunk. */
+    val realDurationMs: Long? = null,
+    /** Real duration divided by finalized MP4 duration. */
+    val measuredMultiplier: Double? = null,
+    val timeLapseRelativeError: Double? = null,
+    val timeLapseAccuracy: TimeLapseAccuracy? = null,
+    val finalizeReason: String? = null,
 ) {
     companion object {
         const val RESULT_SUCCESS = "SUCCESS"
