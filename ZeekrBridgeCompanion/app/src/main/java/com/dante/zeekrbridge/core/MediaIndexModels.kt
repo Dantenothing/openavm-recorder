@@ -58,10 +58,8 @@ data class IndexedMediaSegment(
         get() = lanes.sortedBy { it.displayOrder }
             .map { it.lane }
             .takeIf { it.size == 4 && it.toSet() == setOf(1, 2, 3, 4) }
-            // Legacy Zeekr 7X recordings predate frozen lane metadata. Their
-            // physical composite is Right, Left, Rear, Front.
             ?: if (layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
-                listOf(4, 3, 2, 1)
+                listOf(1, 2, 3, 4)
             } else {
                 emptyList()
             }

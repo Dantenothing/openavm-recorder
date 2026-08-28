@@ -112,6 +112,15 @@ internal data class LaneTextureWindow(
     val laneAspect: Float get() = sourceWidthPx / sourceHeightPx
 }
 
+/**
+ * Sidecar/file windows use top-left pixel coordinates. SurfaceTexture's
+ * transform matrix expects the pre-transform OpenGL Y axis (bottom to top),
+ * so convert only the window origin before applying that global matrix.
+ */
+internal fun LaneTextureWindow.forSurfaceTextureTransform(): LaneTextureWindow = copy(
+    v = 1f - v - height,
+)
+
 /** Maps both known Zeekr four-camera composite layouts into one source lane. */
 internal object FourLaneTextureLayout {
     private const val STRONG_FOUR_LANE_RATIO = 3.2f

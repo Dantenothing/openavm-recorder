@@ -102,10 +102,10 @@ class MediaIndexModelsTest {
                 "originalWidth": 1280,
                 "originalHeight": 5140,
                 "lanes": [
-                  {"lane":4,"label":"Front","x0":0,"x1":1280,"y0":3855,"y1":5135,"displayOrder":1},
-                  {"lane":3,"label":"Rear","x0":0,"x1":1280,"y0":2570,"y1":3850,"displayOrder":2},
-                  {"lane":2,"label":"Left","x0":0,"x1":1280,"y0":1285,"y1":2565,"displayOrder":3},
-                  {"lane":1,"label":"Right","x0":0,"x1":1280,"y0":0,"y1":1280,"displayOrder":4}
+                  {"lane":1,"label":"Front","x0":0,"x1":1280,"y0":0,"y1":1280,"displayOrder":1},
+                  {"lane":2,"label":"Rear","x0":0,"x1":1280,"y0":1285,"y1":2565,"displayOrder":2},
+                  {"lane":3,"label":"Left","x0":0,"x1":1280,"y0":2570,"y1":3850,"displayOrder":3},
+                  {"lane":4,"label":"Right","x0":0,"x1":1280,"y0":3855,"y1":5135,"displayOrder":4}
                 ]
               }
             }
@@ -117,7 +117,7 @@ class MediaIndexModelsTest {
         assertEquals(IndexedSourceRole.SURROUND, segment.sourceRole)
         assertEquals(IndexedLayoutKind.FOUR_LANE_V1, segment.layoutKind)
         assertEquals(listOf("Front", "Rear", "Left", "Right"), segment.playbackLabels)
-        assertEquals(listOf(4, 3, 2, 1), segment.playbackLaneOrder)
+        assertEquals(listOf(1, 2, 3, 4), segment.playbackLaneOrder)
         assertEquals(1280, segment.originalWidth)
         assertEquals(5140, segment.originalHeight)
         assertEquals("event-360", segment.eventId)
@@ -136,6 +136,13 @@ class MediaIndexModelsTest {
 
         assertEquals(listOf(4, 3, 2, 1), segment.playbackLaneOrder)
         assertEquals(listOf("Front", "Rear", "Left", "Right"), segment.playbackLabels)
+    }
+
+    @Test
+    fun legacySurroundWithoutLaneMetadataKeepsFileTopToBottomOrder() {
+        val segment = segment("legacy-order", 1_000, 1)
+
+        assertEquals(listOf(1, 2, 3, 4), segment.playbackLaneOrder)
     }
 
     @Test

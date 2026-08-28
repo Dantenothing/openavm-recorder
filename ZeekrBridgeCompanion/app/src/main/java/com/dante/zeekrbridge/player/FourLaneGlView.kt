@@ -501,7 +501,7 @@ private class FourLaneRenderer(
             videoWidth = videoWidth,
             videoHeight = videoHeight,
             lane = sourceLane.coerceIn(1, 4),
-        )
+        ).forSurfaceTextureTransform()
         GLES20.glUniform4f(uWindow, window.u, window.v, window.width, window.height)
 
         val baseWpx = if (full) viewWidth.toFloat() else viewWidth / 2f

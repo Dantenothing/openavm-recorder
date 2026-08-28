@@ -76,7 +76,7 @@ private data class PlaybackEntry(
 fun MediaPlaybackDialog(
     file: File,
     laneLabels: List<String>,
-    laneOrder: List<Int> = if (laneLabels.size == 4) listOf(4, 3, 2, 1) else emptyList(),
+    laneOrder: List<Int> = if (laneLabels.size == 4) listOf(1, 2, 3, 4) else emptyList(),
     onDismiss: () -> Unit,
 ) {
     PlaylistPlaybackDialog(

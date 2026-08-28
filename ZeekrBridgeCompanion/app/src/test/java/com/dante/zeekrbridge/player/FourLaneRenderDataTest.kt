@@ -37,6 +37,32 @@ class FourLaneRenderDataTest {
     }
 
     @Test
+    fun surfaceTextureTransformKeepsTopFileLaneAtTheTop() {
+        val rawTop = FourLaneTextureLayout.windowForLane(1280, 5140, lane = 1)
+        val rawBottom = FourLaneTextureLayout.windowForLane(1280, 5140, lane = 4)
+        val shaderTop = rawTop.forSurfaceTextureTransform()
+        val shaderBottom = rawBottom.forSurfaceTextureTransform()
+
+        // A typical SurfaceTexture matrix applies sampledY = 1 - shaderY.
+        // After that global flip, both windows must return to their original
+        // top-left file coordinates instead of exchanging lanes 1 and 4.
+        assertEquals(rawTop.v, 1f - (shaderTop.v + shaderTop.height), 0.000001f)
+        assertEquals(rawTop.v + rawTop.height, 1f - shaderTop.v, 0.000001f)
+        assertEquals(rawBottom.v, 1f - (shaderBottom.v + shaderBottom.height), 0.000001f)
+        assertEquals(rawBottom.v + rawBottom.height, 1f - shaderBottom.v, 0.000001f)
+        assertTrue(shaderTop.v > shaderBottom.v)
+    }
+
+    @Test
+    fun fullHeightHorizontalCompositeWindowIsUnchangedForSurfaceTexture() {
+        val raw = FourLaneTextureLayout.windowForLane(5120, 1280, lane = 1)
+        val shader = raw.forSurfaceTextureTransform()
+
+        assertEquals(0f, shader.v, 0.000001f)
+        assertEquals(1f, shader.height, 0.000001f)
+    }
+
+    @Test
     fun wide5120x1280CompositeUsesFourHorizontalSquareWindows() {
         val windows = (1..4).map { lane ->
             FourLaneTextureLayout.windowForLane(
