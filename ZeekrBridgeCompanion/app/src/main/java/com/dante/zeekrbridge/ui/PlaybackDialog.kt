@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -160,6 +161,7 @@ private fun PlaylistPlaybackDialog(
     var speed by remember { mutableFloatStateOf(1f) }
     var error by remember { mutableStateOf<String?>(null) }
     var mode by remember { mutableIntStateOf(FourLaneGlView.MODE_GRID) }
+    var surroundFirstFrameRendered by remember(first.id) { mutableStateOf(false) }
 
     DisposableEffect(player, playable) {
         val listener = object : Player.Listener {
@@ -246,8 +248,22 @@ private fun PlaylistPlaybackDialog(
                         player = player,
                         entry = first,
                         mode = mode,
+                        onFirstFrame = { surroundFirstFrameRendered = true },
+                        onRenderError = { message ->
+                            error = t(
+                                "360° rendering failed: $message",
+                                "360° 渲染失败：$message",
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth().aspectRatio(if (mode == FourLaneGlView.MODE_GRID) 2f else 1.6f),
                     )
+                    if (!surroundFirstFrameRendered) {
+                        Text(
+                            t("Preparing 360° video…", "正在准备 360° 画面…"),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
                     val labels = first.laneLabels.takeIf { it.size == 4 }
                         ?: listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
                     Row(
@@ -338,10 +354,14 @@ private fun FourLaneVideoSurface(
     player: ExoPlayer,
     entry: PlaybackEntry,
     mode: Int,
+    onFirstFrame: () -> Unit,
+    onRenderError: (String) -> Unit,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
     val glView = remember { FourLaneGlView(context) }
+    val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
+    val currentOnRenderError by rememberUpdatedState(onRenderError)
     LaunchedEffect(mode) {
         glView.setMode(mode)
         glView.requestRender()
@@ -350,6 +370,10 @@ private fun FourLaneVideoSurface(
         var disposed = false
         var texture: SurfaceTexture? = null
         var surface: Surface? = null
+        glView.setPlaybackCallbacks(
+            onFirstFrame = { currentOnFirstFrame() },
+            onRenderError = { message -> currentOnRenderError(message) },
+        )
         glView.createSurfaceTexture { created ->
             if (disposed) {
                 created.release()
@@ -375,6 +399,7 @@ private fun FourLaneVideoSurface(
         }
         onDispose {
             disposed = true
+            glView.setPlaybackCallbacks(null, null)
             surface?.let { runCatching { player.clearVideoSurface(it) } }
             glView.setSource(null)
             surface?.release()

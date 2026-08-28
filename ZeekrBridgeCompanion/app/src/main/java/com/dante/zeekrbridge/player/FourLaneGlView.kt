@@ -7,10 +7,8 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Handler
 import android.os.Looper
-import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-import kotlin.math.min
 
 /**
  * Single-decoder four-lane viewer. One SurfaceTexture (from MediaPlayer) is
@@ -30,6 +28,8 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val glRenderer = FourLaneRenderer { requestRender() }
     private var sourceCallback: ((SurfaceTexture) -> Unit)? = null
+    private var firstFrameCallback: (() -> Unit)? = null
+    private var renderErrorCallback: ((String) -> Unit)? = null
 
     init {
         setEGLContextClientVersion(2)
@@ -50,6 +50,18 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     fun setVideoSize(width: Int, height: Int) {
         glRenderer.setVideoSize(width, height)
         requestRender()
+    }
+
+    fun setPlaybackCallbacks(
+        onFirstFrame: (() -> Unit)?,
+        onRenderError: ((String) -> Unit)?,
+    ) {
+        firstFrameCallback = onFirstFrame
+        renderErrorCallback = onRenderError
+        glRenderer.setCallbacks(
+            onFirstFrame = { mainHandler.post { firstFrameCallback?.invoke() } },
+            onRenderError = { message -> mainHandler.post { renderErrorCallback?.invoke(message) } },
+        )
     }
 
     fun createSurfaceTexture(callback: (SurfaceTexture) -> Unit) {
@@ -74,8 +86,8 @@ private class FourLaneRenderer(
     private var source: SurfaceTexture? = null
     private var mode = FourLaneGlView.MODE_GRID
     private var order = intArrayOf(1, 2, 3, 4)
-    private var videoWidth = 5120
-    private var videoHeight = 1280
+    private var videoWidth = 1280
+    private var videoHeight = 5140
     private var viewWidth = 1
     private var viewHeight = 1
 
@@ -86,16 +98,32 @@ private class FourLaneRenderer(
     private var uTexMatrix = 0
     private var uTexture = 0
 
-    private val vertexData = FloatBuffer.allocate(8).apply {
-        put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
-        position(0)
-    }
+    // GLES requires direct, native-order client buffers. A heap FloatBuffer
+    // can accept playback while leaving this view permanently black.
+    private val vertexData = createFourLaneVertexBuffer()
     private val texMatrix = FloatArray(16)
     private var texId = 0
     private var created: SurfaceTexture? = null
+    private var firstFrameDrawn = false
+    private var textureReady = false
+    @Volatile
+    private var frameAvailable = false
+    private var onFirstFrame: (() -> Unit)? = null
+    private var onRenderError: ((String) -> Unit)? = null
+
+    fun setCallbacks(
+        onFirstFrame: (() -> Unit)?,
+        onRenderError: ((String) -> Unit)?,
+    ) {
+        this.onFirstFrame = onFirstFrame
+        this.onRenderError = onRenderError
+    }
 
     fun setSource(source: SurfaceTexture?) {
         this.source = source
+        firstFrameDrawn = false
+        textureReady = false
+        frameAvailable = false
     }
 
     fun setMode(mode: Int, order: List<Int>) {
@@ -144,7 +172,10 @@ private class FourLaneRenderer(
             )
         }
         val st = SurfaceTexture(texId)
-        st.setOnFrameAvailableListener({ onFrameReady() }, null)
+        st.setOnFrameAvailableListener({
+            frameAvailable = true
+            onFrameReady()
+        }, null)
         created = st
         emit(st)
     }
@@ -157,6 +188,7 @@ private class FourLaneRenderer(
         uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
         uTexture = GLES20.glGetUniformLocation(program, "uTexture")
         GLES20.glClearColor(0f, 0f, 0f, 1f)
+        if (program == 0) onRenderError?.invoke("GL shader initialization failed")
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -168,13 +200,18 @@ private class FourLaneRenderer(
     override fun onDrawFrame(gl: GL10?) {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         val tex = source
-        if (tex == null || texId == 0) return
-        try {
-            tex.updateTexImage()
-            tex.getTransformMatrix(texMatrix)
-        } catch (t: Throwable) {
-            return
+        if (tex == null || texId == 0 || program == 0) return
+        if (frameAvailable) {
+            try {
+                tex.updateTexImage()
+                tex.getTransformMatrix(texMatrix)
+                frameAvailable = false
+                textureReady = true
+            } catch (_: Throwable) {
+                return
+            }
         }
+        if (!textureReady) return
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
@@ -195,33 +232,45 @@ private class FourLaneRenderer(
             drawCell(-1, -1, mode)
         }
         GLES20.glDisableVertexAttribArray(aPosition)
+        val glError = GLES20.glGetError()
+        if (glError != GLES20.GL_NO_ERROR) {
+            onRenderError?.invoke("GL error 0x${glError.toString(16)}")
+        } else if (!firstFrameDrawn) {
+            firstFrameDrawn = true
+            onFirstFrame?.invoke()
+        }
     }
 
     private fun drawCell(col: Int, row: Int, sourceLane: Int) {
         val full = col == -1 && row == -1
-        val cellW = if (full) 2f else 1f
-        val cellH = if (full) 2f else 1f
-        val cellX = if (full) -1f else -1f + col
-        val cellY = if (full) -1f else 1f - (row + 1)
-        GLES20.glUniform4f(uCellRect, cellX, cellY, cellW, cellH)
+        val window = FourLaneTextureLayout.windowForLane(
+            videoWidth = videoWidth,
+            videoHeight = videoHeight,
+            lane = sourceLane.coerceIn(1, 4),
+        )
+        GLES20.glUniform4f(uWindow, window.u, window.v, window.width, window.height)
 
-        val laneIndex = (sourceLane - 1).coerceIn(0, 3)
-        val x0 = laneIndex / 4f
-        val x1 = (laneIndex + 1) / 4f
-        val windowWpx = (x1 - x0) * videoWidth
-        val windowHpx = videoHeight.toFloat()
-        val cellWpx = (if (full) viewWidth else viewWidth / 2).toFloat()
-        val cellHpx = (if (full) viewHeight else viewHeight / 2).toFloat()
-        val scale = min(cellWpx / windowWpx, cellHpx / windowHpx)
-        val fittedWpx = windowWpx * scale
-        val fittedHpx = windowHpx * scale
-        val offsetXpx = (cellWpx - fittedWpx) / 2f
-        val offsetYpx = (cellHpx - fittedHpx) / 2f
-        val uvX = (x0 * videoWidth + offsetXpx) / videoWidth
-        val uvY = offsetYpx / videoHeight
-        val uvW = fittedWpx / videoWidth
-        val uvH = fittedHpx / videoHeight
-        GLES20.glUniform4f(uWindow, uvX, uvY, uvW, uvH)
+        val baseWpx = if (full) viewWidth.toFloat() else viewWidth / 2f
+        val baseHpx = if (full) viewHeight.toFloat() else viewHeight / 2f
+        val targetAspect = baseWpx / baseHpx
+        val fittedWpx: Float
+        val fittedHpx: Float
+        if (targetAspect > window.laneAspect) {
+            fittedHpx = baseHpx
+            fittedWpx = fittedHpx * window.laneAspect
+        } else {
+            fittedWpx = baseWpx
+            fittedHpx = fittedWpx / window.laneAspect
+        }
+        val baseLeftPx = if (full) 0f else col * baseWpx
+        val baseTopPx = if (full) 0f else row * baseHpx
+        val leftPx = baseLeftPx + (baseWpx - fittedWpx) / 2f
+        val topPx = baseTopPx + (baseHpx - fittedHpx) / 2f
+        val cellX = -1f + 2f * leftPx / viewWidth
+        val cellY = 1f - 2f * (topPx + fittedHpx) / viewHeight
+        val cellW = 2f * fittedWpx / viewWidth
+        val cellH = 2f * fittedHpx / viewHeight
+        GLES20.glUniform4f(uCellRect, cellX, cellY, cellW, cellH)
 
         vertexData.position(0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
