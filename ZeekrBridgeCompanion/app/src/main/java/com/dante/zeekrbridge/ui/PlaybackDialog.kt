@@ -6,6 +6,7 @@ import android.net.Uri
 import android.view.Surface
 import android.view.SurfaceView
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -46,19 +47,14 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedSourceRole
-import com.dante.zeekrbridge.player.FourLaneGlDiagnostic
 import com.dante.zeekrbridge.player.FourLaneGlView
+import com.dante.zeekrbridge.player.FourLaneLensMode
 import com.dante.zeekrbridge.player.PlaybackTimeline
-import com.dante.zeekrbridge.player.SurroundOutputPath
-import com.dante.zeekrbridge.player.SurroundPlaybackBoundary
 import com.dante.zeekrbridge.player.canPreparePlayback
-import com.dante.zeekrbridge.player.classifySurroundPlayback
-import com.dante.zeekrbridge.player.probeSurroundCodec
 import java.io.File
 import kotlinx.coroutines.delay
 
@@ -167,17 +163,8 @@ private fun PlaylistPlaybackDialog(
     var speed by remember { mutableFloatStateOf(1f) }
     var error by remember { mutableStateOf<String?>(null) }
     var mode by remember { mutableIntStateOf(FourLaneGlView.MODE_GRID) }
+    var lensMode by remember { mutableStateOf(FourLaneLensMode.FISHEYE) }
     var surroundFirstFrameRendered by remember(first.id) { mutableStateOf(false) }
-    var useRawSurroundSurface by remember(first.id) { mutableStateOf(false) }
-    var playerPlaybackState by remember { mutableIntStateOf(Player.STATE_IDLE) }
-    var playerFirstFrameCount by remember(first.id) { mutableIntStateOf(0) }
-    var playerVideoWidth by remember(first.id) { mutableIntStateOf(0) }
-    var playerVideoHeight by remember(first.id) { mutableIntStateOf(0) }
-    var surfaceTextureFrameCount by remember(first.id) { mutableLongStateOf(0L) }
-    var glMaxTextureSize by remember(first.id) { mutableIntStateOf(0) }
-    var glRenderError by remember(first.id) { mutableStateOf<String?>(null) }
-    var glDiagnostic by remember(first.id) { mutableStateOf<FourLaneGlDiagnostic?>(null) }
-    val codecProbe = remember(first.file.absolutePath) { probeSurroundCodec(first.file) }
 
     DisposableEffect(player, playable) {
         val listener = object : Player.Listener {
@@ -189,19 +176,6 @@ private fun PlaylistPlaybackDialog(
                 currentIndex = player.currentMediaItemIndex.coerceIn(playable.indices)
             }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                playerPlaybackState = playbackState
-            }
-
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                playerVideoWidth = videoSize.width
-                playerVideoHeight = videoSize.height
-            }
-
-            override fun onRenderedFirstFrame() {
-                playerFirstFrameCount += 1
-            }
-
             override fun onPlayerError(playbackError: PlaybackException) {
                 error = t(
                     "Playback failed: ${playbackError.errorCodeName}",
@@ -210,7 +184,6 @@ private fun PlaylistPlaybackDialog(
             }
         }
         player.addListener(listener)
-        playerPlaybackState = player.playbackState
         player.setMediaItems(
             playable.map { entry ->
                 MediaItem.Builder().setMediaId(entry.id).setUri(Uri.fromFile(entry.file)).build()
@@ -248,8 +221,12 @@ private fun PlaylistPlaybackDialog(
         player.seekTo(position.mediaItemIndex, position.positionMs)
     }
 
+    fun navigateBack() {
+        if (mode != FourLaneGlView.MODE_GRID) mode = FourLaneGlView.MODE_GRID else onDismiss()
+    }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { navigateBack() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         MaterialSurface(
@@ -258,7 +235,7 @@ private fun PlaylistPlaybackDialog(
         ) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onDismiss) { Text(t("Back", "返回")) }
+                    TextButton(onClick = { navigateBack() }) { Text(t("Back", "返回")) }
                     Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     Text("${currentIndex + 1}/${playable.size}", style = MaterialTheme.typography.bodySmall)
                 }
@@ -278,116 +255,112 @@ private fun PlaylistPlaybackDialog(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (!useRawSurroundSurface) {
-                            Button(onClick = {}) { Text(t("GL four-view", "GL 四路")) }
+                        if (lensMode == FourLaneLensMode.FISHEYE) {
+                            Button(onClick = {}) { Text(t("Fisheye", "鱼眼")) }
                         } else {
                             OutlinedButton(onClick = {
-                                useRawSurroundSurface = false
-                                playerFirstFrameCount = 0
-                                surroundFirstFrameRendered = false
-                                surfaceTextureFrameCount = 0L
-                                glRenderError = null
-                                glDiagnostic = null
-                                error = null
-                            }) { Text(t("GL four-view", "GL 四路")) }
+                                lensMode = FourLaneLensMode.FISHEYE
+                            }) { Text(t("Fisheye", "鱼眼")) }
                         }
-                        if (useRawSurroundSurface) {
-                            Button(onClick = {}) { Text(t("Raw decoder test", "原始解码测试")) }
+                        if (lensMode == FourLaneLensMode.STANDARD) {
+                            Button(onClick = {}) { Text(t("Standard view", "标准视角")) }
                         } else {
                             OutlinedButton(onClick = {
-                                useRawSurroundSurface = true
-                                playerFirstFrameCount = 0
-                                surroundFirstFrameRendered = false
-                                surfaceTextureFrameCount = 0L
-                                glRenderError = null
-                                glDiagnostic = null
-                                error = null
-                            }) { Text(t("Raw decoder test", "原始解码测试")) }
+                                lensMode = FourLaneLensMode.STANDARD
+                            }) { Text(t("Standard view", "标准视角")) }
                         }
                     }
 
-                    if (useRawSurroundSurface) {
-                        RawDiagnosticVideoSurface(
-                            player = player,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                        )
-                    } else {
+                    val labels = first.laneLabels.takeIf { it.size == 4 }
+                        ?: listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
+                    Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
                         FourLaneVideoSurface(
                             player = player,
                             entry = first,
                             mode = mode,
+                            lensMode = lensMode,
+                            onModeChanged = { selectedMode -> mode = selectedMode },
                             onFirstFrame = { surroundFirstFrameRendered = true },
-                            onSurfaceFrame = { count -> surfaceTextureFrameCount = count },
-                            onGlMaxTextureSize = { size -> glMaxTextureSize = size },
-                            onGlDiagnostic = { snapshot -> glDiagnostic = snapshot },
                             onRenderError = { message ->
-                                glRenderError = message
                                 error = t(
                                     "360° rendering failed: $message",
                                     "360° 渲染失败：$message",
                                 )
                             },
-                            modifier = Modifier.fillMaxWidth().aspectRatio(if (mode == FourLaneGlView.MODE_GRID) 2f else 1.6f),
+                            modifier = Modifier.fillMaxSize(),
                         )
-                    }
-                    if ((!useRawSurroundSurface && !surroundFirstFrameRendered) ||
-                        (useRawSurroundSurface && playerFirstFrameCount == 0)
-                    ) {
-                        Text(
-                            if (useRawSurroundSurface) {
-                                t("Waiting for raw decoder frame…", "正在等待原始解码首帧…")
-                            } else {
-                                t("Preparing 360° video…", "正在准备 360° 画面…")
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 6.dp),
-                        )
-                    }
-
-                    if (!useRawSurroundSurface) {
-                        val labels = first.laneLabels.takeIf { it.size == 4 }
-                            ?: listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
-                        Row(
-                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            OutlinedButton(onClick = { mode = FourLaneGlView.MODE_GRID }) { Text("2×2") }
+                        if (mode == FourLaneGlView.MODE_GRID) {
+                            val alignments = listOf(
+                                Alignment.TopStart,
+                                Alignment.TopEnd,
+                                Alignment.BottomStart,
+                                Alignment.BottomEnd,
+                            )
                             labels.forEachIndexed { index, label ->
-                                OutlinedButton(onClick = { mode = FourLaneGlView.MODE_LANE_1 + index }) { Text(label) }
+                                MaterialSurface(
+                                    modifier = Modifier.align(alignments[index]).padding(8.dp),
+                                    color = Color.Black.copy(alpha = 0.55f),
+                                    shape = MaterialTheme.shapes.small,
+                                ) {
+                                    Text(
+                                        label,
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                        } else {
+                            MaterialSurface(
+                                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                                color = Color.Black.copy(alpha = 0.55f),
+                                shape = MaterialTheme.shapes.small,
+                            ) {
+                                TextButton(onClick = { mode = FourLaneGlView.MODE_GRID }) {
+                                    Text(t("All views", "四宫格"), color = Color.White)
+                                }
+                            }
+                            labels.getOrNull(mode - FourLaneGlView.MODE_LANE_1)?.let { label ->
+                                MaterialSurface(
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                                    color = Color.Black.copy(alpha = 0.55f),
+                                    shape = MaterialTheme.shapes.small,
+                                ) {
+                                    Text(
+                                        label,
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                        }
+                        if (!surroundFirstFrameRendered) {
+                            MaterialSurface(
+                                modifier = Modifier.align(Alignment.Center),
+                                color = Color.Black.copy(alpha = 0.60f),
+                                shape = MaterialTheme.shapes.small,
+                            ) {
+                                Text(
+                                    t("Preparing 360° video…", "正在准备 360° 画面…"),
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                )
                             }
                         }
                     }
-
-                    val outputPath = if (useRawSurroundSurface) {
-                        SurroundOutputPath.RAW_SURFACE
-                    } else {
-                        SurroundOutputPath.GL_CROPPED
-                    }
-                    val boundary = classifySurroundPlayback(
-                        outputPath = outputPath,
-                        playerFirstFrames = playerFirstFrameCount,
-                        surfaceTextureFrames = surfaceTextureFrameCount,
-                        glFirstFrame = surroundFirstFrameRendered,
-                    )
-                    SurroundDiagnosticPanel(
-                        outputPath = outputPath,
-                        boundary = boundary,
-                        playerState = playerPlaybackState,
-                        playerFirstFrames = playerFirstFrameCount,
-                        playerVideoWidth = playerVideoWidth,
-                        playerVideoHeight = playerVideoHeight,
-                        surfaceTextureFrames = surfaceTextureFrameCount,
-                        glFirstFrame = surroundFirstFrameRendered,
-                        glMaxTextureSize = glMaxTextureSize,
-                        glRenderError = glRenderError,
-                        glDiagnostic = glDiagnostic,
-                        codecMime = codecProbe.mime,
-                        codecWidth = codecProbe.width,
-                        codecHeight = codecProbe.height,
-                        process64Bit = codecProbe.process64Bit,
-                        supportedDecoders = codecProbe.supportedDecoders,
-                        rejectedDecoders = codecProbe.rejectedDecoders,
-                        codecProbeError = codecProbe.error,
+                    Text(
+                        if (mode == FourLaneGlView.MODE_GRID) {
+                            t("Tap a view to enlarge", "点击任一画面放大")
+                        } else {
+                            t(
+                                "Pinch to zoom · Drag to move · Double-tap to reset",
+                                "双指缩放 · 拖动查看 · 双击复位",
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
                     )
                 } else {
                     PlainVideoSurface(
@@ -468,33 +441,32 @@ private fun FourLaneVideoSurface(
     player: ExoPlayer,
     entry: PlaybackEntry,
     mode: Int,
+    lensMode: FourLaneLensMode,
+    onModeChanged: (Int) -> Unit,
     onFirstFrame: () -> Unit,
-    onSurfaceFrame: (Long) -> Unit,
-    onGlMaxTextureSize: (Int) -> Unit,
-    onGlDiagnostic: (FourLaneGlDiagnostic) -> Unit,
     onRenderError: (String) -> Unit,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
     val glView = remember { FourLaneGlView(context) }
+    val currentOnModeChanged by rememberUpdatedState(onModeChanged)
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
-    val currentOnSurfaceFrame by rememberUpdatedState(onSurfaceFrame)
-    val currentOnGlMaxTextureSize by rememberUpdatedState(onGlMaxTextureSize)
-    val currentOnGlDiagnostic by rememberUpdatedState(onGlDiagnostic)
     val currentOnRenderError by rememberUpdatedState(onRenderError)
-    LaunchedEffect(mode) {
+    LaunchedEffect(mode, lensMode) {
         glView.setMode(mode)
+        glView.setLensMode(lensMode)
         glView.requestRender()
     }
     DisposableEffect(player, glView, entry) {
         var disposed = false
         var texture: SurfaceTexture? = null
         var surface: Surface? = null
+        glView.setModeChangedCallback { selectedMode -> currentOnModeChanged(selectedMode) }
         glView.setPlaybackCallbacks(
             onFirstFrame = { currentOnFirstFrame() },
-            onSurfaceFrame = { count -> currentOnSurfaceFrame(count) },
-            onGlMaxTextureSize = { size -> currentOnGlMaxTextureSize(size) },
-            onGlDiagnostic = { snapshot -> currentOnGlDiagnostic(snapshot) },
+            onSurfaceFrame = null,
+            onGlMaxTextureSize = null,
+            onGlDiagnostic = null,
             onRenderError = { message -> currentOnRenderError(message) },
         )
         glView.createSurfaceTexture { created ->
@@ -522,6 +494,7 @@ private fun FourLaneVideoSurface(
         }
         onDispose {
             disposed = true
+            glView.setModeChangedCallback(null)
             glView.setPlaybackCallbacks(null, null, null, null, null)
             surface?.let { runCatching { player.clearVideoSurface(it) } }
             glView.setSource(null)
@@ -531,115 +504,6 @@ private fun FourLaneVideoSurface(
         }
     }
     AndroidView(factory = { glView }, modifier = modifier)
-}
-
-@Composable
-private fun RawDiagnosticVideoSurface(player: ExoPlayer, modifier: Modifier) {
-    val context = LocalContext.current
-    val surfaceView = remember { SurfaceView(context) }
-    DisposableEffect(player, surfaceView) {
-        player.setVideoSurfaceView(surfaceView)
-        if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
-            player.prepare()
-        }
-        onDispose { player.clearVideoSurfaceView(surfaceView) }
-    }
-    AndroidView(factory = { surfaceView }, modifier = modifier)
-}
-
-@Composable
-private fun SurroundDiagnosticPanel(
-    outputPath: SurroundOutputPath,
-    boundary: SurroundPlaybackBoundary,
-    playerState: Int,
-    playerFirstFrames: Int,
-    playerVideoWidth: Int,
-    playerVideoHeight: Int,
-    surfaceTextureFrames: Long,
-    glFirstFrame: Boolean,
-    glMaxTextureSize: Int,
-    glRenderError: String?,
-    glDiagnostic: FourLaneGlDiagnostic?,
-    codecMime: String,
-    codecWidth: Int,
-    codecHeight: Int,
-    process64Bit: Boolean,
-    supportedDecoders: List<String>,
-    rejectedDecoders: List<String>,
-    codecProbeError: String?,
-) {
-    MaterialSurface(
-        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(t("360° diagnostic", "360° 诊断"), style = MaterialTheme.typography.titleSmall)
-            Text("Output: ${outputPath.name} · Boundary: ${boundary.name}", style = MaterialTheme.typography.bodySmall)
-            Text(
-                "Player: ${playerStateLabel(playerState)} · firstFrame=$playerFirstFrames · " +
-                    "video=${playerVideoWidth}×${playerVideoHeight}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "SurfaceTexture: frames=$surfaceTextureFrames · GL firstFrame=$glFirstFrame · " +
-                    "GL maxTexture=${if (glMaxTextureSize > 0) glMaxTextureSize else "pending"}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            glDiagnostic?.let { diagnostic ->
-                Text(
-                    "GL core: program=${diagnostic.programId} · texture=${diagnostic.textureId} · " +
-                        "source=${diagnostic.sourceAttached}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    "GL draw: calls=${diagnostic.drawCalls} · updateOK=${diagnostic.updateTexImageSuccesses} · " +
-                        "last=${diagnostic.lastExitReason}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    "Shader: VS=${diagnostic.vertexShaderStatus} · FS=${diagnostic.fragmentShaderStatus} · " +
-                        "LINK=${diagnostic.programLinkStatus}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    "Locations: a=${diagnostic.attributeLocation} · u=${diagnostic.uniformLocations}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    "GPU: ${diagnostic.glVendor} · ${diagnostic.glRenderer} · ${diagnostic.glVersion}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                if (diagnostic.shaderLog != "none") {
-                    Text("Shader log: ${diagnostic.shaderLog}", color = Color(0xFFEF5350))
-                }
-            }
-            Text(
-                "Codec probe: $codecMime ${codecWidth}×${codecHeight} · process=${if (process64Bit) "64-bit" else "32-bit"}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "Supported: ${supportedDecoders.take(3).joinToString().ifBlank { "NONE" }}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            if (supportedDecoders.isEmpty() && rejectedDecoders.isNotEmpty()) {
-                Text(
-                    "Rejected: ${rejectedDecoders.take(3).joinToString()}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            codecProbeError?.let { Text("Codec probe error: $it", color = Color(0xFFEF5350)) }
-            glRenderError?.let { Text("GL: $it", color = Color(0xFFEF5350)) }
-        }
-    }
-}
-
-private fun playerStateLabel(state: Int): String = when (state) {
-    Player.STATE_IDLE -> "IDLE"
-    Player.STATE_BUFFERING -> "BUFFERING"
-    Player.STATE_READY -> "READY"
-    Player.STATE_ENDED -> "ENDED"
-    else -> state.toString()
 }
 
 @Composable

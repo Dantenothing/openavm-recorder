@@ -3,6 +3,68 @@ package com.dante.zeekrbridge.player
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import kotlin.math.tan
+
+internal enum class FourLaneLensMode {
+    FISHEYE,
+    STANDARD,
+}
+
+internal data class FourLaneCorrectionConfig(
+    val targetFovDegrees: Float = 110f,
+    val cropZoom: Float = 1.25f,
+    val centerX: Float = 0.50f,
+    val centerY: Float = 0.47f,
+) {
+    val halfFovTangent: Float
+        get() = tan(Math.toRadians(targetFovDegrees.toDouble()) / 2.0).toFloat()
+}
+
+internal data class FourLaneViewport(
+    val zoom: Float = MIN_ZOOM,
+    val centerX: Float = 0f,
+    val centerY: Float = 0f,
+) {
+    fun applyGesture(
+        zoomChange: Float,
+        panXPx: Float,
+        panYPx: Float,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): FourLaneViewport {
+        if (viewWidth <= 0 || viewHeight <= 0) return this
+        val nextZoom = (zoom * zoomChange).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        val maxCenter = 1f - 1f / nextZoom
+        return FourLaneViewport(
+            zoom = nextZoom,
+            centerX = (centerX - panXPx * 2f / viewWidth / nextZoom)
+                .coerceIn(-maxCenter, maxCenter),
+            centerY = (centerY - panYPx * 2f / viewHeight / nextZoom)
+                .coerceIn(-maxCenter, maxCenter),
+        )
+    }
+
+    companion object {
+        const val MIN_ZOOM = 1f
+        const val MAX_ZOOM = 3f
+    }
+}
+
+internal fun laneForGridTap(
+    x: Float,
+    y: Float,
+    width: Int,
+    height: Int,
+    order: IntArray = intArrayOf(1, 2, 3, 4),
+): Int? {
+    if (width <= 0 || height <= 0 || x !in 0f..width.toFloat() || y !in 0f..height.toFloat()) {
+        return null
+    }
+    if (order.size != 4) return null
+    val column = if (x < width / 2f) 0 else 1
+    val row = if (y < height / 2f) 0 else 1
+    return order[row * 2 + column].takeIf { it in 1..4 }
+}
 
 internal fun createFourLaneVertexBuffer(): FloatBuffer = ByteBuffer
     .allocateDirect(8 * java.lang.Float.BYTES)

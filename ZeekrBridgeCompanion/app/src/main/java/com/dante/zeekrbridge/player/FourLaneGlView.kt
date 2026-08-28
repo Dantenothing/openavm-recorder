@@ -7,6 +7,9 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Handler
 import android.os.Looper
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -51,6 +54,52 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     private var glMaxTextureCallback: ((Int) -> Unit)? = null
     private var glDiagnosticCallback: ((FourLaneGlDiagnostic) -> Unit)? = null
     private var renderErrorCallback: ((String) -> Unit)? = null
+    private var modeChangedCallback: ((Int) -> Unit)? = null
+    private var currentMode = MODE_GRID
+    private var currentOrder = intArrayOf(1, 2, 3, 4)
+    private val scaleGestureDetector = ScaleGestureDetector(
+        context,
+        object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                if (currentMode == MODE_GRID) return false
+                applyViewportGesture(detector.scaleFactor, 0f, 0f)
+                return true
+            }
+        },
+    )
+    private val gestureDetector = GestureDetector(
+        context,
+        object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(event: MotionEvent): Boolean = true
+
+            override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
+                if (currentMode != MODE_GRID) return false
+                val lane = laneForGridTap(event.x, event.y, width, height, currentOrder) ?: return false
+                setMode(lane, currentOrder.toList())
+                modeChangedCallback?.invoke(lane)
+                performClick()
+                return true
+            }
+
+            override fun onDoubleTap(event: MotionEvent): Boolean {
+                if (currentMode == MODE_GRID) return false
+                resetViewport()
+                performClick()
+                return true
+            }
+
+            override fun onScroll(
+                first: MotionEvent?,
+                current: MotionEvent,
+                distanceX: Float,
+                distanceY: Float,
+            ): Boolean {
+                if (currentMode == MODE_GRID || scaleGestureDetector.isInProgress) return false
+                applyViewportGesture(1f, -distanceX, -distanceY)
+                return true
+            }
+        },
+    )
 
     init {
         setEGLContextClientVersion(2)
@@ -64,7 +113,31 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     }
 
     fun setMode(mode: Int, order: List<Int> = listOf(1, 2, 3, 4)) {
-        glRenderer.setMode(mode, order)
+        val safeMode = mode.coerceIn(MODE_GRID, MODE_LANE_4)
+        val safeOrder = order.takeIf { it.size == 4 && it.toSet() == setOf(1, 2, 3, 4) }
+            ?: listOf(1, 2, 3, 4)
+        currentMode = safeMode
+        currentOrder = safeOrder.toIntArray()
+        queueEvent { glRenderer.setMode(safeMode, safeOrder) }
+        requestRender()
+    }
+
+    internal fun setLensMode(lensMode: FourLaneLensMode) {
+        queueEvent { glRenderer.setLensMode(lensMode) }
+        requestRender()
+    }
+
+    fun setModeChangedCallback(callback: ((Int) -> Unit)?) {
+        modeChangedCallback = callback
+    }
+
+    fun resetViewport() {
+        queueEvent { glRenderer.resetViewport() }
+        requestRender()
+    }
+
+    private fun applyViewportGesture(zoomChange: Float, panXPx: Float, panYPx: Float) {
+        queueEvent { glRenderer.applyViewportGesture(zoomChange, panXPx, panYPx) }
         requestRender()
     }
 
@@ -103,6 +176,23 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
         }
     }
 
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (currentMode != MODE_GRID || event.pointerCount > 1) {
+            parent?.requestDisallowInterceptTouchEvent(true)
+        }
+        val scaleHandled = scaleGestureDetector.onTouchEvent(event)
+        val gestureHandled = gestureDetector.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            parent?.requestDisallowInterceptTouchEvent(false)
+        }
+        return scaleHandled || gestureHandled || currentMode != MODE_GRID
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
     override fun onPause() {
         super.onPause()
         glRenderer.setSource(null)
@@ -116,6 +206,9 @@ private class FourLaneRenderer(
     private var source: SurfaceTexture? = null
     private var mode = FourLaneGlView.MODE_GRID
     private var order = intArrayOf(1, 2, 3, 4)
+    private var lensMode = FourLaneLensMode.FISHEYE
+    private var viewport = FourLaneViewport()
+    private val correction = FourLaneCorrectionConfig()
     private var videoWidth = 1280
     private var videoHeight = 5140
     private var viewWidth = 1
@@ -127,6 +220,9 @@ private class FourLaneRenderer(
     private var uWindow = 0
     private var uTexMatrix = 0
     private var uTexture = 0
+    private var uLensMode = 0
+    private var uViewport = 0
+    private var uCorrection = 0
 
     // GLES requires direct, native-order client buffers. A heap FloatBuffer
     // can accept playback while leaving this view permanently black.
@@ -193,10 +289,27 @@ private class FourLaneRenderer(
     }
 
     fun setMode(mode: Int, order: List<Int>) {
-        this.mode = mode.coerceIn(FourLaneGlView.MODE_GRID, FourLaneGlView.MODE_LANE_4)
+        val safeMode = mode.coerceIn(FourLaneGlView.MODE_GRID, FourLaneGlView.MODE_LANE_4)
+        if (this.mode != safeMode) viewport = FourLaneViewport()
+        this.mode = safeMode
         if (order.size == 4 && order.toSet() == setOf(1, 2, 3, 4)) {
             this.order = order.toIntArray()
         }
+    }
+
+    fun setLensMode(lensMode: FourLaneLensMode) {
+        if (this.lensMode == lensMode) return
+        this.lensMode = lensMode
+        viewport = FourLaneViewport()
+    }
+
+    fun applyViewportGesture(zoomChange: Float, panXPx: Float, panYPx: Float) {
+        if (mode == FourLaneGlView.MODE_GRID) return
+        viewport = viewport.applyGesture(zoomChange, panXPx, panYPx, viewWidth, viewHeight)
+    }
+
+    fun resetViewport() {
+        viewport = FourLaneViewport()
     }
 
     fun setVideoSize(width: Int, height: Int) {
@@ -282,6 +395,9 @@ private class FourLaneRenderer(
             uWindow = GLES20.glGetUniformLocation(program, "uWindow")
             uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
             uTexture = GLES20.glGetUniformLocation(program, "uTexture")
+            uLensMode = GLES20.glGetUniformLocation(program, "uLensMode")
+            uViewport = GLES20.glGetUniformLocation(program, "uViewport")
+            uCorrection = GLES20.glGetUniformLocation(program, "uCorrection")
         }
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         if (program == 0) reportRenderError("GL shader initialization failed")
@@ -338,6 +454,15 @@ private class FourLaneRenderer(
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
         GLES20.glUniform1i(uTexture, 0)
         GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, texMatrix, 0)
+        GLES20.glUniform1i(uLensMode, if (lensMode == FourLaneLensMode.STANDARD) 1 else 0)
+        GLES20.glUniform4f(uViewport, viewport.zoom, viewport.centerX, viewport.centerY, 0f)
+        GLES20.glUniform4f(
+            uCorrection,
+            correction.halfFovTangent,
+            correction.cropZoom,
+            correction.centerX,
+            correction.centerY,
+        )
         vertexData.position(0)
         GLES20.glEnableVertexAttribArray(aPosition)
         GLES20.glVertexAttribPointer(aPosition, 2, GLES20.GL_FLOAT, false, 8, vertexData)
@@ -431,7 +556,7 @@ private class FourLaneRenderer(
             .joinToString(" | ")
             .ifBlank { "none" },
         attributeLocation = aPosition,
-        uniformLocations = "$uCellRect/$uWindow/$uTexMatrix/$uTexture",
+        uniformLocations = "$uCellRect/$uWindow/$uTexMatrix/$uTexture/$uLensMode/$uViewport/$uCorrection",
         drawCalls = drawCallCount,
         updateTexImageSuccesses = updateTexImageSuccessCount,
         lastExitReason = lastExitReason,
@@ -489,11 +614,10 @@ private class FourLaneRenderer(
             attribute vec2 aPosition;
             varying vec2 vLocalUv;
             uniform vec4 uCellRect;
-            uniform vec4 uWindow;
             void main() {
               vec2 p = uCellRect.xy + uCellRect.zw * (aPosition * 0.5 + 0.5);
               gl_Position = vec4(p, 0.0, 1.0);
-              vLocalUv = uWindow.xy + uWindow.zw * (aPosition * 0.5 + 0.5);
+              vLocalUv = aPosition * 0.5 + 0.5;
             }
         """
 
@@ -503,8 +627,26 @@ private class FourLaneRenderer(
             varying vec2 vLocalUv;
             uniform samplerExternalOES uTexture;
             uniform mat4 uTexMatrix;
+            uniform vec4 uWindow;
+            uniform int uLensMode;
+            uniform vec4 uViewport;
+            uniform vec4 uCorrection;
             void main() {
-              vec2 uv = (uTexMatrix * vec4(vLocalUv, 0.0, 1.0)).xy;
+              vec2 sourceUnit;
+              if (uLensMode == 1) {
+                vec2 plane = ((vLocalUv * 2.0 - 1.0) / (uViewport.x * uCorrection.y)
+                    + uViewport.yz) * uCorrection.x;
+                float rayRadius = length(plane);
+                float sourceRadius = atan(rayRadius) / 1.57079632679;
+                vec2 direction = rayRadius > 0.00001 ? plane / rayRadius : vec2(0.0);
+                sourceUnit = uCorrection.zw + direction * sourceRadius * 0.5;
+              } else {
+                sourceUnit = vec2(0.5) + (vLocalUv - vec2(0.5)) / uViewport.x
+                    + uViewport.yz * 0.5;
+              }
+              sourceUnit = clamp(sourceUnit, vec2(0.0), vec2(1.0));
+              vec2 sourceUv = uWindow.xy + uWindow.zw * sourceUnit;
+              vec2 uv = (uTexMatrix * vec4(sourceUv, 0.0, 1.0)).xy;
               gl_FragColor = texture2D(uTexture, uv);
             }
         """

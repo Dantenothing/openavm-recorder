@@ -49,4 +49,43 @@ class FourLaneRenderDataTest {
         assertEquals(List(4) { 1280f }, windows.map { it.sourceWidthPx })
         windows.forEach { assertEquals(1f, it.laneAspect, 0.000001f) }
     }
+
+    @Test
+    fun squareGridTapSelectsTheExpectedLane() {
+        assertEquals(1, laneForGridTap(20f, 20f, 100, 100))
+        assertEquals(2, laneForGridTap(80f, 20f, 100, 100))
+        assertEquals(3, laneForGridTap(20f, 80f, 100, 100))
+        assertEquals(4, laneForGridTap(80f, 80f, 100, 100))
+    }
+
+    @Test
+    fun enlargedViewportZoomsPansAndStaysInsideSourceBounds() {
+        val zoomed = FourLaneViewport().applyGesture(
+            zoomChange = 2f,
+            panXPx = 25f,
+            panYPx = -25f,
+            viewWidth = 100,
+            viewHeight = 100,
+        )
+
+        assertEquals(2f, zoomed.zoom, 0.000001f)
+        assertEquals(-0.25f, zoomed.centerX, 0.000001f)
+        assertEquals(0.25f, zoomed.centerY, 0.000001f)
+
+        val clamped = zoomed.applyGesture(10f, 10_000f, -10_000f, 100, 100)
+        assertEquals(3f, clamped.zoom, 0.000001f)
+        assertEquals(-(1f - 1f / 3f), clamped.centerX, 0.000001f)
+        assertEquals(1f - 1f / 3f, clamped.centerY, 0.000001f)
+    }
+
+    @Test
+    fun phoneStandardViewUsesTheValidatedCarDefaults() {
+        val correction = FourLaneCorrectionConfig()
+
+        assertEquals(110f, correction.targetFovDegrees, 0.000001f)
+        assertEquals(1.25f, correction.cropZoom, 0.000001f)
+        assertEquals(0.50f, correction.centerX, 0.000001f)
+        assertEquals(0.47f, correction.centerY, 0.000001f)
+        assertTrue(correction.halfFovTangent > 1f)
+    }
 }
