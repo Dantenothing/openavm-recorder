@@ -50,6 +50,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
+import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.player.FourLaneGlView
 import com.dante.zeekrbridge.player.FourLaneLensMode
@@ -104,6 +105,9 @@ fun MediaSessionPlaybackDialog(
     segments: List<IndexedMediaSegment>,
     initialIndex: Int,
     isEvent: Boolean,
+    recordingMode: IndexedRecordingMode = IndexedRecordingMode.NORMAL,
+    timeLapseMultiplier: Int = 1,
+    realDurationMs: Long = 0L,
     onDismiss: () -> Unit,
 ) {
     val entries = remember(segments) {
@@ -122,8 +126,18 @@ fun MediaSessionPlaybackDialog(
         }
     }
     val range = remember(segments) { formatPlaybackRange(segments) }
+    val title = if (isEvent) {
+        "${t("Incident", "事件")} · $range"
+    } else if (recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+        t(
+            "Time-lapse ${timeLapseMultiplier}× · captured ${formatPlayerTime(realDurationMs)}",
+            "延时摄影 ${timeLapseMultiplier}× · 拍摄 ${formatPlayerTime(realDurationMs)}",
+        )
+    } else {
+        range
+    }
     PlaylistPlaybackDialog(
-        title = if (isEvent) "${t("Incident", "事件")} · $range" else range,
+        title = title,
         entries = entries,
         initialIndex = initialIndex,
         onDismiss = onDismiss,

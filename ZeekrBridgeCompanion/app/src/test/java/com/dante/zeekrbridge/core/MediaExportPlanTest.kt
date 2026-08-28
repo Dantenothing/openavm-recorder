@@ -75,6 +75,28 @@ class MediaExportPlanTest {
     }
 
     @Test
+    fun timeLapseMetadataIsPreservedWhileTrimUsesFinishedVideoTime() {
+        val timeLapse = segment("timelapse", 0, 60_000).copy(
+            recordingMode = IndexedRecordingMode.TIME_LAPSE,
+            timeLapseMultiplier = 60,
+            realDurationMs = 3_600_000,
+        )
+
+        val plan = MediaExportPlanner.build(
+            listOf(timeLapse),
+            MediaExportTarget.ORIGINAL,
+            requestedStartMs = 10_000,
+            requestedEndMs = 20_000,
+        )
+
+        assertEquals(IndexedRecordingMode.TIME_LAPSE, plan.recordingMode)
+        assertEquals(60, plan.timeLapseMultiplier)
+        assertEquals(10_000, plan.outputDurationMs)
+        assertEquals(10_000, plan.clips.single().clipStartMs)
+        assertEquals(20_000, plan.clips.single().clipEndMs)
+    }
+
+    @Test
     fun cabinCannotRequestDirectionExport() {
         val cabin = segment("cabin", 0, 60_000).copy(
             sourceRole = IndexedSourceRole.CABIN,

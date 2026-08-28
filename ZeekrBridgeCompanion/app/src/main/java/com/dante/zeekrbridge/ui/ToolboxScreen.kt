@@ -65,11 +65,16 @@ fun ToolboxScreen() {
                 }
                 result.fold(
                     onSuccess = { offer ->
-                        statusText = "已导入 ${offer.fileName}（${offer.sizeBytes} B，" +
-                            "${offer.wav.sampleRate} Hz/${offer.wav.channels}ch）"
+                        statusText = t(
+                            "Imported ${offer.fileName} (${offer.sizeBytes} B, ${offer.wav.sampleRate} Hz/${offer.wav.channels}ch)",
+                            "已导入 ${offer.fileName}（${offer.sizeBytes} B，${offer.wav.sampleRate} Hz/${offer.wav.channels}ch）",
+                        )
                     },
                     onFailure = { t ->
-                        statusText = "导入失败：${t.message ?: t.javaClass.simpleName}"
+                        statusText = com.dante.zeekrbridge.ui.t(
+                            "Import failed: ${t.message ?: t.javaClass.simpleName}",
+                            "导入失败：${t.message ?: t.javaClass.simpleName}",
+                        )
                     },
                 )
                 reloadOffers()
@@ -89,16 +94,20 @@ fun ToolboxScreen() {
         Spacer(Modifier.height(8.dp))
 
         ToolCard(
-            title = "Zeekr USB 助手",
-            status = "未开放（手机端）",
-            description = "车机端“USB 助手”已可在车机实验室使用（SAF/USB OTG 授权、扫描、浏览、复制、清理原厂录像）。" +
-                "手机端远程访问车机 USB 尚未开放，不会提供无响应的假按钮。",
+            title = t("Zeekr USB helper", "Zeekr USB 助手"),
+            status = t("Available in the car Lab", "车机实验室可用"),
+            description = t(
+                "USB authorization, scanning, browsing, copying and factory-recording cleanup remain in the car Lab. Phone-side remote USB access will arrive with the authenticated control channel.",
+                "USB 授权、扫描、浏览、复制和原厂录像清理保留在车机实验室。手机远程访问将在双向控制通道完成后开放。",
+            ),
         )
         ToolCard(
-            title = "USB 健康检查",
-            status = "未开放（车机端实验室可用）",
-            description = "容量、可写状态、零字节文件、损坏视频与目录完整性检查保留在车机端实验室；" +
-                "手机端远程健康检查尚未开放。",
+            title = t("USB health check", "USB 健康检查"),
+            status = t("Available in the car Lab", "车机实验室可用"),
+            description = t(
+                "Capacity, write access, empty files, damaged videos and directory integrity are checked locally in the car Lab.",
+                "容量、可写状态、零字节文件、损坏视频和目录完整性检查保留在车机实验室。",
+            ),
         )
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
@@ -108,16 +117,17 @@ fun ToolboxScreen() {
                 ) {
                     Text(t("Sound maker (local audio editor)", "声音制作器（本地音频编辑）"), fontWeight = FontWeight.SemiBold)
                     Text(
-                        "实验性",
+                        t("Experimental", "实验性"),
                         color = MaterialTheme.colorScheme.tertiary,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "导入 MP3/M4A/AAC/WAV/FLAC/OGG，波形裁切、试听、音量、标准化、淡入淡出、Mono/Stereo，" +
-                        "输出 44.1 kHz / 16-bit PCM WAV，可保存到手机或 SAF 安全写入 USB。" +
-                        "整个处理只在手机本地完成。",
+                    t(
+                        "Import MP3, M4A, AAC, WAV, FLAC or OGG; trim by waveform, preview, adjust volume, normalize, fade and select Mono/Stereo. Export 44.1 kHz / 16-bit PCM WAV to the phone or an authorized USB folder. Processing stays on this phone.",
+                        "导入 MP3/M4A/AAC/WAV/FLAC/OGG，支持波形裁切、试听、音量、标准化、淡入淡出和 Mono/Stereo；输出 44.1 kHz / 16-bit PCM WAV，可保存到手机或安全写入已授权 USB。全部处理仅在本机完成。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -125,7 +135,10 @@ fun ToolboxScreen() {
                     Button(onClick = { showEditor = true }) { Text(t("Open sound maker", "打开声音制作器")) }
                 }
                 Text(
-                    "实验性说明：App 可以生成符合参数的 WAV，但无法保证当前 Zeekr 固件一定识别该文件、文件名或音频长度。",
+                    t(
+                        "Experimental: the app generates a standards-compliant WAV, but a specific Zeekr firmware may still reject its file name or duration.",
+                        "实验性说明：App 可以生成符合参数的 WAV，但特定 Zeekr 固件仍可能不识别文件名或音频长度。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -141,14 +154,17 @@ fun ToolboxScreen() {
                 ) {
                     Text(t("Car Lab transfer (≤1 MiB WAV)", "车机实验入口（≤1 MiB WAV 广播）"), fontWeight = FontWeight.SemiBold)
                     Text(
-                        "实验性",
+                        t("Experimental", "实验性"),
                         color = MaterialTheme.colorScheme.tertiary,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "保留原有能力：选择手机上的 WAV（44.1/48 kHz、16-bit PCM、≤1 MiB），校验后通过局域网广播给车机。",
+                    t(
+                        "Choose a WAV (44.1/48 kHz, 16-bit PCM, no larger than 1 MiB), validate it, then offer it to a connected car over the local network.",
+                        "选择 WAV（44.1/48 kHz、16-bit PCM、≤1 MiB），校验后通过局域网发送给已连接车机。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -163,7 +179,7 @@ fun ToolboxScreen() {
                 }
                 if (offers.isEmpty()) {
                     Text(
-                        "暂无已导入的声音。",
+                        t("No imported sounds", "暂无已导入的声音。"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -189,7 +205,10 @@ fun ToolboxScreen() {
                                 WsType.FILE_OFFER,
                                 OutboundOfferStore.metadataMap(offer),
                             )
-                            statusText = "已向 ${BridgeServer.connectedCars()} 台车机广播 ${offer.fileName}"
+                            statusText = t(
+                                "Offered ${offer.fileName} to ${BridgeServer.connectedCars()} connected cars",
+                                "已向 ${BridgeServer.connectedCars()} 台车机广播 ${offer.fileName}",
+                            )
                         }) { Text(t("Send to car", "发送到车机")) }
                         OutlinedButton(onClick = {
                             scope.launch {

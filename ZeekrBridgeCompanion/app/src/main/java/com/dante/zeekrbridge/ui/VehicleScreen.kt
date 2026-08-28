@@ -168,6 +168,7 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
         }
     }
     LaunchedEffect(receivedFiles.size, catalogOnline) {
+        if (!REMOTE_CONTROLS_ENABLED) return@LaunchedEffect
         if (!catalogOnline) return@LaunchedEffect
         val prefs = context.getSharedPreferences(PRODUCT_SETTINGS, Context.MODE_PRIVATE)
         if (!prefs.getBoolean("delete_car_copy", false)) return@LaunchedEffect
@@ -275,7 +276,7 @@ private fun VehicleOverview(
         Spacer(Modifier.height(18.dp))
         VehicleHeroCard(home, onConnectionDetails, onReconnect)
 
-        if (home.status == VehicleConnectionStatus.CONNECTED) {
+        if (REMOTE_CONTROLS_ENABLED && home.status == VehicleConnectionStatus.CONNECTED) {
             Spacer(Modifier.height(14.dp))
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
@@ -557,6 +558,9 @@ private fun formatSpeed(bytesPerSec: Long): String = when {
     bytesPerSec >= 1024L -> "${bytesPerSec / 1024} KB/s"
     else -> "$bytesPerSec B/s"
 }
+
+/** Enabled with the car-side authenticated control channel in v2.4.0-alpha2. */
+private const val REMOTE_CONTROLS_ENABLED = false
 
 private const val PRODUCT_SETTINGS = "phone_product_settings"
 private const val KEY_AUTO_START_SERVER = "auto_start_server"

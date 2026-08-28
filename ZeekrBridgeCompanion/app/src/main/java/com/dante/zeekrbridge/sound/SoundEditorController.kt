@@ -11,6 +11,7 @@ import com.dante.zeekrbridge.core.OutboundOfferStore
 import com.dante.zeekrbridge.core.WavValidator
 import com.dante.zeekrbridge.core.WsType
 import com.dante.zeekrbridge.server.BridgeServer
+import com.dante.zeekrbridge.ui.PhoneLanguage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,7 +104,7 @@ class SoundEditorController(
             context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         phase = SoundPhase.Importing
-        statusText = "正在分析…"
+        statusText = text("Analyzing…", "正在分析…")
         progressText = ""
         exportResult = null
         job = scope.launch {
@@ -111,11 +112,11 @@ class SoundEditorController(
                 ensureCacheSpace(16L * 1024 * 1024)
                 val decoded = withContext(Dispatchers.IO) {
                     SoundDecoder.decode(context, uri, cancellation) { p ->
-                        progressText = "正在分析 ${(p * 100).toInt()}%…"
+                        progressText = text("Analyzing ${(p * 100).toInt()}%…", "正在分析 ${(p * 100).toInt()}%…")
                     }
                 }
                 phase = SoundPhase.Waveform
-                statusText = "正在生成波形…"
+                statusText = text("Building waveform…", "正在生成波形…")
                 val waveform = withContext(Dispatchers.IO) {
                     WaveformBuilder.build(decoded.pcmFile, decoded.meta)
                 }
@@ -131,11 +132,14 @@ class SoundEditorController(
                 )
                 edit = EditSettings.defaults(decoded.meta.frameCount)
                 phase = SoundPhase.Ready
-                statusText = "已导入 ${decoded.name}（${decoded.formatLabel}，${formatDuration(decoded.meta.durationMs)}）"
+                statusText = text(
+                    "Imported ${decoded.name} (${decoded.formatLabel}, ${formatDuration(decoded.meta.durationMs)})",
+                    "已导入 ${decoded.name}（${decoded.formatLabel}，${formatDuration(decoded.meta.durationMs)}）",
+                )
                 progressText = ""
             } catch (t: SoundCancelledException) {
                 phase = SoundPhase.Idle
-                statusText = "已取消导入"
+                statusText = text("Import cancelled", "已取消导入")
             } catch (t: Throwable) {
                 phase = SoundPhase.Error
                 statusText = errorMessage(t)
@@ -154,7 +158,7 @@ class SoundEditorController(
         stopPlayback()
         edit = EditSettings.defaults(imp.meta.frameCount)
         exportResult = null
-        statusText = "已恢复默认设置"
+        statusText = text("Default settings restored", "已恢复默认设置")
     }
 
     fun togglePlayback() {
@@ -165,7 +169,7 @@ class SoundEditorController(
             return
         }
         if (edit.startFrame >= edit.endFrame) {
-            statusText = "选区为空或超出范围，请调整开始/结束位置"
+            statusText = text("The selection is empty or out of range.", "选区为空或超出范围，请调整开始/结束位置")
             return
         }
         val p = player ?: SelectionPlayer(imp.pcmFile, imp.meta).also { player = it }
@@ -208,11 +212,11 @@ class SoundEditorController(
                 fileName = saved.file.name,
                 sizeBytes = saved.file.length(),
                 durationMs = durationOf(converted),
-                target = "手机存储",
+                target = text("Phone storage", "手机存储"),
                 savedFile = saved.file,
                 verified = true,
                 backupName = saved.backupName,
-                message = "已保存到手机：${saved.file.absolutePath}",
+                message = text("Saved to phone: ${saved.file.absolutePath}", "已保存到手机：${saved.file.absolutePath}"),
             )
         }
     }
@@ -244,10 +248,10 @@ class SoundEditorController(
                     fileName = name,
                     sizeBytes = converted.length(),
                     durationMs = durationOf(converted),
-                    target = "系统文档",
+                    target = text("Document provider", "系统文档"),
                     savedFile = null,
                     verified = true,
-                    message = "已通过系统文档保存到所选位置",
+                    message = text("Saved to the selected location", "已通过系统文档保存到所选位置"),
                 )
             }
         }
@@ -278,7 +282,10 @@ class SoundEditorController(
             val size = converted.length()
             if (size > WavValidator.MAX_BYTES) {
                 throw SoundInputException(
-                    "导出文件 ${formatBytes(size)} 超过车机实验入口的 1 MiB 限制，请先保存到手机",
+                    text(
+                        "The ${formatBytes(size)} export exceeds the 1 MiB car-lab limit. Save it to the phone instead.",
+                        "导出文件 ${formatBytes(size)} 超过车机实验入口的 1 MiB 限制，请先保存到手机",
+                    ),
                     "TOO_LARGE_FOR_CAR",
                 )
             }
@@ -289,13 +296,13 @@ class SoundEditorController(
                 fileName = offer.fileName,
                 sizeBytes = offer.sizeBytes,
                 durationMs = durationOf(converted),
-                target = "发送到车机",
+                target = text("Send to car", "发送到车机"),
                 savedFile = null,
                 verified = true,
                 message = if (cars > 0) {
-                    "已广播给 $cars 台车机（实验入口）"
+                    text("Sent to $cars connected vehicle(s) (experimental)", "已广播给 $cars 台车机（实验入口）")
                 } else {
-                    "已加入待发送列表，但当前没有已连接车机（实验入口）"
+                    text("Queued, but no vehicle is connected (experimental)", "已加入待发送列表，但当前没有已连接车机（实验入口）")
                 },
             )
         }
@@ -310,7 +317,7 @@ class SoundEditorController(
         } else if (phase == SoundPhase.Exporting || phase == SoundPhase.Verifying) {
             phase = if (imported != null) SoundPhase.Ready else SoundPhase.Idle
         }
-        statusText = "已取消"
+        statusText = text("Cancelled", "已取消")
     }
 
     fun release() {
@@ -329,18 +336,18 @@ class SoundEditorController(
     ) {
         val imp = imported
         if (imp == null) {
-            statusText = "尚未导入音频"
+            statusText = text("Import audio first", "尚未导入音频")
             return
         }
         if (edit.startFrame >= edit.endFrame || edit.endFrame > imp.meta.frameCount) {
-            statusText = "选区为空或超出范围，请调整开始/结束位置"
+            statusText = text("The selection is empty or out of range.", "选区为空或超出范围，请调整开始/结束位置")
             phase = SoundPhase.Ready
             return
         }
         stopPlayback()
         cancellation = SoundCancellation()
         phase = SoundPhase.Exporting
-        statusText = "正在转换…"
+        statusText = text("Converting…", "正在转换…")
         progressText = ""
         exportResult = null
         job = scope.launch {
@@ -348,20 +355,23 @@ class SoundEditorController(
                 ensureCacheSpace(32L * 1024 * 1024)
                 val converted = withContext(Dispatchers.IO) { convertToTemp(imp) }
                 phase = SoundPhase.Verifying
-                statusText = "正在校验…"
+                statusText = text("Verifying…", "正在校验…")
                 val result = saver(converted, fileName)
                 exportResult = result
                 phase = SoundPhase.Done
                 statusText = if (result.message.isNotBlank()) {
                     result.message
                 } else {
-                    "已完成：${result.fileName}（${formatBytes(result.sizeBytes)}，${formatDuration(result.durationMs)}）"
+                    text(
+                        "Completed: ${result.fileName} (${formatBytes(result.sizeBytes)}, ${formatDuration(result.durationMs)})",
+                        "已完成：${result.fileName}（${formatBytes(result.sizeBytes)}，${formatDuration(result.durationMs)}）",
+                    )
                 }
                 progressText = ""
                 runCatching { converted.delete() }
             } catch (t: SoundCancelledException) {
                 phase = if (imported != null) SoundPhase.Ready else SoundPhase.Idle
-                statusText = "转换已取消"
+                statusText = text("Conversion cancelled", "转换已取消")
                 progressText = ""
             } catch (t: Throwable) {
                 phase = SoundPhase.Error
@@ -390,9 +400,9 @@ class SoundEditorController(
                 cancel = { cancellation.cancelled },
                 progress = { done, total ->
                     progressText = if (total > 0) {
-                        "正在转换 ${done * 100 / total}%…"
+                        text("Converting ${done * 100 / total}%…", "正在转换 ${done * 100 / total}%…")
                     } else {
-                        "正在转换…"
+                        text("Converting…", "正在转换…")
                     }
                 },
                 out = out,
@@ -428,6 +438,8 @@ class SoundEditorController(
         }
         return SoundErrors.userMessage(code, t.message ?: t.javaClass.simpleName)
     }
+
+    private fun text(en: String, zh: String) = PhoneLanguage.text(en, zh)
 
     companion object {
         fun formatDuration(ms: Long): String {

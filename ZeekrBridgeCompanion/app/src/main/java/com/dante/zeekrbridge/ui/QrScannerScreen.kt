@@ -134,7 +134,7 @@ fun QrScannerScreen(
                     Text(t("Cancel", "取消"), color = Color.White)
                 }
                 Button(onClick = onCancel) {
-                    Text("手动输入配对码")
+                    Text(t("Enter pairing code manually", "手动输入配对码"))
                 }
             }
         }

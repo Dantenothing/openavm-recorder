@@ -118,10 +118,10 @@ fun SoundEditorScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("声音制作器（实验性）") },
+                title = { Text(t("Sound maker", "声音制作器")) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回工具箱")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("Back to Toolbox", "返回工具箱"))
                     }
                 },
             )
@@ -153,7 +153,7 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                 SoundPhase.Idle -> {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp)) {
-                            Text("选择音频文件", style = MaterialTheme.typography.titleMedium)
+                            Text(t("Choose an audio file", "选择音频文件"), style = MaterialTheme.typography.titleMedium)
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 "支持的常见格式：MP3、M4A/AAC、WAV、FLAC、OGG。若设备缺少某格式解码器，会明确提示原因。",
@@ -176,7 +176,7 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                                         "audio/*",
                                     ),
                                 )
-                            }) { Text("导入音频…") }
+                            }) { Text(t("Import audio…", "导入音频…")) }
                         }
                     }
                 }
@@ -195,7 +195,7 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                                 Text(controller.progressText, style = MaterialTheme.typography.bodySmall)
                             }
                             Spacer(Modifier.height(8.dp))
-                            OutlinedButton(onClick = { controller.cancelCurrent() }) { Text("取消导入") }
+                            OutlinedButton(onClick = { controller.cancelCurrent() }) { Text(t("Cancel import", "取消导入")) }
                         }
                     }
                 }
@@ -228,7 +228,7 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                                 Text(controller.progressText, style = MaterialTheme.typography.bodySmall)
                             }
                             Spacer(Modifier.height(8.dp))
-                            OutlinedButton(onClick = { controller.cancelCurrent() }) { Text("取消转换") }
+                            OutlinedButton(onClick = { controller.cancelCurrent() }) { Text(t("Cancel conversion", "取消转换")) }
                         }
                     }
                 }
@@ -238,10 +238,10 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                     if (result != null) {
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(14.dp)) {
-                                Text("已完成", style = MaterialTheme.typography.titleMedium)
+                                Text(t("Completed", "已完成"), style = MaterialTheme.typography.titleMedium)
                                 Spacer(Modifier.height(4.dp))
-                                Text("目标：${result.target}", style = MaterialTheme.typography.bodyMedium)
-                                Text("文件名：${result.fileName}", style = MaterialTheme.typography.bodyMedium)
+                                Text(t("Destination: ${result.target}", "目标：${result.target}"), style = MaterialTheme.typography.bodyMedium)
+                                Text(t("File: ${result.fileName}", "文件名：${result.fileName}"), style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     "大小：${SoundEditorController.formatBytes(result.sizeBytes)} | " +
                                         "时长：${SoundEditorController.formatDuration(result.durationMs)}",
@@ -270,8 +270,8 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                                 }
                                 Spacer(Modifier.height(8.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = { controller.resetEdit() }) { Text("继续编辑") }
-                                    OutlinedButton(onClick = onBack) { Text("返回工具箱") }
+                                    OutlinedButton(onClick = { controller.resetEdit() }) { Text(t("Continue editing", "继续编辑")) }
+                                    OutlinedButton(onClick = onBack) { Text(t("Back to Toolbox", "返回工具箱")) }
                                 }
                             }
                         }
@@ -291,9 +291,9 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                             Spacer(Modifier.height(8.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { controller.release(); fileName = "sound.wav" }) {
-                                    Text("重新选择")
+                                    Text(t("Choose another file", "重新选择"))
                                 }
-                                OutlinedButton(onClick = onBack) { Text("返回工具箱") }
+                                OutlinedButton(onClick = onBack) { Text(t("Back to Toolbox", "返回工具箱")) }
                             }
                         }
                     }
@@ -315,11 +315,11 @@ fun SoundEditorScreen(onBack: () -> Unit) {
         val estBytes = outFrames * edit.outputChannels * 2L
         AlertDialog(
             onDismissRequest = { pendingUsbUri = null },
-            title = { Text("写入 USB？") },
+            title = { Text(t("Write to USB?", "写入 USB？")) },
             text = {
                 Column {
-                    Text("目标：${usbUri.toString().take(120)}", style = MaterialTheme.typography.bodySmall)
-                    Text("文件名：${SoundFileNames.wavFileName(fileName)}", style = MaterialTheme.typography.bodySmall)
+                    Text(t("Destination: ${usbUri.toString().take(120)}", "目标：${usbUri.toString().take(120)}"), style = MaterialTheme.typography.bodySmall)
+                    Text(t("File: ${SoundFileNames.wavFileName(fileName)}", "文件名：${SoundFileNames.wavFileName(fileName)}"), style = MaterialTheme.typography.bodySmall)
                     Text(
                         "预计大小：${SoundEditorController.formatBytes(estBytes)}",
                         style = MaterialTheme.typography.bodySmall,
@@ -346,10 +346,10 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                 Button(onClick = {
                     pendingUsbUri = null
                     controller.exportToUsb(usbUri, fileName)
-                }) { Text("写入 USB") }
+                }) { Text(t("Write to USB", "写入 USB")) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingUsbUri = null }) { Text("取消") }
+                TextButton(onClick = { pendingUsbUri = null }) { Text(t("Cancel", "取消")) }
             },
         )
     }
@@ -400,7 +400,7 @@ private fun EditorSection(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("波形缩放", style = MaterialTheme.typography.bodySmall)
+                Text(t("Waveform zoom", "波形缩放"), style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.width(8.dp))
                 Slider(
                     value = zoomLevel,
@@ -432,13 +432,13 @@ private fun EditorSection(
                 Button(onClick = { controller.togglePlayback() }) {
                     Text(if (controller.playing) "暂停" else "播放选区")
                 }
-                OutlinedButton(onClick = { controller.stopPlayback() }) { Text("停止") }
+                OutlinedButton(onClick = { controller.stopPlayback() }) { Text(t("Stop", "停止")) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(
                         checked = edit.loopPreview,
                         onCheckedChange = { controller.updateEdit(edit.copy(loopPreview = it)) },
                     )
-                    Text("循环试听", style = MaterialTheme.typography.bodySmall)
+                    Text(t("Loop preview", "循环试听"), style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (controller.playing) {
@@ -455,9 +455,9 @@ private fun EditorSection(
     Spacer(Modifier.height(10.dp))
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
-            Text("调整", style = MaterialTheme.typography.titleMedium)
+            Text(t("Adjust", "调整"), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
-            Text("音量 ${edit.volumePercent}%", style = MaterialTheme.typography.bodySmall)
+            Text(t("Volume ${edit.volumePercent}%", "音量 ${edit.volumePercent}%"), style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = edit.volumePercent.toFloat(),
                 onValueChange = { controller.updateEdit(edit.copy(volumePercent = it.toInt())) },
@@ -468,21 +468,21 @@ private fun EditorSection(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("峰值标准化", modifier = Modifier.weight(1f))
+                Text(t("Peak normalization", "峰值标准化"), modifier = Modifier.weight(1f))
                 Switch(
                     checked = edit.normalize,
                     onCheckedChange = { controller.updateEdit(edit.copy(normalize = it)) },
                 )
             }
             Spacer(Modifier.height(4.dp))
-            Text("淡入 ${edit.fadeInMs / 1000L}.${(edit.fadeInMs % 1000L) / 100L} 秒", style = MaterialTheme.typography.bodySmall)
+            Text(t("Fade in ${edit.fadeInMs / 1000L}.${(edit.fadeInMs % 1000L) / 100L} s", "淡入 ${edit.fadeInMs / 1000L}.${(edit.fadeInMs % 1000L) / 100L} 秒"), style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = edit.fadeInMs.toFloat(),
                 onValueChange = { controller.updateEdit(edit.copy(fadeInMs = it.toLong())) },
                 valueRange = 0f..10000f,
                 steps = 99,
             )
-            Text("淡出 ${edit.fadeOutMs / 1000L}.${(edit.fadeOutMs % 1000L) / 100L} 秒", style = MaterialTheme.typography.bodySmall)
+            Text(t("Fade out ${edit.fadeOutMs / 1000L}.${(edit.fadeOutMs % 1000L) / 100L} s", "淡出 ${edit.fadeOutMs / 1000L}.${(edit.fadeOutMs % 1000L) / 100L} 秒"), style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = edit.fadeOutMs.toFloat(),
                 onValueChange = { controller.updateEdit(edit.copy(fadeOutMs = it.toLong())) },
@@ -490,7 +490,7 @@ private fun EditorSection(
                 steps = 99,
             )
             Spacer(Modifier.height(4.dp))
-            Text("输出声道", style = MaterialTheme.typography.bodySmall)
+            Text(t("Output channels", "输出声道"), style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { controller.updateEdit(edit.copy(outputChannels = 2)) },
@@ -501,7 +501,7 @@ private fun EditorSection(
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { controller.resetEdit() }) { Text("恢复默认设置") }
+                OutlinedButton(onClick = { controller.resetEdit() }) { Text(t("Reset", "恢复默认设置")) }
             }
         }
     }
@@ -509,12 +509,12 @@ private fun EditorSection(
     Spacer(Modifier.height(10.dp))
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
-            Text("导出 44.1 kHz / 16-bit PCM WAV", style = MaterialTheme.typography.titleMedium)
+            Text(t("Export 44.1 kHz / 16-bit PCM WAV", "导出 44.1 kHz / 16-bit PCM WAV"), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             OutlinedTextField(
                 value = fileName,
                 onValueChange = onFileNameChange,
-                label = { Text("文件名（自动补充 .wav）") },
+                label = { Text(t("File name (.wav is added automatically)", "文件名（自动补充 .wav）")) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -522,22 +522,22 @@ private fun EditorSection(
             Button(
                 onClick = { controller.exportToPhone(fileName) },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("保存到手机") }
+            ) { Text(t("Save to phone", "保存到手机")) }
             Spacer(Modifier.height(4.dp))
             OutlinedButton(
                 onClick = onCreateDocument,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("另存为…（系统文档选择器）") }
+            ) { Text(t("Save as…", "另存为…（系统文档选择器）")) }
             Spacer(Modifier.height(4.dp))
             OutlinedButton(
                 onClick = onPickUsb,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("写入 USB（SAF 授权）") }
+            ) { Text(t("Write to USB", "写入 USB（SAF 授权）")) }
             Spacer(Modifier.height(4.dp))
             OutlinedButton(
                 onClick = { controller.sendToCar(fileName) },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("发送到车机（实验性次要入口，≤1 MiB）") }
+            ) { Text(t("Send to car (experimental, ≤1 MiB)", "发送到车机（实验性次要入口，≤1 MiB）")) }
             Spacer(Modifier.height(6.dp))
             Text(
                 "USB 写入规则：先列出目标目录，同名文件先备份，再写临时文件并校验，校验通过后才替换；" +

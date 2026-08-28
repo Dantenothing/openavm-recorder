@@ -53,33 +53,9 @@ object ReceivedStore {
     }
 
     fun moveToTrash(files: Collection<File>): Int {
-        val trash = File(appContext.filesDir, "trash").apply { mkdirs() }
-        var movedVideos = 0
-        files.distinctBy { it.absoluteFile.normalize().path }.forEach { file ->
-            if (!file.isFile) return@forEach
-            if (file.renameTo(uniqueTrashTarget(trash, file.name))) {
-                movedVideos++
-                ReceivedFiles.relatedMetadataFiles(file).forEach { source ->
-                    if (source.isFile) source.renameTo(uniqueTrashTarget(trash, source.name))
-                }
-            }
-        }
+        val movedVideos = TrashStore.moveToTrash(files)
         refresh()
         return movedVideos
-    }
-
-    private fun uniqueTrashTarget(trash: File, name: String): File {
-        val direct = File(trash, name)
-        if (!direct.exists()) return direct
-        val stem = name.substringBeforeLast('.', name)
-        val extension = name.substringAfterLast('.', "").takeIf { it != name }
-        var suffix = 2
-        while (true) {
-            val candidateName = if (extension == null) "$stem ($suffix)" else "$stem ($suffix).$extension"
-            val candidate = File(trash, candidateName)
-            if (!candidate.exists()) return candidate
-            suffix++
-        }
     }
 
     fun sha256(file: File): String = StreamingSha256.hashOrUnavailable(file)

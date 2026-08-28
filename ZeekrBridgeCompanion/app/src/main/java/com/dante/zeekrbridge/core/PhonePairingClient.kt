@@ -2,6 +2,7 @@ package com.dante.zeekrbridge.core
 
 import android.content.Context
 import com.dante.zeekrbridge.service.BridgeService
+import com.dante.zeekrbridge.ui.PhoneLanguage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -35,7 +36,7 @@ object PhonePairingClient {
     ): PairingResult = withContext(Dispatchers.IO) {
         val phoneIp = findIpv4()
         if (phoneIp.isBlank()) {
-            return@withContext PairingResult(false, "未检测到局域网地址，请先开启手机热点")
+            return@withContext PairingResult(false, text("No local network address was found. Turn on the phone hotspot first.", "未检测到局域网地址，请先开启手机热点"))
         }
         val phoneDeviceId = PairingManager.phoneDeviceId.value
         val phoneName = PairingManager.phoneName.value.ifBlank { android.os.Build.MODEL }
@@ -55,19 +56,19 @@ object PhonePairingClient {
         val begin = try {
             postJson(beginUrl, beginBody, timeoutMs)
         } catch (t: Throwable) {
-            return@withContext PairingResult(false, "无法连接车机：${t.message ?: t.javaClass.simpleName}")
+            return@withContext PairingResult(false, text("Cannot connect to the car: ${t.message ?: t.javaClass.simpleName}", "无法连接车机：${t.message ?: t.javaClass.simpleName}"))
         }
         val beginCode = begin.first
         val beginBodyText = begin.second
         if (beginCode != 200) {
-            return@withContext PairingResult(false, "车机拒绝配对（${beginCode}）")
+            return@withContext PairingResult(false, text("The car rejected pairing ($beginCode)", "车机拒绝配对（$beginCode）"))
         }
-        val beginObj = parse(beginBodyText) ?: return@withContext PairingResult(false, "车机响应无效")
-        val carDeviceId = beginObj["carDeviceId"]?.jsonPrimitive?.content ?: return@withContext PairingResult(false, "车机响应缺少 ID")
-        val exchangeToken = beginObj["exchangeToken"]?.jsonPrimitive?.content ?: return@withContext PairingResult(false, "车机响应缺少交换令牌")
+        val beginObj = parse(beginBodyText) ?: return@withContext PairingResult(false, text("Invalid response from the car.", "车机响应无效"))
+        val carDeviceId = beginObj["carDeviceId"]?.jsonPrimitive?.content ?: return@withContext PairingResult(false, text("The car response has no device ID.", "车机响应缺少 ID"))
+        val exchangeToken = beginObj["exchangeToken"]?.jsonPrimitive?.content ?: return@withContext PairingResult(false, text("The car response has no exchange token.", "车机响应缺少交换令牌"))
 
-        val longTermToken = PairingManager.registerCar(carDeviceId, "Zeekr 车机")
-            ?: return@withContext PairingResult(false, "本地保存配对失败")
+        val longTermToken = PairingManager.registerCar(carDeviceId, text("Zeekr vehicle", "Zeekr 车机"))
+            ?: return@withContext PairingResult(false, text("Could not save pairing on this phone.", "本地保存配对失败"))
 
         val finalizeUrl = "http://${payload.host}:${payload.port}/api/pair/finalize"
         val finalizeBody = json.encodeToString(
@@ -86,17 +87,17 @@ object PhonePairingClient {
         val finalize = try {
             postJson(finalizeUrl, finalizeBody, timeoutMs)
         } catch (t: Throwable) {
-            return@withContext PairingResult(false, "确认配对失败：${t.message ?: t.javaClass.simpleName}")
+            return@withContext PairingResult(false, text("Pairing confirmation failed: ${t.message ?: t.javaClass.simpleName}", "确认配对失败：${t.message ?: t.javaClass.simpleName}"))
         }
         if (finalize.first != 200) {
-            return@withContext PairingResult(false, "车机确认失败（${finalize.first}）")
+            return@withContext PairingResult(false, text("The car could not confirm pairing (${finalize.first})", "车机确认失败（${finalize.first}）"))
         }
         // Start the phone bridge server so the car can connect outbound.
         val prefs = context.getSharedPreferences("phone_product_settings", Context.MODE_PRIVATE)
         if (prefs.getBoolean("auto_start_server", true)) {
             BridgeService.start(context)
         }
-        return@withContext PairingResult(true, "配对成功：$carDeviceId", carDeviceId)
+        return@withContext PairingResult(true, text("Paired: $carDeviceId", "配对成功：$carDeviceId"), carDeviceId)
     }
 
     private fun postJson(url: String, body: String, timeoutMs: Int): Pair<Int, String> {
@@ -133,4 +134,6 @@ object PhonePairingClient {
     } catch (t: Throwable) {
         ""
     }
+
+    private fun text(en: String, zh: String) = PhoneLanguage.text(en, zh)
 }

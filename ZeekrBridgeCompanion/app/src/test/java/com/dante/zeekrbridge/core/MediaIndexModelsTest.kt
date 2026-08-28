@@ -156,6 +156,36 @@ class MediaIndexModelsTest {
         assertEquals(IndexedLayoutKind.UNKNOWN, segment.layoutKind)
     }
 
+    @Test
+    fun schemaSixTimeLapseMetadataBuildsOneMeasuredSession() {
+        val first = temp.newFile("tl-1.mp4")
+        File(temp.root, "tl-1.json").writeText(timeLapseSidecar(1, 1_000L, 301_000L, 5_000L, 59.7))
+        val second = temp.newFile("tl-2.mp4")
+        File(temp.root, "tl-2.json").writeText(timeLapseSidecar(2, 301_000L, 601_000L, 5_100L, 58.8))
+
+        val session = MediaIndexScanner.scan(listOf(first, second)).sessions.single()
+
+        assertEquals(IndexedRecordingMode.TIME_LAPSE, session.recordingMode)
+        assertEquals(60, session.timeLapseMultiplier)
+        assertEquals(10_100L, session.durationMs)
+        assertEquals(600_000L, session.realDurationMs)
+        assertEquals(59.405, session.measuredMultiplier!!, 0.01)
+        assertTrue(session.segments.all { it.timeLapseAccuracy == IndexedTimeLapseAccuracy.PASS })
+    }
+
+    @Test
+    fun schemaFiveAndMissingTimeLapseFieldsRemainNormal() {
+        val video = temp.newFile("normal.mp4")
+        File(temp.root, "normal.json").writeText(sidecar("SURROUND", "2", "normal-session"))
+
+        val segment = MediaIndexScanner.scan(listOf(video)).segments.single()
+
+        assertEquals(IndexedRecordingMode.NORMAL, segment.recordingMode)
+        assertEquals(1, segment.timeLapseMultiplier)
+        assertEquals(null, segment.realDurationMs)
+        assertEquals(null, segment.measuredMultiplier)
+    }
+
     private fun segment(
         id: String,
         start: Long,
@@ -197,6 +227,32 @@ class MediaIndexModelsTest {
           "stoppedAtEpochMs": 61000,
           "actualTrack": { "width": 3840, "height": 2160, "durationMs": 60000 },
           "profile": { "size": { "width": 3840, "height": 2160 }, "bitrateBps": 14000000 }
+        }
+    """.trimIndent()
+
+    private fun timeLapseSidecar(
+        segmentNumber: Int,
+        startedAt: Long,
+        stoppedAt: Long,
+        encodedDurationMs: Long,
+        measuredMultiplier: Double,
+    ): String = """
+        {
+          "schemaVersion": 6,
+          "cameraId": "2",
+          "sourceRole": "SURROUND",
+          "layoutKind": "FOUR_LANE_V1",
+          "recordingSessionId": "time-lapse-session",
+          "recordingMode": "TIME_LAPSE",
+          "timeLapseMultiplier": 60,
+          "requestedCaptureRateFps": 0.5,
+          "segmentNumber": $segmentNumber,
+          "startedAtEpochMs": $startedAt,
+          "stoppedAtEpochMs": $stoppedAt,
+          "realDurationMs": 300000,
+          "measuredMultiplier": $measuredMultiplier,
+          "timeLapseAccuracy": "PASS",
+          "actualTrack": { "width": 1280, "height": 5140, "durationMs": $encodedDurationMs }
         }
     """.trimIndent()
 }

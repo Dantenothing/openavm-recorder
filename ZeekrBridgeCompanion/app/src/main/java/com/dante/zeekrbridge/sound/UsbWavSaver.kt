@@ -2,6 +2,7 @@ package com.dante.zeekrbridge.sound
 
 import android.content.Context
 import android.net.Uri
+import com.dante.zeekrbridge.ui.PhoneLanguage
 import android.provider.DocumentsContract
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -345,7 +346,10 @@ object UsbWavSaver {
                 ok = true,
                 finalName = plan.finalName,
                 backupName = plan.backupName,
-                message = "已安全写入 USB：${plan.finalName}${if (plan.conflict) "（原文件已备份）" else ""}",
+                message = PhoneLanguage.text(
+                    "Safely written to USB: ${plan.finalName}${if (plan.conflict) " (original backed up)" else ""}",
+                    "已安全写入 USB：${plan.finalName}${if (plan.conflict) "（原文件已备份）" else ""}",
+                ),
             )
         } catch (t: Throwable) {
             cleanup(restore = true)

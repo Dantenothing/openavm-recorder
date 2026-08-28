@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.dante.zeekrbridge.core.IndexedMediaSegment
+import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.core.MediaExportJob
 import com.dante.zeekrbridge.core.MediaExportPlanner
@@ -56,6 +57,11 @@ internal fun MediaExportDialog(
     var trimRange by remember(segments) { mutableStateOf(0f..totalSeconds) }
     var error by remember { mutableStateOf<String?>(null) }
     val gapSummary = remember(segments) { MediaExportPlanner.gapSummary(segments) }
+    val first = segments.firstOrNull()
+    val isTimeLapse = first?.recordingMode == IndexedRecordingMode.TIME_LAPSE
+    val realDurationMs = segments.sumOf { segment ->
+        segment.realDurationMs ?: segment.durationMs * segment.timeLapseMultiplier.coerceAtLeast(1)
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -72,6 +78,16 @@ internal fun MediaExportDialog(
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (isTimeLapse) {
+                    Text(
+                        t(
+                            "Time-lapse ${first?.timeLapseMultiplier ?: 1}× · captured ${formatExportDuration(realDurationMs)}. The range below uses finished-video time.",
+                            "延时摄影 ${first?.timeLapseMultiplier ?: 1}× · 现实拍摄 ${formatExportDuration(realDurationMs)}。下方裁切范围使用成片时间。",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 if (gapSummary.first > 0) {
                     Text(
                         t(
@@ -108,7 +124,10 @@ internal fun MediaExportDialog(
                         }
                     }
                 }
-                Text(t("Time range", "时间范围"), fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (isTimeLapse) t("Finished-video range", "成片时间范围") else t("Time range", "时间范围"),
+                    fontWeight = FontWeight.SemiBold,
+                )
                 RangeSlider(
                     value = trimRange,
                     onValueChange = { trimRange = it },

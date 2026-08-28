@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -13,6 +14,16 @@ import kotlinx.serialization.json.longOrNull
 enum class IndexedSourceRole { SURROUND, CABIN, IR, UNKNOWN }
 
 enum class IndexedLayoutKind { FOUR_LANE_V1, SINGLE_V1, UNKNOWN }
+
+enum class IndexedRecordingMode { NORMAL, TIME_LAPSE }
+
+enum class IndexedTimeLapseAccuracy {
+    PASS,
+    DEGRADED,
+    INCORRECT,
+    INSUFFICIENT_SAMPLE,
+    UNAVAILABLE,
+}
 
 data class IndexedLane(
     val label: String,
@@ -45,6 +56,12 @@ data class IndexedMediaSegment(
     val lanes: List<IndexedLane>,
     val originalWidth: Int?,
     val originalHeight: Int?,
+    val recordingMode: IndexedRecordingMode = IndexedRecordingMode.NORMAL,
+    val timeLapseMultiplier: Int = 1,
+    val requestedCaptureRateFps: Double? = null,
+    val realDurationMs: Long? = null,
+    val measuredMultiplier: Double? = null,
+    val timeLapseAccuracy: IndexedTimeLapseAccuracy? = null,
 ) {
     val file: File get() = File(filePath)
     val playbackLabels: List<String>
@@ -77,6 +94,20 @@ data class IndexedRecordingSession(
     val sizeBytes: Long = segments.sumOf { it.sizeBytes }
     val sourceRole: IndexedSourceRole = segments.firstOrNull()?.sourceRole ?: IndexedSourceRole.UNKNOWN
     val layoutKind: IndexedLayoutKind = segments.firstOrNull()?.layoutKind ?: IndexedLayoutKind.UNKNOWN
+    val recordingMode: IndexedRecordingMode = segments.firstOrNull()?.recordingMode ?: IndexedRecordingMode.NORMAL
+    val timeLapseMultiplier: Int = segments.firstOrNull()?.timeLapseMultiplier?.coerceAtLeast(1) ?: 1
+    val realDurationMs: Long = segments.sumOf { segment ->
+        segment.realDurationMs ?: if (segment.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+            segment.durationMs * segment.timeLapseMultiplier.coerceAtLeast(1)
+        } else {
+            segment.durationMs
+        }
+    }
+    val measuredMultiplier: Double? = if (recordingMode == IndexedRecordingMode.TIME_LAPSE && durationMs > 0L) {
+        realDurationMs.toDouble() / durationMs
+    } else {
+        null
+    }
     val hasIncident: Boolean = segments.any { it.protected || !it.eventId.isNullOrBlank() }
     val cover: IndexedMediaSegment get() = segments.first()
 }
@@ -128,6 +159,15 @@ object MediaIndexScanner {
             ?: durationBetween(startedAt, obj.long("stoppedAtEpochMs"))
         val profileSize = obj.obj("profile")?.obj("size")
         val laneLayout = obj.obj("laneLayout")
+        val recordingMode = when (obj.string("recordingMode")?.uppercase()) {
+            "TIME_LAPSE" -> IndexedRecordingMode.TIME_LAPSE
+            else -> IndexedRecordingMode.NORMAL
+        }
+        val multiplier = if (recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+            obj.long("timeLapseMultiplier")?.toInt()?.takeIf { it >= 2 } ?: 1
+        } else {
+            1
+        }
         return IndexedMediaSegment(
             id = file.absoluteFile.path,
             filePath = file.absolutePath,
@@ -150,6 +190,14 @@ object MediaIndexScanner {
                 ?: profileSize?.long("width")?.toInt(),
             originalHeight = laneLayout?.long("originalHeight")?.toInt()
                 ?: profileSize?.long("height")?.toInt(),
+            recordingMode = recordingMode,
+            timeLapseMultiplier = multiplier,
+            requestedCaptureRateFps = obj.double("requestedCaptureRateFps"),
+            realDurationMs = obj.long("realDurationMs"),
+            measuredMultiplier = obj.double("measuredMultiplier"),
+            timeLapseAccuracy = runCatching {
+                obj.string("timeLapseAccuracy")?.uppercase()?.let(IndexedTimeLapseAccuracy::valueOf)
+            }.getOrNull(),
         )
     }
 
@@ -226,6 +274,7 @@ object MediaIndexScanner {
         this?.get(key)?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun JsonObject?.long(key: String): Long? = this?.get(key)?.jsonPrimitive?.longOrNull
+    private fun JsonObject?.double(key: String): Double? = this?.get(key)?.jsonPrimitive?.doubleOrNull
     private fun JsonObject?.bool(key: String): Boolean? = this?.get(key)?.jsonPrimitive?.booleanOrNull
     private fun JsonObject?.obj(key: String): JsonObject? = runCatching { this?.get(key)?.jsonObject }.getOrNull()
 }

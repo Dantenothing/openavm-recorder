@@ -31,64 +31,31 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dante.zeekrbridge.BuildConfig
-import com.dante.zeekrbridge.core.CarCatalogStore
+import com.dante.zeekrbridge.core.LocalMediaMaintenance
 import com.dante.zeekrbridge.core.PairingManager
 import com.dante.zeekrbridge.core.ReceivedStore
+import com.dante.zeekrbridge.core.TrashStore
 import com.dante.zeekrbridge.core.VehicleIdentityPolicy
-import com.dante.zeekrbridge.core.WsType
-import com.dante.zeekrbridge.server.BridgeServer
-import java.io.File
 
 @Composable
 fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
     val context = LocalContext.current
     val devices by PairingManager.devices.collectAsState()
     val received by ReceivedStore.files.collectAsState()
+    val trashEntries by TrashStore.entries.collectAsState()
     val receivedVideos = received.filter { it.extension.equals("mp4", ignoreCase = true) }
-    val online by CarCatalogStore.online.collectAsState()
     val prefs = remember { context.getSharedPreferences("phone_product_settings", Context.MODE_PRIVATE) }
 
-    var autoSync by remember { mutableStateOf(prefs.getBoolean("auto_sync_protected", true)) }
-    var deleteAfterDownload by remember { mutableStateOf(prefs.getBoolean("delete_car_copy", false)) }
-    var autoCleanupLocal by remember { mutableStateOf(prefs.getBoolean("auto_cleanup_local", true)) }
-    var retention by remember { mutableStateOf(prefs.getInt("car_retention_minutes", 30)) }
-    var segment by remember { mutableStateOf(prefs.getInt("car_segment_seconds", 60)) }
-    var storage by remember { mutableStateOf(prefs.getLong("car_storage_limit", 4L * 1024L * 1024L * 1024L)) }
-    var safety by remember { mutableStateOf(prefs.getLong("car_min_free", 256L * 1024L * 1024L)) }
-    var statusText by remember { mutableStateOf("") }
+    var autoCleanupLocal by remember { mutableStateOf(prefs.getBoolean("auto_cleanup_local", false)) }
     var revokeCar by remember { mutableStateOf<String?>(null) }
     var clearTrashConfirm by remember { mutableStateOf(false) }
+    var showTrash by remember { mutableStateOf(false) }
     var versionTaps by remember { mutableStateOf(0) }
     var lastTapAt by remember { mutableStateOf(0L) }
 
-    fun save() {
-        prefs.edit()
-            .putBoolean("auto_sync_protected", autoSync)
-            .putBoolean("delete_car_copy", deleteAfterDownload)
-            .putBoolean("auto_cleanup_local", autoCleanupLocal)
-            .putInt("car_retention_minutes", retention)
-            .putInt("car_segment_seconds", segment)
-            .putLong("car_storage_limit", storage)
-            .putLong("car_min_free", safety)
-            .apply()
-    }
-
-    fun sendCarConfig() {
-        if (!online) {
-            statusText = t("Car offline. Settings will apply when it comes online.", "车机离线，参数将在车机在线时生效")
-            return
-        }
-        BridgeServer.sendToCars(
-            WsType.SET_RECORDER_CONFIG,
-            mapOf(
-                "retentionMinutes" to retention.toString(),
-                "segmentSeconds" to segment.toString(),
-                "storageLimitBytes" to storage.toString(),
-                "minFreeBytes" to safety.toString(),
-                "autoCleanup" to autoCleanupLocal.toString(),
-            ),
-        )
-        statusText = t("Recording settings sent to car", "已发送录像参数到车机")
+    if (showTrash) {
+        TrashScreen(onBack = { showTrash = false })
+        return
     }
 
     Column(
@@ -144,7 +111,10 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text(VehicleIdentityPolicy.displayName(device.name))
                             Text(
-                                "配对于 ${java.util.Date(device.pairedAt)}",
+                                t(
+                                    "Paired ${java.text.DateFormat.getDateInstance().format(java.util.Date(device.pairedAt))}",
+                                    "配对于 ${java.text.DateFormat.getDateInstance().format(java.util.Date(device.pairedAt))}",
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -160,22 +130,17 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
         Spacer(Modifier.height(10.dp))
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
-                Text(t("Transfer and sync", "传输与同步"), style = MaterialTheme.typography.titleMedium)
-                ToggleRow(t("Auto-sync protected events", "自动同步保护事件"), autoSync) {
-                    autoSync = it
-                    save()
-                    if (it && online) BridgeServer.sendToCars(WsType.SYNC_PROTECTED, emptyMap())
-                }
-                ToggleRow(t("Delete car copy after download", "下载后删除车机副本"), deleteAfterDownload) {
-                    deleteAfterDownload = it
-                    save()
-                }
+                Text(t("Local media maintenance", "本机媒体维护"), style = MaterialTheme.typography.titleMedium)
                 ToggleRow(t("Auto-clean local files after 30 days", "自动清理本地旧文件（30 天）"), autoCleanupLocal) {
                     autoCleanupLocal = it
-                    save()
+                    prefs.edit().putBoolean("auto_cleanup_local", it).apply()
+                    if (it) LocalMediaMaintenance.schedule(context)
                 }
                 Text(
-                    "保护事件与传输中的文件不会被自动清理；下载后删除车机副本仅作用于未保护文件。",
+                    t(
+                        "Disabled by default. When enabled, unprotected recordings older than 30 days move to Trash; protected events and active transfers are never touched.",
+                        "默认关闭。开启后，超过 30 天的未保护录像会移入回收站；保护事件和传输中的文件不会受影响。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -195,12 +160,20 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                OutlinedButton(onClick = { clearTrashConfirm = true }) {
-                    Text(t("Empty trash", "清空回收站"))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { showTrash = true }) {
+                        Text(t("View trash (${trashEntries.size})", "查看回收站（${trashEntries.size}）"))
+                    }
+                    OutlinedButton(onClick = { clearTrashConfirm = true }, enabled = trashEntries.isNotEmpty()) {
+                        Text(t("Empty trash", "清空回收站"))
+                    }
                 }
                 if (autoCleanupLocal) {
                     Text(
-                        "将在下次启动时清理 30 天前的未保护文件。",
+                        t(
+                            "Cleanup runs at most once per day when OpenAVM Companion starts.",
+                            "OpenAVM Companion 启动时最多每天执行一次清理。",
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -211,74 +184,20 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
         Spacer(Modifier.height(10.dp))
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
-                Text(t("Car recording settings", "车机录像参数"), style = MaterialTheme.typography.titleMedium)
-                OptionRowPhoneInt(
-                    label = "循环保留",
-                    options = listOf("15 分钟", "30 分钟", "60 分钟"),
-                    values = listOf(15, 30, 60),
-                    selected = retention,
-                    onSelect = {
-                        retention = it
-                        save()
-                    },
-                )
-                OptionRowPhoneInt(
-                    label = "分段长度",
-                    options = listOf("1 分钟", "2 分钟", "3 分钟"),
-                    values = listOf(60, 120, 180),
-                    selected = segment,
-                    onSelect = {
-                        segment = it
-                        save()
-                    },
-                )
-                OptionRowPhoneLong(
-                    label = "最大存储",
-                    options = listOf("2 GB", "4 GB", "8 GB"),
-                    values = listOf(
-                        2L * 1024L * 1024L * 1024L,
-                        4L * 1024L * 1024L * 1024L,
-                        8L * 1024L * 1024L * 1024L,
-                    ),
-                    selected = storage,
-                    onSelect = {
-                        storage = it
-                        save()
-                    },
-                )
-                OptionRowPhoneLong(
-                    label = "安全线",
-                    options = listOf("128 MB", "256 MB", "512 MB"),
-                    values = listOf(
-                        128L * 1024L * 1024L,
-                        256L * 1024L * 1024L,
-                        512L * 1024L * 1024L,
-                    ),
-                    selected = safety,
-                    onSelect = {
-                        safety = it
-                        save()
-                    },
-                )
-                OutlinedButton(onClick = { sendCarConfig() }) { Text(t("Sync to car", "同步到车机")) }
-                if (statusText.isNotBlank()) {
-                    Text(statusText, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp)) {
                 Text(t("Network / security / privacy / help", "网络 / 安全 / 隐私 / 帮助"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "所有配对与文件传输仅在同一热点/局域网内完成，不依赖公网、不消耗蜂窝数据。" +
-                        "车机令牌由车机端 Android Keystore 加密保存，手机端令牌由 Keystore 加密后写入本机私有存储。",
+                    t(
+                        "Pairing and file transfer stay on the same hotspot or trusted local network. Tokens are encrypted with Android Keystore on both devices.",
+                        "所有配对与文件传输仅在同一热点或可信局域网内完成。车机与手机令牌均使用 Android Keystore 加密保存。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "帮助：开启手机热点 → 车机加入热点 → 车机显示二维码 → 本页“车辆”扫码配对 → 自动重连与传输。",
+                    t(
+                        "Help: enable the phone hotspot → connect the car → scan the pairing QR from Vehicle → the paired car can reconnect and transfer files.",
+                        "帮助：开启手机热点 → 车机加入热点 → 在“车辆”页面扫描配对二维码 → 已配对车机即可重连并传输文件。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -325,7 +244,7 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     clearTrashConfirm = false
-                    File(context.filesDir, "trash").deleteRecursively()
+                    TrashStore.empty()
                 }) { Text(t("Empty", "清空")) }
             },
             dismissButton = {
@@ -349,53 +268,6 @@ private fun ToggleRow(
     ) {
         Text(label, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
-    }
-}
-
-@Composable
-private fun OptionRowPhoneInt(
-    label: String,
-    options: List<String>,
-    values: List<Int>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-) {
-    OptionRowPhoneGeneric(label, options, values, selected, onSelect)
-}
-
-@Composable
-private fun OptionRowPhoneLong(
-    label: String,
-    options: List<String>,
-    values: List<Long>,
-    selected: Long,
-    onSelect: (Long) -> Unit,
-) {
-    OptionRowPhoneGeneric(label, options, values, selected, onSelect)
-}
-
-@Composable
-private fun <T> OptionRowPhoneGeneric(
-    label: String,
-    options: List<String>,
-    values: List<T>,
-    selected: T,
-    onSelect: (T) -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, modifier = Modifier.width(110.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            options.forEachIndexed { index, option ->
-                OutlinedButton(onClick = { onSelect(values[index]) }) {
-                    Text(if (values[index] == selected) "$option ✓" else option)
-                }
-            }
-        }
     }
 }
 

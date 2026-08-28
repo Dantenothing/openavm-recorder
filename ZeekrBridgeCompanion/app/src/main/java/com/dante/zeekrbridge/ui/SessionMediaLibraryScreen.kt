@@ -83,6 +83,7 @@ import com.dante.zeekrbridge.core.CarRecording
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedRecordingEvent
+import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.IndexedRecordingSession
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.core.MediaIndexStore
@@ -118,6 +119,9 @@ private data class MediaDetail(
     val durationMs: Long,
     val sizeBytes: Long,
     val sourceRole: IndexedSourceRole,
+    val recordingMode: IndexedRecordingMode,
+    val timeLapseMultiplier: Int,
+    val realDurationMs: Long,
     val segments: List<IndexedMediaSegment>,
 ) {
     val cover: IndexedMediaSegment get() = segments.first()
@@ -147,7 +151,8 @@ fun SessionMediaLibraryScreen() {
     val lastMessage by CarCatalogStore.lastMessage.collectAsState()
 
     var sectionName by rememberSaveable { mutableStateOf(LibrarySection.ALL.name) }
-    val section = LibrarySection.valueOf(sectionName)
+    val requestedSection = runCatching { LibrarySection.valueOf(sectionName) }.getOrDefault(LibrarySection.ALL)
+    val section = if (requestedSection == LibrarySection.ON_VEHICLE) LibrarySection.ALL else requestedSection
     var detail by remember { mutableStateOf<MediaDetail?>(null) }
     var exportDetail by remember { mutableStateOf<MediaDetail?>(null) }
     var playSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
@@ -274,7 +279,7 @@ fun SessionMediaLibraryScreen() {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            LibrarySection.entries.forEach { item ->
+            VISIBLE_LIBRARY_SECTIONS.forEach { item ->
                 FilterChip(
                     selected = section == item,
                     onClick = { sectionName = item.name },
@@ -362,6 +367,9 @@ fun SessionMediaLibraryScreen() {
             segments = request.detail.segments,
             initialIndex = request.initialIndex,
             isEvent = request.detail.isEvent,
+            recordingMode = request.detail.recordingMode,
+            timeLapseMultiplier = request.detail.timeLapseMultiplier,
+            realDurationMs = request.detail.realDurationMs,
             onDismiss = { sessionPlayback = null },
         )
     }
@@ -469,12 +477,19 @@ private fun SessionGrid(
             gridItems(values, key = { it.id }) { session ->
                 LibraryCard(
                     cover = session.cover,
-                    title = if (session.hasIncident) t("Recording · incident saved", "普通录像 · 已保存事件") else t("Recording", "普通录像"),
+                    title = when {
+                        session.recordingMode == IndexedRecordingMode.TIME_LAPSE ->
+                            t("Time-lapse · ${session.timeLapseMultiplier}×", "延时摄影 · ${session.timeLapseMultiplier}×")
+                        session.hasIncident -> t("Recording · incident saved", "普通录像 · 已保存事件")
+                        else -> t("Recording", "普通录像")
+                    },
                     startedAt = session.startedAtEpochMs,
                     durationMs = session.durationMs,
                     sizeBytes = session.sizeBytes,
                     segmentCount = session.segments.size,
                     source = session.sourceRole,
+                    recordingMode = session.recordingMode,
+                    realDurationMs = session.realDurationMs,
                     selected = session.id in selectedIds,
                     onClick = {
                         if (selectionMode) onToggle(session.id) else onOpen(session)
@@ -519,6 +534,8 @@ private fun EventGrid(
                     sizeBytes = event.sizeBytes,
                     segmentCount = event.segments.size,
                     source = event.sourceRole,
+                    recordingMode = IndexedRecordingMode.NORMAL,
+                    realDurationMs = event.durationMs,
                     selected = event.id in selectedIds,
                     onClick = {
                         if (selectionMode) onToggle(event.id) else onOpen(event)
@@ -539,6 +556,8 @@ private fun LibraryCard(
     sizeBytes: Long,
     segmentCount: Int,
     source: IndexedSourceRole,
+    recordingMode: IndexedRecordingMode,
+    realDurationMs: Long,
     selected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -568,7 +587,14 @@ private fun LibraryCard(
                 Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(formatClock(startedAt), style = MaterialTheme.typography.bodySmall)
                 Text(
-                    "${sourceLabel(source)} · ${formatDuration(durationMs)} · ${t("$segmentCount segments", "$segmentCount 个分段")}",
+                    if (recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                        t(
+                            "${sourceLabel(source)} · captured ${formatDuration(realDurationMs)} → video ${formatDuration(durationMs)} · $segmentCount safety files",
+                            "${sourceLabel(source)} · 拍摄 ${formatDuration(realDurationMs)} → 成片 ${formatDuration(durationMs)} · $segmentCount 个安全文件",
+                        )
+                    } else {
+                        "${sourceLabel(source)} · ${formatDuration(durationMs)} · ${t("$segmentCount segments", "$segmentCount 个分段")}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -601,6 +627,20 @@ private fun MediaCover(segment: IndexedMediaSegment, modifier: Modifier = Modifi
         ) {
             Text(sourceLabel(segment.sourceRole), color = Color.White, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp))
         }
+        if (segment.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+            Surface(
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.88f),
+            ) {
+                Text(
+                    "${segment.timeLapseMultiplier}×",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                )
+            }
+        }
     }
 }
 
@@ -629,7 +669,25 @@ private fun MediaDetailScreen(
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
             Column(Modifier.padding(16.dp)) {
                 Text(formatDateTime(detail.startedAtEpochMs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("${sourceLabel(detail.sourceRole)} · ${formatDuration(detail.durationMs)}")
+                Text(
+                    if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                        t(
+                            "${sourceLabel(detail.sourceRole)} · Time-lapse ${detail.timeLapseMultiplier}×",
+                            "${sourceLabel(detail.sourceRole)} · 延时摄影 ${detail.timeLapseMultiplier}×",
+                        )
+                    } else {
+                        "${sourceLabel(detail.sourceRole)} · ${formatDuration(detail.durationMs)}"
+                    },
+                )
+                if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                    Text(
+                        t(
+                            "Captured ${formatDuration(detail.realDurationMs)} → video ${formatDuration(detail.durationMs)}",
+                            "现实拍摄 ${formatDuration(detail.realDurationMs)} → 成片 ${formatDuration(detail.durationMs)}",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Text(
                     t(
                         "${detail.segments.size} physical segments · ${formatMediaBytes(detail.sizeBytes)}",
@@ -684,7 +742,14 @@ private fun SegmentCard(
         Column(Modifier.padding(12.dp)) {
             Text(t("Segment ${index + 1}", "分段 ${index + 1}"), fontWeight = FontWeight.SemiBold)
             Text(
-                "${formatClock(segment.startedAtEpochMs)} · ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}",
+                if (segment.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                    t(
+                        "${formatClock(segment.startedAtEpochMs)} · captured ${formatDuration(segment.realDurationMs ?: 0L)} → video ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}",
+                        "${formatClock(segment.startedAtEpochMs)} · 拍摄 ${formatDuration(segment.realDurationMs ?: 0L)} → 成片 ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}",
+                    )
+                } else {
+                    "${formatClock(segment.startedAtEpochMs)} · ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -790,6 +855,9 @@ private fun IndexedRecordingSession.toDetail() = MediaDetail(
     durationMs = durationMs,
     sizeBytes = sizeBytes,
     sourceRole = sourceRole,
+    recordingMode = recordingMode,
+    timeLapseMultiplier = timeLapseMultiplier,
+    realDurationMs = realDurationMs,
     segments = segments,
 )
 
@@ -800,6 +868,9 @@ private fun IndexedRecordingEvent.toDetail() = MediaDetail(
     durationMs = durationMs,
     sizeBytes = sizeBytes,
     sourceRole = sourceRole,
+    recordingMode = IndexedRecordingMode.NORMAL,
+    timeLapseMultiplier = 1,
+    realDurationMs = durationMs,
     segments = segments,
 )
 
@@ -881,6 +952,12 @@ private fun formatMediaBytes(bytes: Long): String = when {
     bytes >= 1024L -> "${bytes / 1024} KB"
     else -> "$bytes B"
 }
+
+private val VISIBLE_LIBRARY_SECTIONS = listOf(
+    LibrarySection.ALL,
+    LibrarySection.EVENTS,
+    LibrarySection.PHONE,
+)
 
 private suspend fun queryPhoneVideos(context: Context): List<File> = withContext(Dispatchers.IO) {
     val results = mutableListOf<File>()

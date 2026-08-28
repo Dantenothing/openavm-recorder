@@ -3,6 +3,7 @@ package com.dante.zeekrbridge.sound
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.dante.zeekrbridge.ui.PhoneLanguage
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicLong
@@ -135,7 +136,7 @@ class SelectionPlayer(
                 .build()
         } catch (t: Throwable) {
             playing = false
-            onError?.invoke("无法创建播放器：${t.message ?: t.javaClass.simpleName}")
+            onError?.invoke(text("Cannot create the player: ${t.message ?: t.javaClass.simpleName}", "无法创建播放器：${t.message ?: t.javaClass.simpleName}"))
             return
         }
         synchronized(lock) { track = t }
@@ -176,11 +177,11 @@ class SelectionPlayer(
                         val w = try {
                             t.write(bytes, written, read - written)
                         } catch (t2: Throwable) {
-                            if (playing) onError?.invoke("播放中断：${t2.message ?: t2.javaClass.simpleName}")
+                            if (playing) onError?.invoke(text("Playback interrupted: ${t2.message ?: t2.javaClass.simpleName}", "播放中断：${t2.message ?: t2.javaClass.simpleName}"))
                             return
                         }
                         if (w <= 0) {
-                            if (playing) onError?.invoke("播放器写入失败")
+                            if (playing) onError?.invoke(text("Player output failed", "播放器写入失败"))
                             return
                         }
                         written += w
@@ -190,7 +191,7 @@ class SelectionPlayer(
                 }
             }
         } catch (t: Throwable) {
-            if (playing) onError?.invoke("播放失败：${t.message ?: t.javaClass.simpleName}")
+            if (playing) onError?.invoke(text("Playback failed: ${t.message ?: t.javaClass.simpleName}", "播放失败：${t.message ?: t.javaClass.simpleName}"))
         } finally {
             val wasPlaying = playing
             playing = false
@@ -206,4 +207,6 @@ class SelectionPlayer(
             if (completed || wasPlaying) onComplete?.invoke()
         }
     }
+
+    private fun text(en: String, zh: String) = PhoneLanguage.text(en, zh)
 }

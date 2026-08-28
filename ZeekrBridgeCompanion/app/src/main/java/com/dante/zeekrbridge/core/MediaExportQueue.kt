@@ -131,7 +131,12 @@ object MediaExportQueue {
             plan.sourceRole == IndexedSourceRole.IR -> "IR"
             else -> "360"
         }
-        return "OpenAVM_${timestamp}_$suffix.mp4"
+        val mode = if (plan.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+            "_TL${plan.timeLapseMultiplier}x"
+        } else {
+            ""
+        }
+        return "OpenAVM_${timestamp}_${suffix}$mode.mp4"
     }
 
     private val MediaExportState.isTerminal: Boolean

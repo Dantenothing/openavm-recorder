@@ -47,6 +47,8 @@ data class PlannedExportClip(
 data class MediaExportPlan(
     val target: MediaExportTarget,
     val sourceRole: IndexedSourceRole,
+    val recordingMode: IndexedRecordingMode,
+    val timeLapseMultiplier: Int,
     val clips: List<PlannedExportClip>,
     val requestedStartMs: Long,
     val requestedEndMs: Long,
@@ -111,6 +113,8 @@ object MediaExportPlanner {
         return MediaExportPlan(
             target = target,
             sourceRole = sourceRole,
+            recordingMode = ordered.first().recordingMode,
+            timeLapseMultiplier = ordered.first().timeLapseMultiplier.coerceAtLeast(1),
             clips = clips,
             requestedStartMs = start,
             requestedEndMs = end,
