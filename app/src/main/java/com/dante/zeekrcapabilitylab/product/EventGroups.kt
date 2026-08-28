@@ -87,6 +87,19 @@ object EventGroups {
         return (tagged + sessionProtected + legacy).sortedByDescending { it.startedAtEpochMs }
     }
 
+    /**
+     * Two overlapping incident windows may legitimately begin with the same
+     * segment. The complete ordered membership gives each displayed incident
+     * a stable identity without relying on a shared first file.
+     */
+    fun stableIncidentKey(group: EventGroup): String = buildString {
+        append("event:")
+        group.segments.forEach { segment ->
+            val name = segment.file.name
+            append(name.length).append(':').append(name).append(';')
+        }
+    }
+
     fun groupByDate(segments: List<Segment>): List<Pair<String, EventGroup>> {
         val byDate = segments
             .groupBy { segment ->

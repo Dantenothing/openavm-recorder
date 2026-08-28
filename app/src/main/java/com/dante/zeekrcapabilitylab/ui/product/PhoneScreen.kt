@@ -1,98 +1,138 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.diagnostic.PowerDiagnosticEvidence
+import com.dante.zeekrcapabilitylab.diagnostic.PowerDiagnosticRepository
+import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/**
- * Phone features stay visible in the product navigation, but are deliberately
- * disabled for this Beta. The transfer implementation remains available for
- * future development and diagnostics.
- */
+/** Temporary on-car diagnostic exit. It never opens a camera or changes recording state. */
 @Composable
 fun PhoneScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var evidence by remember { mutableStateOf<PowerDiagnosticEvidence?>(null) }
+
+    fun refresh() {
+        scope.launch { evidence = withContext(Dispatchers.IO) { PowerDiagnosticRepository.collect(context) } }
+    }
+    LaunchedEffect(Unit) { refresh() }
+
     Column(
-        Modifier
-            .fillMaxSize()
+        Modifier.fillMaxSize()
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f))
             .verticalScroll(rememberScrollState())
             .padding(22.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(
-            Utils.t("Phone connection", "手机互联"),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-        )
+        Text("离车与预览诊断", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("请选择测试类型。锁车后，稳定离车信号或随后发生的车辆 Camera 断开都会结束 Session；解锁后不会自动恢复。")
 
-        DisabledFeatureCard(
-            title = Utils.t("Browser download unavailable", "浏览器下载暂不可用"),
-            body = Utils.t(
-                "Zeekr isolates the system hotspot network from third-party apps. " +
-                    "Phones, tablets and computers cannot reach the local download server, " +
-                    "even when they are connected to the same hotspot. Browser sharing is disabled in this Beta.",
-                "Zeekr 将系统热点网络与第三方 App 隔离。即使手机、平板或电脑已经连接同一个热点，" +
-                    "也无法访问车机内的本地下载服务，因此本 Beta 已停用浏览器分享。",
-            ),
-        )
+        evidence?.let { current ->
+            Card(Modifier.fillMaxWidth()) {
+                Text(
+                    current.humanText(),
+                    Modifier.padding(18.dp),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            val payload = current.qrPayload()
+            val qr = remember(payload) { runCatching { qrBitmap(payload) }.getOrNull() }
+            if (qr != null) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("紧凑诊断二维码", fontWeight = FontWeight.SemiBold)
+                        Image(qr.asImageBitmap(), "诊断二维码", Modifier.size(330.dp))
+                    }
+                }
+            }
+        }
 
-        DisabledFeatureCard(
-            title = Utils.t("Dedicated phone app", "专用手机 App"),
-            body = Utils.t(
-                "Under development. Phone pairing and recording transfer will return after a reliable car-initiated connection has been validated.",
-                "正在开发中。待车机主动连接手机的传输方式完成稳定性验证后，手机配对和录像传输功能会重新开放。",
-            ),
-        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = {
+                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_NORMAL_BACKGROUND)
+                refresh()
+            }, modifier = Modifier.weight(1f)) { Text("正常后台") }
+            Button(onClick = {
+                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_OEM_CAMERA)
+                refresh()
+            }, modifier = Modifier.weight(1f)) { Text("OEM Camera") }
+            Button(onClick = {
+                VehicleAwayProbe.startTestMarker(VehicleAwayProbe.TEST_VEHICLE_AWAY)
+                refresh()
+            }, modifier = Modifier.weight(1f)) { Text("锁车离开") }
+        }
 
-        Spacer(Modifier.height(2.dp))
-        Text(
-            Utils.t(
-                "Recording, playback and local storage on the head unit are not affected.",
-                "车机端的录像、回放和本地存储功能不受影响。",
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall,
-        )
+        OutlinedButton(onClick = ::refresh) { Text("刷新证据") }
+
+        Card(Modifier.fillMaxWidth()) {
+            Text(
+                "锁车测试预期：如果三项离车信号稳定，约 30 秒后停止；否则应在车辆自然切断 Camera（以往约 5 分钟）时停止。回来后应保持待机，必须再次手动 Start。",
+                Modifier.padding(18.dp),
+            )
+        }
+        Text("手机连接功能仍在开发中，本页只是 alpha9 的临时诊断入口。")
     }
 }
 
-@Composable
-private fun DisabledFeatureCard(title: String, body: String) {
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .alpha(0.58f),
-    ) {
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.Gray,
-            )
-            Spacer(Modifier.height(7.dp))
-            Text(
-                body,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
+private fun qrBitmap(payload: String, size: Int = 700): Bitmap {
+    val matrix = QRCodeWriter().encode(
+        payload,
+        BarcodeFormat.QR_CODE,
+        size,
+        size,
+        mapOf(
+            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+            EncodeHintType.MARGIN to 2,
+            EncodeHintType.CHARACTER_SET to "UTF-8",
+        ),
+    )
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) for (x in 0 until size) {
+        pixels[y * size + x] = if (matrix[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
     }
+    return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
 }

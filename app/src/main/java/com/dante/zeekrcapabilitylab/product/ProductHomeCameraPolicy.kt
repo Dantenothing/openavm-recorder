@@ -10,6 +10,7 @@ package com.dante.zeekrcapabilitylab.product
  */
 object ProductHomeCameraPolicy {
     const val TRIGGER_USER_START_RECORDING = "USER_START_RECORDING"
+    const val TRIGGER_AUTO_START_RECORDING = "AUTO_START_RECORDING"
     const val TRIGGER_USER_START_PREVIEW = "USER_START_PREVIEW"
     const val TRIGGER_AUTO_PREVIEW = "AUTO_PREVIEW"
 

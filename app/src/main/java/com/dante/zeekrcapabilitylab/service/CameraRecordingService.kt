@@ -81,6 +81,7 @@ class CameraRecordingService : Service() {
                 }
                 goForeground()
                 session.start(config, previewSurface)
+                replayVehicleEnvironment(session)
             }
 
             RecorderCommands.ACTION_STOP -> session.stop()
@@ -197,6 +198,12 @@ class CameraRecordingService : Service() {
 
         @Volatile
         private var instance: CameraRecordingService? = null
+        @Volatile
+        private var lastAppForeground = true
+        @Volatile
+        private var lastScreenOn = true
+        @Volatile
+        private var lastMainDisplayOn = true
 
         /** UI-visible Activity calls this after the user explicitly taps Start. */
         fun start(context: Context, config: RecorderConfig, previewSurface: Surface? = null) {
@@ -237,7 +244,39 @@ class CameraRecordingService : Service() {
             }
         }
 
+        /** Replaces a destroyed UI preview without restarting the recorder. */
+        fun replacePreviewSurface(surface: Surface) {
+            val active = instance
+            if (active == null) {
+                runCatching { surface.release() }
+                return
+            }
+            active.session.replacePreviewSurface(surface)
+        }
+
         fun isRunning(): Boolean = instance != null
+
+        /** Application power/lifecycle signals; RecorderSession serializes them on its camera thread. */
+        fun reportAppForeground(foreground: Boolean) {
+            lastAppForeground = foreground
+            instance?.session?.onAppForegroundChanged(foreground)
+        }
+
+        fun reportScreenPower(screenOn: Boolean) {
+            lastScreenOn = screenOn
+            instance?.session?.onScreenPowerChanged(screenOn)
+        }
+
+        fun reportMainDisplayPower(displayOn: Boolean) {
+            lastMainDisplayOn = displayOn
+            instance?.session?.onMainDisplayPowerChanged(displayOn)
+        }
+
+        private fun replayVehicleEnvironment(session: RecorderSession) {
+            session.onAppForegroundChanged(lastAppForeground)
+            session.onScreenPowerChanged(lastScreenOn)
+            session.onMainDisplayPowerChanged(lastMainDisplayOn)
+        }
 
         /** Restores evidence only; this deliberately does not start the service or camera. */
         fun restoreTerminalState(context: Context) {

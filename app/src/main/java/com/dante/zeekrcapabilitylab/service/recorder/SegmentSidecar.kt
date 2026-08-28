@@ -63,6 +63,12 @@ data class SegmentSidecar(
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
+    /** Stable product meaning captured when the session started. */
+    val sourceRole: RecordingSourceRole = RecordingSourceRole.SURROUND,
+    /** Playback contract captured with the file; never re-derived from current settings. */
+    val layoutKind: RecordingLayoutKind = RecordingLayoutKind.FOUR_LANE_V1,
+    /** Mapping generation used to resolve [sourceRole] to [cameraId]. */
+    val mappingRevision: Int = 0,
     val segmentSeconds: Int,
     val segmentNumber: Int,
     /** Stable ZeekrApp.processStartId ("pid-epoch"), never the per-command service startId. */

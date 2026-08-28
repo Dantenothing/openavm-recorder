@@ -39,6 +39,12 @@ object RecorderLibrary {
         val result: DeleteResult,
     )
 
+    data class BulkDeleteResult(
+        val deleted: Int,
+        val blocked: Int,
+        val sidecarCleanupWarnings: Int,
+    )
+
     fun isManaged(file: File): Boolean {
         if (!file.isFile || !SegmentNaming.isFinalMp4(file.name)) return false
         val sidecarFile = SegmentSidecarIO.sidecarFileFor(file)
@@ -180,6 +186,26 @@ object RecorderLibrary {
             .also { attempts ->
                 if (attempts.any { it.result.deleted }) notifyChanged()
             }
+    }
+
+    /** Confirmed destructive gallery action; playback and upload pins still win. */
+    fun deleteAllManagedByUser(segmentsDir: File): BulkDeleteResult =
+        bulkDelete(listFinalized(segmentsDir)) { file -> deleteManagedByUser(segmentsDir, file) }
+
+    /** Safe bulk cleanup which preserves bookmarks as well as temporary pins. */
+    fun deleteAllUnprotected(segmentsDir: File): BulkDeleteResult =
+        bulkDelete(listFinalized(segmentsDir)) { file -> deleteManaged(segmentsDir, file) }
+
+    private inline fun bulkDelete(
+        files: List<File>,
+        delete: (File) -> DeleteResult,
+    ): BulkDeleteResult {
+        val results = files.map(delete)
+        return BulkDeleteResult(
+            deleted = results.count { it.deleted },
+            blocked = results.count { !it.deleted },
+            sidecarCleanupWarnings = results.count { it.reason == DELETE_SIDECAR_FAILED },
+        )
     }
 
     private fun deleteManagedInternal(

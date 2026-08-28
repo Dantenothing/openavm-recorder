@@ -10,6 +10,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.data.Severity
+import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
 import com.dante.zeekrcapabilitylab.event.CrashHandler
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.product.SettingsStore
@@ -61,23 +62,17 @@ class ZeekrApp : Application() {
             ),
         )
 
+        VehicleAwayProbe.init(this)
+
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 _isForeground.value = true
-                EventLogger.logEvent(
-                    Categories.LIFECYCLE,
-                    "PROCESS_FOREGROUND",
-                    payload = mapOf("recorderStatus" to CameraRecordingService.state.value.status),
-                )
+                VehicleAwayProbe.recordAppState(true)
             }
 
             override fun onStop(owner: LifecycleOwner) {
                 _isForeground.value = false
-                EventLogger.logEvent(
-                    Categories.LIFECYCLE,
-                    "PROCESS_BACKGROUND",
-                    payload = mapOf("recorderStatus" to CameraRecordingService.state.value.status),
-                )
+                VehicleAwayProbe.recordAppState(false)
             }
         })
 

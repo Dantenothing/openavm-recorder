@@ -240,4 +240,50 @@ class RecorderLibraryTest {
         assertFalse(RecorderLibrary.isManaged(failed))
         assertFalse(RecorderLibrary.isManaged(pathMismatch))
     }
+
+    @Test
+    fun clearAllRemovesManagedRecordingsButKeepsPinnedAndUnknownFiles() {
+        val dir = Files.createTempDirectory("rec-lib-clear-all").toFile()
+        val ordinary = managedMp4(dir, "seg-0001-1-1280x5140-14M.mp4")
+        val protected = managedMp4(
+            dir,
+            "seg-0002-2-1280x5140-14M.mp4",
+            protected = true,
+        )
+        val uploadPinned = managedMp4(dir, "seg-0003-3-1280x5140-14M.mp4")
+        assertTrue(RecorderLibrary.pinForUpload(uploadPinned))
+        val unknown = File(dir, "do-not-touch.txt").apply { writeText("owner unknown") }
+
+        val result = RecorderLibrary.deleteAllManagedByUser(dir)
+
+        assertEquals(2, result.deleted)
+        assertEquals(1, result.blocked)
+        assertFalse(ordinary.exists())
+        assertFalse(protected.exists())
+        assertTrue(uploadPinned.exists())
+        assertTrue(unknown.exists())
+    }
+
+    @Test
+    fun clearUnprotectedKeepsBookmarksPinsAndUnknownFiles() {
+        val dir = Files.createTempDirectory("rec-lib-clear-unprotected").toFile()
+        val ordinary = managedMp4(dir, "seg-0001-1-1280x5140-14M.mp4")
+        val protected = managedMp4(
+            dir,
+            "seg-0002-2-1280x5140-14M.mp4",
+            protected = true,
+        )
+        val uploadPinned = managedMp4(dir, "seg-0003-3-1280x5140-14M.mp4")
+        assertTrue(RecorderLibrary.pinForUpload(uploadPinned))
+        val unknown = File(dir, "do-not-touch.txt").apply { writeText("owner unknown") }
+
+        val result = RecorderLibrary.deleteAllUnprotected(dir)
+
+        assertEquals(1, result.deleted)
+        assertEquals(2, result.blocked)
+        assertFalse(ordinary.exists())
+        assertTrue(protected.exists())
+        assertTrue(uploadPinned.exists())
+        assertTrue(unknown.exists())
+    }
 }

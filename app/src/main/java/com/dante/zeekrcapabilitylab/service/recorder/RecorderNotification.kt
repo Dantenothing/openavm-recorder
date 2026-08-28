@@ -83,6 +83,8 @@ object RecorderNotification {
         RecorderStatus.STARTING -> Utils.t("Preparing", "正在准备")
         RecorderStatus.RECORDING -> Utils.t("Recording", "录像中")
         RecorderStatus.FINALIZING -> Utils.t("Saving", "正在保存")
+        RecorderStatus.WAITING_CAMERA -> Utils.t("Waiting for camera", "正在等待摄像头")
+        RecorderStatus.RESUMING -> Utils.t("Recovering recording", "正在恢复录像")
         RecorderStatus.CAMERA_UNAVAILABLE -> Utils.t("Camera unavailable", "摄像头不可用")
         RecorderStatus.ERROR -> Utils.t("Recording error", "录像异常")
         RecorderStatus.STOPPED -> Utils.t("Stopped", "已停止")

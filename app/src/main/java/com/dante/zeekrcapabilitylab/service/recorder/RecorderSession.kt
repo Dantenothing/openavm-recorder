@@ -80,6 +80,7 @@ class RecorderSession(
     private var captureSession: CameraCaptureSession? = null
     private var recordingPipeline: RecordingPipeline? = null
     private var recordingPreviewSurface: Surface? = null
+    private var pendingRecordingPreviewSurface: Surface? = null
     private var activeEncoderSurface: Surface? = null
     private var previewOutputDesired = true
     private var currentPartial: File? = null
@@ -115,6 +116,9 @@ class RecorderSession(
     private var lastEncodedFileBytes = 0L
     private var recoveryRetryRunnable: Runnable? = null
     private var recoveryRetryAttempt = 0
+    private val vehicleAway = VehicleAwayStateMachine()
+    private var manualSessionGeneration = 0L
+    private var vehicleAwayTimerRunnable: Runnable? = null
     private var availabilityRegistered = false
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
     private val pendingSidecarFiles: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -191,6 +195,7 @@ class RecorderSession(
             registerAvailabilityCallback()
             this.previewOutputDesired = true
             releaseRecordingPreviewSurface()
+            releasePendingRecordingPreviewSurface()
             this.recordingPreviewSurface = previewSurface?.takeIf { it.isValid }
             if (this.recordingPreviewSurface == null) runCatching { previewSurface?.release() }
             this.stopping = false
@@ -201,6 +206,8 @@ class RecorderSession(
             this.segmentNumber = 0
             this.previousSegmentStoppedElapsedMs = null
             this.previousEncodedPresentationTimeUs = null
+            manualSessionGeneration++
+            vehicleAway.beginManualSession(manualSessionGeneration)
             cancelOpenWatchdog()
             cancelSetupWatchdog()
             cancelEncodedWatchdog()
@@ -212,6 +219,12 @@ class RecorderSession(
                     status = RecorderStatus.STARTING,
                     cameraId = config.cameraId,
                     profile = config.profile,
+                    sourceRole = RecordingSourceRole.SURROUND,
+                    layoutKind = if (config.recordingMode == RecordingMode.FRONT_ONLY) {
+                        RecordingLayoutKind.SINGLE_V1
+                    } else {
+                        RecordingLayoutKind.FOUR_LANE_V1
+                    },
                     segmentSeconds = config.segmentSeconds,
                     storageLimitBytes = config.storageLimitBytes,
                     segmentNumber = 0,
@@ -332,28 +345,112 @@ class RecorderSession(
         }
     }
 
+    /**
+     * Accepts a recreated UI surface without interrupting the encoded stream.
+     * The active capture session keeps its current surface until rollover; the
+     * replacement is generation-safe because it is adopted only while building
+     * the next Camera2 session.
+     */
+    fun replacePreviewSurface(replacement: Surface) {
+        postCamera {
+            if (!replacement.isValid || stopping || releasing) {
+                runCatching { replacement.release() }
+                return@postCamera
+            }
+            releasePendingRecordingPreviewSurface()
+            pendingRecordingPreviewSurface = replacement
+            previewOutputDesired = true
+            updateState(
+                state.copy(
+                    previewRequested = true,
+                    message = if (recording) {
+                        "Preview will reconnect on the next segment"
+                    } else {
+                        state.message
+                    },
+                ),
+            )
+        }
+    }
+
+    fun onAppForegroundChanged(foreground: Boolean) {
+        postCamera {
+            val action = vehicleAway.onAppForeground(
+                manualSessionGeneration,
+                foreground,
+                SystemClock.elapsedRealtime(),
+            )
+            logVehicleAwaySignal("APP_FOREGROUND", foreground.toString(), action)
+            applyVehicleAwayAction(action)
+        }
+    }
+
+    fun onScreenPowerChanged(screenOn: Boolean) {
+        postCamera {
+            val action = vehicleAway.onScreenPower(
+                manualSessionGeneration,
+                screenOn,
+                SystemClock.elapsedRealtime(),
+            )
+            logVehicleAwaySignal("SCREEN_ON", screenOn.toString(), action)
+            applyVehicleAwayAction(action)
+        }
+    }
+
+    fun onMainDisplayPowerChanged(displayOn: Boolean) {
+        postCamera {
+            val action = vehicleAway.onMainDisplayPower(
+                manualSessionGeneration,
+                displayOn,
+                SystemClock.elapsedRealtime(),
+            )
+            logVehicleAwaySignal("MAIN_DISPLAY_ON", displayOn.toString(), action)
+            applyVehicleAwayAction(action)
+        }
+    }
+
     fun stop() {
         postCamera {
-            stopping = true
-            startInFlight = false
-            cancelOpenWatchdog()
-            cancelSetupWatchdog()
-            cancelEncodedWatchdog()
-            cancelTimeout()
-            cancelRecoveryRetry()
-            if (currentPartial != null) {
-                finalizeCurrentSegment("STOP", null)
-            } else {
-                closeCamera()
-                updateState(
-                    state.copy(
-                        status = RecorderStatus.STOPPED,
-                        currentFile = null,
-                        segmentStartedAtEpochMs = null,
-                    ),
-                )
-                if (!releasing) onStopped()
-            }
+            stopSessionOnCameraThread("STOP", "USER_STOP")
+        }
+    }
+
+    private fun stopSessionOnCameraThread(finalizeReason: String, authorityReason: String) {
+        if (stopping) return
+        val generation = manualSessionGeneration
+        stopping = true
+        startInFlight = false
+        vehicleAway.endSession(generation, authorityReason)
+        manualSessionGeneration++
+        openGeneration++
+        cancelOpenWatchdog()
+        cancelSetupWatchdog()
+        cancelEncodedWatchdog()
+        cancelTimeout()
+        cancelRecoveryRetry()
+        cancelVehicleAwayTimer()
+        releasePendingRecordingPreviewSurface()
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAMERA_RESUME_GATE_DISARMED",
+            payload = mapOf(
+                "generation" to generation.toString(),
+                "reason" to authorityReason,
+            ),
+        )
+        if (currentPartial != null) {
+            finalizeCurrentSegment(finalizeReason, null)
+        } else {
+            closeCamera()
+            updateState(
+                state.copy(
+                    status = RecorderStatus.STOPPED,
+                    currentFile = null,
+                    segmentStartedAtEpochMs = null,
+                    message = null,
+                ),
+            )
+            if (!releasing) onStopped()
         }
     }
 
@@ -512,16 +609,20 @@ class RecorderSession(
         releasing = true
         stopping = true
         startInFlight = false
+        vehicleAway.endSession(manualSessionGeneration, "SERVICE_RELEASE")
+        manualSessionGeneration++
         cancelOpenWatchdog()
         cancelSetupWatchdog()
         cancelEncodedWatchdog()
         cancelTimeout()
         cancelRecoveryRetry()
+        cancelVehicleAwayTimer()
         if (currentPartial != null) {
             finalizeCurrentSegment("STOP", null)
         }
         closeCamera()
         releaseRecordingPreviewSurface()
+        releasePendingRecordingPreviewSurface()
         wakeLockHolder.releaseAll()
     }
 
@@ -845,6 +946,13 @@ class RecorderSession(
                     )
                 }
             captureSession = null
+            pendingRecordingPreviewSurface?.let { replacement ->
+                val previous = recordingPreviewSurface
+                recordingPreviewSurface = replacement.takeIf { it.isValid }
+                pendingRecordingPreviewSurface = null
+                if (recordingPreviewSurface == null) runCatching { replacement.release() }
+                runCatching { previous?.release() }
+            }
             fun configureSession(includePreview: Boolean) {
                 if (!ownsSetup(generation, partial, pipeline)) return
                 val preview = recordingPreviewSurface?.takeIf { includePreview && it.isValid }
@@ -1649,6 +1757,105 @@ class RecorderSession(
         }
     }
 
+    private fun applyVehicleAwayAction(action: VehicleAwayAction): Boolean {
+        when (action) {
+            VehicleAwayAction.None -> return false
+            is VehicleAwayAction.Schedule -> {
+                cancelVehicleAwayTimer()
+                val delayMs = (action.atMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+                val runnable = Runnable {
+                    vehicleAwayTimerRunnable = null
+                    if (stopping || releasing) return@Runnable
+                    applyVehicleAwayAction(
+                        vehicleAway.onTimer(
+                            action.generation,
+                            action.pendingToken,
+                            SystemClock.elapsedRealtime(),
+                        ),
+                    )
+                }
+                vehicleAwayTimerRunnable = runnable
+                cameraHandler?.postDelayed(runnable, delayMs)
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_VEHICLE_AWAY_PENDING",
+                    payload = vehicleAwayDiagnosticPayload(),
+                )
+                return false
+            }
+
+            is VehicleAwayAction.Cancel -> {
+                cancelVehicleAwayTimer()
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_VEHICLE_AWAY_CANCELLED",
+                    payload = vehicleAwayDiagnosticPayload() + mapOf("reason" to action.reason),
+                )
+                return false
+            }
+
+            is VehicleAwayAction.Confirm -> {
+                cancelVehicleAwayTimer()
+                if (action.generation != manualSessionGeneration || stopping || releasing) {
+                    EventLogger.logEvent(
+                        Categories.SYSTEM,
+                        "RECORDER_VEHICLE_AWAY_CONFIRM_STALE",
+                        severity = Severity.WARN,
+                        payload = vehicleAwayDiagnosticPayload() + mapOf("reason" to action.reason),
+                    )
+                    return false
+                }
+                EventLogger.logEvent(
+                    Categories.SYSTEM,
+                    "RECORDER_VEHICLE_AWAY_CONFIRMED",
+                    payload = vehicleAwayDiagnosticPayload() + mapOf("reason" to action.reason),
+                )
+                stopSessionOnCameraThread("VEHICLE_AWAY", "VEHICLE_AWAY_CONFIRMED")
+                return true
+            }
+        }
+    }
+
+    private fun cancelVehicleAwayTimer() {
+        vehicleAwayTimerRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        vehicleAwayTimerRunnable = null
+    }
+
+    private fun logVehicleAwaySignal(
+        signal: String,
+        value: String,
+        action: VehicleAwayAction,
+    ) {
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_VEHICLE_AWAY_SIGNAL",
+            payload = vehicleAwayDiagnosticPayload() + mapOf(
+                "signal" to signal,
+                "value" to value,
+                "decision" to when (action) {
+                    VehicleAwayAction.None -> "NONE"
+                    is VehicleAwayAction.Schedule -> "SCHEDULE"
+                    is VehicleAwayAction.Cancel -> "CANCEL_${action.reason}"
+                    is VehicleAwayAction.Confirm -> "CONFIRM_${action.reason}"
+                },
+            ),
+        )
+    }
+
+    private fun vehicleAwayDiagnosticPayload(): Map<String, String> {
+        val snapshot = vehicleAway.snapshot
+        return mapOf(
+            "generation" to snapshot.generation.toString(),
+            "phase" to snapshot.phase.name,
+            "appForeground" to snapshot.appForeground.toString(),
+            "screenOn" to snapshot.screenOn.toString(),
+            "mainDisplayOn" to snapshot.mainDisplayOn.toString(),
+            "pendingToken" to snapshot.pendingToken.toString(),
+            "backgroundPowerOffEvidence" to snapshot.backgroundPowerOffEvidence.toString(),
+            "lastReason" to (snapshot.lastReason ?: "-"),
+        )
+    }
+
     private fun handleCameraLoss(message: String) {
         cancelOpenWatchdog()
         cancelSetupWatchdog()
@@ -1656,6 +1863,8 @@ class RecorderSession(
         cancelTimeout()
         startInFlight = false
         cameraOpenInFlight = false
+        val vehicleAwayAction = vehicleAway.onCameraLoss(manualSessionGeneration)
+        if (applyVehicleAwayAction(vehicleAwayAction)) return
         EventLogger.markError(Categories.SYSTEM, "RECORDER_CAMERA_LOSS", message, null)
         // PREPARING segments (currentPartial != null, recording == false) must also be
         // finalized/quarantined so a late onConfigured cannot start a dead recorder.
@@ -1817,6 +2026,12 @@ class RecorderSession(
             file = s.file.absolutePath,
             cameraId = s.cameraId,
             profile = profile,
+            sourceRole = RecordingSourceRole.SURROUND,
+            layoutKind = if (s.recordingMode == RecordingMode.FRONT_ONLY) {
+                RecordingLayoutKind.SINGLE_V1
+            } else {
+                RecordingLayoutKind.FOUR_LANE_V1
+            },
             segmentSeconds = s.segmentSeconds,
             segmentNumber = s.segmentNumber,
             processStartId = s.processStartId,
@@ -2141,6 +2356,12 @@ class RecorderSession(
     private fun releaseRecordingPreviewSurface() {
         val surface = recordingPreviewSurface
         recordingPreviewSurface = null
+        runCatching { surface?.release() }
+    }
+
+    private fun releasePendingRecordingPreviewSurface() {
+        val surface = pendingRecordingPreviewSurface
+        pendingRecordingPreviewSurface = null
         runCatching { surface?.release() }
     }
 
