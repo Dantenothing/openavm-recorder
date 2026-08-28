@@ -51,6 +51,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedSourceRole
+import com.dante.zeekrbridge.player.FourLaneGlDiagnostic
 import com.dante.zeekrbridge.player.FourLaneGlView
 import com.dante.zeekrbridge.player.PlaybackTimeline
 import com.dante.zeekrbridge.player.SurroundOutputPath
@@ -175,6 +176,7 @@ private fun PlaylistPlaybackDialog(
     var surfaceTextureFrameCount by remember(first.id) { mutableLongStateOf(0L) }
     var glMaxTextureSize by remember(first.id) { mutableIntStateOf(0) }
     var glRenderError by remember(first.id) { mutableStateOf<String?>(null) }
+    var glDiagnostic by remember(first.id) { mutableStateOf<FourLaneGlDiagnostic?>(null) }
     val codecProbe = remember(first.file.absolutePath) { probeSurroundCodec(first.file) }
 
     DisposableEffect(player, playable) {
@@ -285,6 +287,7 @@ private fun PlaylistPlaybackDialog(
                                 surroundFirstFrameRendered = false
                                 surfaceTextureFrameCount = 0L
                                 glRenderError = null
+                                glDiagnostic = null
                                 error = null
                             }) { Text(t("GL four-view", "GL 四路")) }
                         }
@@ -297,6 +300,7 @@ private fun PlaylistPlaybackDialog(
                                 surroundFirstFrameRendered = false
                                 surfaceTextureFrameCount = 0L
                                 glRenderError = null
+                                glDiagnostic = null
                                 error = null
                             }) { Text(t("Raw decoder test", "原始解码测试")) }
                         }
@@ -315,6 +319,7 @@ private fun PlaylistPlaybackDialog(
                             onFirstFrame = { surroundFirstFrameRendered = true },
                             onSurfaceFrame = { count -> surfaceTextureFrameCount = count },
                             onGlMaxTextureSize = { size -> glMaxTextureSize = size },
+                            onGlDiagnostic = { snapshot -> glDiagnostic = snapshot },
                             onRenderError = { message ->
                                 glRenderError = message
                                 error = t(
@@ -375,6 +380,7 @@ private fun PlaylistPlaybackDialog(
                         glFirstFrame = surroundFirstFrameRendered,
                         glMaxTextureSize = glMaxTextureSize,
                         glRenderError = glRenderError,
+                        glDiagnostic = glDiagnostic,
                         codecMime = codecProbe.mime,
                         codecWidth = codecProbe.width,
                         codecHeight = codecProbe.height,
@@ -465,6 +471,7 @@ private fun FourLaneVideoSurface(
     onFirstFrame: () -> Unit,
     onSurfaceFrame: (Long) -> Unit,
     onGlMaxTextureSize: (Int) -> Unit,
+    onGlDiagnostic: (FourLaneGlDiagnostic) -> Unit,
     onRenderError: (String) -> Unit,
     modifier: Modifier,
 ) {
@@ -473,6 +480,7 @@ private fun FourLaneVideoSurface(
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
     val currentOnSurfaceFrame by rememberUpdatedState(onSurfaceFrame)
     val currentOnGlMaxTextureSize by rememberUpdatedState(onGlMaxTextureSize)
+    val currentOnGlDiagnostic by rememberUpdatedState(onGlDiagnostic)
     val currentOnRenderError by rememberUpdatedState(onRenderError)
     LaunchedEffect(mode) {
         glView.setMode(mode)
@@ -486,6 +494,7 @@ private fun FourLaneVideoSurface(
             onFirstFrame = { currentOnFirstFrame() },
             onSurfaceFrame = { count -> currentOnSurfaceFrame(count) },
             onGlMaxTextureSize = { size -> currentOnGlMaxTextureSize(size) },
+            onGlDiagnostic = { snapshot -> currentOnGlDiagnostic(snapshot) },
             onRenderError = { message -> currentOnRenderError(message) },
         )
         glView.createSurfaceTexture { created ->
@@ -513,7 +522,7 @@ private fun FourLaneVideoSurface(
         }
         onDispose {
             disposed = true
-            glView.setPlaybackCallbacks(null, null, null, null)
+            glView.setPlaybackCallbacks(null, null, null, null, null)
             surface?.let { runCatching { player.clearVideoSurface(it) } }
             glView.setSource(null)
             surface?.release()
@@ -550,6 +559,7 @@ private fun SurroundDiagnosticPanel(
     glFirstFrame: Boolean,
     glMaxTextureSize: Int,
     glRenderError: String?,
+    glDiagnostic: FourLaneGlDiagnostic?,
     codecMime: String,
     codecWidth: Int,
     codecHeight: Int,
@@ -576,6 +586,34 @@ private fun SurroundDiagnosticPanel(
                     "GL maxTexture=${if (glMaxTextureSize > 0) glMaxTextureSize else "pending"}",
                 style = MaterialTheme.typography.bodySmall,
             )
+            glDiagnostic?.let { diagnostic ->
+                Text(
+                    "GL core: program=${diagnostic.programId} · texture=${diagnostic.textureId} · " +
+                        "source=${diagnostic.sourceAttached}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "GL draw: calls=${diagnostic.drawCalls} · updateOK=${diagnostic.updateTexImageSuccesses} · " +
+                        "last=${diagnostic.lastExitReason}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Shader: VS=${diagnostic.vertexShaderStatus} · FS=${diagnostic.fragmentShaderStatus} · " +
+                        "LINK=${diagnostic.programLinkStatus}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Locations: a=${diagnostic.attributeLocation} · u=${diagnostic.uniformLocations}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "GPU: ${diagnostic.glVendor} · ${diagnostic.glRenderer} · ${diagnostic.glVersion}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (diagnostic.shaderLog != "none") {
+                    Text("Shader log: ${diagnostic.shaderLog}", color = Color(0xFFEF5350))
+                }
+            }
             Text(
                 "Codec probe: $codecMime ${codecWidth}×${codecHeight} · process=${if (process64Bit) "64-bit" else "32-bit"}",
                 style = MaterialTheme.typography.bodySmall,

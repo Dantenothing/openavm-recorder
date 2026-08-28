@@ -10,6 +10,24 @@ import android.os.Looper
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
+internal data class FourLaneGlDiagnostic(
+    val programId: Int,
+    val textureId: Int,
+    val sourceAttached: Boolean,
+    val vertexShaderStatus: String,
+    val fragmentShaderStatus: String,
+    val programLinkStatus: String,
+    val shaderLog: String,
+    val attributeLocation: Int,
+    val uniformLocations: String,
+    val drawCalls: Long,
+    val updateTexImageSuccesses: Long,
+    val lastExitReason: String,
+    val glVendor: String,
+    val glRenderer: String,
+    val glVersion: String,
+)
+
 /**
  * Single-decoder four-lane viewer. One SurfaceTexture (from MediaPlayer) is
  * sampled by a GLES2 shader that crops the four lanes and renders a 2x2 grid
@@ -31,6 +49,7 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     private var firstFrameCallback: (() -> Unit)? = null
     private var surfaceFrameCallback: ((Long) -> Unit)? = null
     private var glMaxTextureCallback: ((Int) -> Unit)? = null
+    private var glDiagnosticCallback: ((FourLaneGlDiagnostic) -> Unit)? = null
     private var renderErrorCallback: ((String) -> Unit)? = null
 
     init {
@@ -54,20 +73,23 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
         requestRender()
     }
 
-    fun setPlaybackCallbacks(
+    internal fun setPlaybackCallbacks(
         onFirstFrame: (() -> Unit)?,
         onSurfaceFrame: ((Long) -> Unit)?,
         onGlMaxTextureSize: ((Int) -> Unit)?,
+        onGlDiagnostic: ((FourLaneGlDiagnostic) -> Unit)?,
         onRenderError: ((String) -> Unit)?,
     ) {
         firstFrameCallback = onFirstFrame
         surfaceFrameCallback = onSurfaceFrame
         glMaxTextureCallback = onGlMaxTextureSize
+        glDiagnosticCallback = onGlDiagnostic
         renderErrorCallback = onRenderError
         glRenderer.setCallbacks(
             onFirstFrame = { mainHandler.post { firstFrameCallback?.invoke() } },
             onSurfaceFrame = { count -> mainHandler.post { surfaceFrameCallback?.invoke(count) } },
             onGlMaxTextureSize = { size -> mainHandler.post { glMaxTextureCallback?.invoke(size) } },
+            onGlDiagnostic = { snapshot -> mainHandler.post { glDiagnosticCallback?.invoke(snapshot) } },
             onRenderError = { message -> mainHandler.post { renderErrorCallback?.invoke(message) } },
         )
     }
@@ -123,21 +145,38 @@ private class FourLaneRenderer(
     private var onFirstFrame: (() -> Unit)? = null
     private var onSurfaceFrame: ((Long) -> Unit)? = null
     private var onGlMaxTextureSize: ((Int) -> Unit)? = null
+    private var onGlDiagnostic: ((FourLaneGlDiagnostic) -> Unit)? = null
     private var onRenderError: ((String) -> Unit)? = null
     private var lastRenderError: String? = null
+    private var vertexShaderStatus = "NOT_RUN"
+    private var fragmentShaderStatus = "NOT_RUN"
+    private var programLinkStatus = "NOT_RUN"
+    private var vertexShaderLog = ""
+    private var fragmentShaderLog = ""
+    private var programLinkLog = ""
+    private var drawCallCount = 0L
+    private var updateTexImageSuccessCount = 0L
+    private var lastExitReason = "CREATED"
+    private var lastEmittedExitReason = ""
+    private var glVendor = "unknown"
+    private var glDeviceRenderer = "unknown"
+    private var glVersion = "unknown"
 
     fun setCallbacks(
         onFirstFrame: (() -> Unit)?,
         onSurfaceFrame: ((Long) -> Unit)?,
         onGlMaxTextureSize: ((Int) -> Unit)?,
+        onGlDiagnostic: ((FourLaneGlDiagnostic) -> Unit)?,
         onRenderError: ((String) -> Unit)?,
     ) {
         this.onFirstFrame = onFirstFrame
         this.onSurfaceFrame = onSurfaceFrame
         this.onGlMaxTextureSize = onGlMaxTextureSize
+        this.onGlDiagnostic = onGlDiagnostic
         this.onRenderError = onRenderError
         if (surfaceFrameCount > 0L) onSurfaceFrame?.invoke(surfaceFrameCount)
         if (glMaxTextureSize > 0) onGlMaxTextureSize?.invoke(glMaxTextureSize)
+        onGlDiagnostic?.invoke(diagnosticSnapshot())
         lastRenderError?.let { onRenderError?.invoke(it) }
     }
 
@@ -147,6 +186,8 @@ private class FourLaneRenderer(
         textureReady = false
         frameAvailable = false
         surfaceFrameCount = 0L
+        lastExitReason = if (source == null) "SOURCE_CLEARED" else "SOURCE_SET"
+        emitDiagnostic(force = true)
     }
 
     fun setMode(mode: Int, order: List<Int>) {
@@ -202,46 +243,74 @@ private class FourLaneRenderer(
             onFrameReady()
         }, null)
         created = st
+        lastExitReason = "TEXTURE_CREATED"
+        emitDiagnostic(force = true)
         emit(st)
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        glVendor = GLES20.glGetString(GLES20.GL_VENDOR).orEmpty().ifBlank { "unknown" }
+        glDeviceRenderer = GLES20.glGetString(GLES20.GL_RENDERER).orEmpty().ifBlank { "unknown" }
+        glVersion = GLES20.glGetString(GLES20.GL_VERSION).orEmpty().ifBlank { "unknown" }
         val maxTexture = IntArray(1)
         GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTexture, 0)
         glMaxTextureSize = maxTexture[0]
         onGlMaxTextureSize?.invoke(glMaxTextureSize)
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
-        aPosition = GLES20.glGetAttribLocation(program, "aPosition")
-        uCellRect = GLES20.glGetUniformLocation(program, "uCellRect")
-        uWindow = GLES20.glGetUniformLocation(program, "uWindow")
-        uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
-        uTexture = GLES20.glGetUniformLocation(program, "uTexture")
+        if (program != 0) {
+            aPosition = GLES20.glGetAttribLocation(program, "aPosition")
+            uCellRect = GLES20.glGetUniformLocation(program, "uCellRect")
+            uWindow = GLES20.glGetUniformLocation(program, "uWindow")
+            uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
+            uTexture = GLES20.glGetUniformLocation(program, "uTexture")
+        }
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         if (program == 0) reportRenderError("GL shader initialization failed")
+        lastExitReason = if (program == 0) "PROGRAM_ZERO" else "PROGRAM_READY"
+        emitDiagnostic(force = true)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         viewWidth = width.coerceAtLeast(1)
         viewHeight = height.coerceAtLeast(1)
         GLES20.glViewport(0, 0, viewWidth, viewHeight)
+        lastExitReason = "SURFACE_CHANGED_${viewWidth}x${viewHeight}"
+        emitDiagnostic(force = true)
     }
 
     override fun onDrawFrame(gl: GL10?) {
+        drawCallCount += 1L
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         val tex = source
-        if (tex == null || texId == 0 || program == 0) return
+        if (tex == null) {
+            finishDraw("NO_SOURCE")
+            return
+        }
+        if (texId == 0) {
+            finishDraw("NO_TEXTURE")
+            return
+        }
+        if (program == 0) {
+            finishDraw("PROGRAM_ZERO")
+            return
+        }
         if (frameAvailable) {
             try {
                 tex.updateTexImage()
                 tex.getTransformMatrix(texMatrix)
                 frameAvailable = false
                 textureReady = true
+                updateTexImageSuccessCount += 1L
             } catch (t: Throwable) {
                 reportRenderError("updateTexImage failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+                finishDraw("UPDATE_TEX_IMAGE_FAILED", force = true)
                 return
             }
         }
-        if (!textureReady) return
+        if (!textureReady) {
+            finishDraw("NO_FRAME")
+            return
+        }
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
@@ -265,9 +334,13 @@ private class FourLaneRenderer(
         val glError = GLES20.glGetError()
         if (glError != GLES20.GL_NO_ERROR) {
             reportRenderError("GL error 0x${glError.toString(16)}")
+            finishDraw("DRAW_GL_ERROR_0x${glError.toString(16)}", force = true)
         } else if (!firstFrameDrawn) {
             firstFrameDrawn = true
             onFirstFrame?.invoke()
+            finishDraw("DRAW_OK", force = true)
+        } else {
+            finishDraw("DRAW_OK")
         }
     }
 
@@ -312,30 +385,80 @@ private class FourLaneRenderer(
         onRenderError?.invoke(message)
     }
 
+    private fun finishDraw(reason: String, force: Boolean = false) {
+        lastExitReason = reason
+        emitDiagnostic(force)
+    }
+
+    private fun emitDiagnostic(force: Boolean = false) {
+        val reasonChanged = lastExitReason != lastEmittedExitReason
+        if (!force && !reasonChanged && drawCallCount > 3L && drawCallCount % 30L != 0L) return
+        lastEmittedExitReason = lastExitReason
+        onGlDiagnostic?.invoke(diagnosticSnapshot())
+    }
+
+    private fun diagnosticSnapshot(): FourLaneGlDiagnostic = FourLaneGlDiagnostic(
+        programId = program,
+        textureId = texId,
+        sourceAttached = source != null,
+        vertexShaderStatus = vertexShaderStatus,
+        fragmentShaderStatus = fragmentShaderStatus,
+        programLinkStatus = programLinkStatus,
+        shaderLog = listOf(vertexShaderLog, fragmentShaderLog, programLinkLog)
+            .filter { it.isNotBlank() }
+            .joinToString(" | ")
+            .ifBlank { "none" },
+        attributeLocation = aPosition,
+        uniformLocations = "$uCellRect/$uWindow/$uTexMatrix/$uTexture",
+        drawCalls = drawCallCount,
+        updateTexImageSuccesses = updateTexImageSuccessCount,
+        lastExitReason = lastExitReason,
+        glVendor = glVendor,
+        glRenderer = glDeviceRenderer,
+        glVersion = glVersion,
+    )
+
     private fun createProgram(vertex: String, fragment: String): Int {
-        val vs = compileShader(GLES20.GL_VERTEX_SHADER, vertex) ?: return 0
-        val fs = compileShader(GLES20.GL_FRAGMENT_SHADER, fragment) ?: return 0
+        val vs = compileShader(GLES20.GL_VERTEX_SHADER, vertex, "VERTEX") ?: return 0
+        val fs = compileShader(GLES20.GL_FRAGMENT_SHADER, fragment, "FRAGMENT")
+        if (fs == null) {
+            GLES20.glDeleteShader(vs)
+            return 0
+        }
         val program = GLES20.glCreateProgram()
         GLES20.glAttachShader(program, vs)
         GLES20.glAttachShader(program, fs)
         GLES20.glLinkProgram(program)
-        if (IntArray(1).also { GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, it, 0) }[0] == 0) {
+        val link = IntArray(1)
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, link, 0)
+        programLinkLog = GLES20.glGetProgramInfoLog(program).orEmpty()
+        if (link[0] == 0) {
+            programLinkStatus = "FAILED"
             GLES20.glDeleteProgram(program)
+            GLES20.glDeleteShader(vs)
+            GLES20.glDeleteShader(fs)
             return 0
         }
+        programLinkStatus = "OK"
         GLES20.glDeleteShader(vs)
         GLES20.glDeleteShader(fs)
         return program
     }
 
-    private fun compileShader(type: Int, source: String): Int? {
+    private fun compileShader(type: Int, source: String, stage: String): Int? {
         val shader = GLES20.glCreateShader(type)
         GLES20.glShaderSource(shader, source)
         GLES20.glCompileShader(shader)
-        if (IntArray(1).also { GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, it, 0) }[0] == 0) {
+        val compile = IntArray(1)
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compile, 0)
+        val log = GLES20.glGetShaderInfoLog(shader).orEmpty()
+        if (stage == "VERTEX") vertexShaderLog = log else fragmentShaderLog = log
+        if (compile[0] == 0) {
+            if (stage == "VERTEX") vertexShaderStatus = "FAILED" else fragmentShaderStatus = "FAILED"
             GLES20.glDeleteShader(shader)
             return null
         }
+        if (stage == "VERTEX") vertexShaderStatus = "OK" else fragmentShaderStatus = "OK"
         return shader
     }
 
