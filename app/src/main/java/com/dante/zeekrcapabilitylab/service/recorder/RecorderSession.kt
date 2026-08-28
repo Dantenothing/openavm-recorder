@@ -112,6 +112,9 @@ class RecorderSession(
     private var cameraRecoveryTimerRunnable: Runnable? = null
     private val vehicleAway = VehicleAwayStateMachine()
     private var vehicleAwayTimerRunnable: Runnable? = null
+    private var vehiclePowerReconciliationRunnable: Runnable? = null
+    private var lastVehiclePowerSnapshot: VehiclePowerSnapshot? = null
+    private var lastVehiclePowerSnapshotLogAtMs = 0L
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
     private val pendingSidecarFiles: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private var state = RecorderState()
@@ -186,6 +189,8 @@ class RecorderSession(
             cancelTimeout()
             cancelCameraRecoveryTimer()
             cancelVehicleAwayTimer()
+            cancelVehiclePowerReconciliation()
+            lastVehiclePowerSnapshot = null
             quarantineLeftoverPartials()
             updateState(
                 state.copy(
@@ -668,6 +673,17 @@ class RecorderSession(
         stopping = true
         startInFlight = false
 
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_STOP",
+            payload = mapOf(
+                "generation" to generation.toString(),
+                "finalizeReason" to finalizeReason,
+                "authorityReason" to authorityReason,
+                "vehicleAwayConfirmed" to vehicleAwayConfirmed.toString(),
+            ),
+        )
+
         // Session authority is invalidated before Camera/MediaRecorder teardown.
         // Every recovery callback below is generation-bound and therefore stale.
         if (vehicleAwayConfirmed) {
@@ -691,6 +707,7 @@ class RecorderSession(
         cancelTimeout()
         cancelCameraRecoveryTimer()
         cancelVehicleAwayTimer()
+        cancelVehiclePowerReconciliation()
         cancelPreviewReplacementWatchdog()
         if (currentPartial != null) {
             finalizeCurrentSegment(finalizeReason, forcedError)
@@ -710,40 +727,68 @@ class RecorderSession(
         }
     }
 
-    fun onAppForegroundChanged(foreground: Boolean) {
+    fun onVehiclePowerSnapshot(snapshot: VehiclePowerSnapshot, source: String) {
         postCamera {
-            val action = vehicleAway.onAppForeground(
-                manualSessionGeneration,
-                foreground,
-                SystemClock.elapsedRealtime(),
-            )
-            logVehicleAwaySignal("APP_FOREGROUND", foreground.toString(), action)
-            applyVehicleAwayAction(action)
+            reconcileVehiclePowerSnapshot(snapshot, source)
         }
     }
 
-    fun onScreenPowerChanged(screenOn: Boolean) {
-        postCamera {
-            val action = vehicleAway.onScreenPower(
-                manualSessionGeneration,
-                screenOn,
-                SystemClock.elapsedRealtime(),
+    private fun reconcileVehiclePowerSnapshot(
+        snapshot: VehiclePowerSnapshot = VehiclePowerSnapshotReader.read(context),
+        source: String,
+    ): Boolean {
+        val nowMs = SystemClock.elapsedRealtime()
+        val previous = lastVehiclePowerSnapshot
+        val action = vehicleAway.onPowerSnapshot(
+            generation = manualSessionGeneration,
+            appForeground = snapshot.appForeground,
+            interactive = snapshot.interactive,
+            mainDisplayOn = snapshot.mainDisplayOn,
+            nowMs = nowMs,
+        )
+        lastVehiclePowerSnapshot = snapshot
+        val changed = previous != snapshot
+        val heartbeatDue = nowMs - lastVehiclePowerSnapshotLogAtMs >= POWER_RECONCILIATION_LOG_INTERVAL_MS
+        if (changed || action != VehicleAwayAction.None || heartbeatDue || source == "CAMERA_LOSS") {
+            lastVehiclePowerSnapshotLogAtMs = nowMs
+            EventLogger.logEvent(
+                Categories.SYSTEM,
+                "RECORDER_POWER_SNAPSHOT_RECONCILED",
+                payload = vehicleAwayDiagnosticPayload() + mapOf(
+                    "source" to source,
+                    "interactive" to snapshot.interactive.toString(),
+                    "mainDisplayState" to snapshot.mainDisplayState,
+                    "decision" to vehicleAwayActionName(action),
+                ),
             )
-            logVehicleAwaySignal("SCREEN_ON", screenOn.toString(), action)
-            applyVehicleAwayAction(action)
         }
+        val stopped = applyVehicleAwayAction(action)
+        syncVehiclePowerReconciliation()
+        return stopped
     }
 
-    fun onMainDisplayPowerChanged(displayOn: Boolean) {
-        postCamera {
-            val action = vehicleAway.onMainDisplayPower(
-                manualSessionGeneration,
-                displayOn,
-                SystemClock.elapsedRealtime(),
-            )
-            logVehicleAwaySignal("MAIN_DISPLAY_ON", displayOn.toString(), action)
-            applyVehicleAwayAction(action)
+    private fun syncVehiclePowerReconciliation() {
+        val away = vehicleAway.snapshot
+        val shouldRun = !stopping && !releasing && !away.appForeground &&
+            away.phase in setOf(VehicleAwayPhase.ACTIVE, VehicleAwayPhase.PENDING)
+        if (!shouldRun) {
+            cancelVehiclePowerReconciliation()
+            return
         }
+        if (vehiclePowerReconciliationRunnable != null) return
+        val generation = manualSessionGeneration
+        val runnable = Runnable {
+            vehiclePowerReconciliationRunnable = null
+            if (generation != manualSessionGeneration || stopping || releasing) return@Runnable
+            reconcileVehiclePowerSnapshot(source = "BACKGROUND_RECONCILIATION")
+        }
+        vehiclePowerReconciliationRunnable = runnable
+        cameraHandler?.postDelayed(runnable, POWER_RECONCILIATION_INTERVAL_MS)
+    }
+
+    private fun cancelVehiclePowerReconciliation() {
+        vehiclePowerReconciliationRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        vehiclePowerReconciliationRunnable = null
     }
 
     fun bookmark() {
@@ -861,6 +906,7 @@ class RecorderSession(
         cancelTimeout()
         cancelCameraRecoveryTimer()
         cancelVehicleAwayTimer()
+        cancelVehiclePowerReconciliation()
         if (currentPartial != null) {
             finalizeCurrentSegment("STOP", null)
         } else {
@@ -2017,22 +2063,6 @@ class RecorderSession(
         )
     }
 
-    private fun logVehicleAwaySignal(
-        signal: String,
-        value: String,
-        action: VehicleAwayAction,
-    ) {
-        EventLogger.logEvent(
-            Categories.SYSTEM,
-            "RECORDER_VEHICLE_AWAY_SIGNAL",
-            payload = vehicleAwayDiagnosticPayload() + mapOf(
-                "signal" to signal,
-                "value" to value,
-                "decision" to vehicleAwayActionName(action),
-            ),
-        )
-    }
-
     private fun vehicleAwayActionName(action: VehicleAwayAction): String = when (action) {
         VehicleAwayAction.None -> "NONE"
         is VehicleAwayAction.Schedule -> "SCHEDULE"
@@ -2050,6 +2080,9 @@ class RecorderSession(
         startInFlight = false
         cameraOpenInFlight = false
         val token = manualSessionGeneration
+        // Camera loss is the most important arbitration point. Never route it using
+        // a snapshot cached before a missed power/display callback.
+        if (reconcileVehiclePowerSnapshot(source = "CAMERA_LOSS")) return
         val vehicleAwayAction = vehicleAway.onCameraLoss(token)
         if (vehicleAwayAction is VehicleAwayAction.Confirm) {
             EventLogger.logEvent(
@@ -2873,6 +2906,8 @@ class RecorderSession(
 
     private companion object {
         const val PREVIEW_REPLACEMENT_TIMEOUT_MS = 6_000L
+        const val POWER_RECONCILIATION_INTERVAL_MS = 5_000L
+        const val POWER_RECONCILIATION_LOG_INTERVAL_MS = 60_000L
     }
 
     /** Immutable per-segment evidence captured on the camera thread before async work. */

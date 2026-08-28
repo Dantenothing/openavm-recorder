@@ -66,11 +66,53 @@ class VehicleAwayStateMachine(
     }
 
     fun onAppForeground(generation: Long, foreground: Boolean, nowMs: Long): VehicleAwayAction {
+        return onPowerSnapshot(
+            generation = generation,
+            appForeground = foreground,
+            interactive = snapshot.screenOn,
+            mainDisplayOn = snapshot.mainDisplayOn,
+            nowMs = nowMs,
+        )
+    }
+
+    fun onScreenPower(generation: Long, screenOn: Boolean, nowMs: Long): VehicleAwayAction {
+        return onPowerSnapshot(
+            generation = generation,
+            appForeground = snapshot.appForeground,
+            interactive = screenOn,
+            mainDisplayOn = snapshot.mainDisplayOn,
+            nowMs = nowMs,
+        )
+    }
+
+    fun onMainDisplayPower(generation: Long, displayOn: Boolean, nowMs: Long): VehicleAwayAction {
+        return onPowerSnapshot(
+            generation = generation,
+            appForeground = snapshot.appForeground,
+            interactive = snapshot.screenOn,
+            mainDisplayOn = displayOn,
+            nowMs = nowMs,
+        )
+    }
+
+    /**
+     * Atomically reconciles cached lifecycle/power state with a fresh Android snapshot.
+     * Broadcasts and display callbacks are wake-up hints; this value is the decision input.
+     */
+    fun onPowerSnapshot(
+        generation: Long,
+        appForeground: Boolean,
+        interactive: Boolean,
+        mainDisplayOn: Boolean,
+        nowMs: Long,
+    ): VehicleAwayAction {
         if (!accepts(generation)) return VehicleAwayAction.None
-        val enteringBackground = snapshot.appForeground && !foreground
-        snapshot = if (foreground) {
+        val enteringBackground = snapshot.appForeground && !appForeground
+        snapshot = if (appForeground) {
             snapshot.copy(
                 appForeground = true,
+                screenOn = interactive,
+                mainDisplayOn = mainDisplayOn,
                 backgroundSinceMs = null,
                 backgroundPowerOffEvidence = false,
                 sawScreenOffWhileBackground = false,
@@ -80,25 +122,18 @@ class VehicleAwayStateMachine(
         } else {
             snapshot.copy(
                 appForeground = false,
+                screenOn = interactive,
+                mainDisplayOn = mainDisplayOn,
                 backgroundSinceMs = if (enteringBackground) nowMs else snapshot.backgroundSinceMs,
             )
         }
-        if (!foreground) latchBackgroundPowerOffEvidence(nowMs)
-        return if (foreground) cancelPending("APP_FOREGROUND") else armIfReady(nowMs)
-    }
-
-    fun onScreenPower(generation: Long, screenOn: Boolean, nowMs: Long): VehicleAwayAction {
-        if (!accepts(generation)) return VehicleAwayAction.None
-        snapshot = snapshot.copy(screenOn = screenOn)
-        if (!screenOn) latchBackgroundPowerOffEvidence(nowMs)
-        return if (screenOn) cancelPending("SCREEN_ON") else armIfReady(nowMs)
-    }
-
-    fun onMainDisplayPower(generation: Long, displayOn: Boolean, nowMs: Long): VehicleAwayAction {
-        if (!accepts(generation)) return VehicleAwayAction.None
-        snapshot = snapshot.copy(mainDisplayOn = displayOn)
-        if (!displayOn) latchBackgroundPowerOffEvidence(nowMs)
-        return if (displayOn) cancelPending("MAIN_DISPLAY_ON") else armIfReady(nowMs)
+        if (!appForeground) latchBackgroundPowerOffEvidence(nowMs)
+        return when {
+            appForeground -> cancelPending("APP_FOREGROUND")
+            interactive -> cancelPending("SCREEN_ON")
+            mainDisplayOn -> cancelPending("MAIN_DISPLAY_ON")
+            else -> armIfReady(nowMs)
+        }
     }
 
     fun onCameraLoss(generation: Long): VehicleAwayAction {

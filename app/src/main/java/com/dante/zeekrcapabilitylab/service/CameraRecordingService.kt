@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.IBinder
 import android.view.Surface
 import androidx.core.content.ContextCompat
+import com.dante.zeekrcapabilitylab.ZeekrApp
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommands
@@ -17,6 +18,7 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecorderNotification
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderSession
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderState
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
+import com.dante.zeekrcapabilitylab.service.recorder.VehiclePowerSnapshotReader
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -153,12 +155,6 @@ class CameraRecordingService : Service() {
 
         @Volatile
         private var instance: CameraRecordingService? = null
-        @Volatile
-        private var lastAppForeground = true
-        @Volatile
-        private var lastScreenOn = true
-        @Volatile
-        private var lastMainDisplayOn = true
 
         /** UI-visible Activity calls this after the user explicitly taps Start. */
         fun start(context: Context, config: RecorderConfig, previewSurface: Surface? = null) {
@@ -211,26 +207,15 @@ class CameraRecordingService : Service() {
 
         fun isRunning(): Boolean = instance != null
 
-        /** Application power/lifecycle signals; RecorderSession serializes them on its Camera thread. */
-        fun reportAppForeground(foreground: Boolean) {
-            lastAppForeground = foreground
-            instance?.session?.onAppForegroundChanged(foreground)
-        }
-
-        fun reportScreenPower(screenOn: Boolean) {
-            lastScreenOn = screenOn
-            instance?.session?.onScreenPowerChanged(screenOn)
-        }
-
-        fun reportMainDisplayPower(displayOn: Boolean) {
-            lastMainDisplayOn = displayOn
-            instance?.session?.onMainDisplayPowerChanged(displayOn)
+        /** Broadcasts/listeners are hints; every report is a fresh atomic Android snapshot. */
+        fun refreshVehiclePowerSnapshot(context: Context, source: String) {
+            val snapshot = VehiclePowerSnapshotReader.read(context.applicationContext)
+            instance?.session?.onVehiclePowerSnapshot(snapshot, source)
         }
 
         private fun replayVehicleEnvironment(session: RecorderSession) {
-            session.onAppForegroundChanged(lastAppForeground)
-            session.onScreenPowerChanged(lastScreenOn)
-            session.onMainDisplayPowerChanged(lastMainDisplayOn)
+            val snapshot = VehiclePowerSnapshotReader.read(ZeekrApp.appContext)
+            session.onVehiclePowerSnapshot(snapshot, "SERVICE_START_REPLAY")
         }
 
         /**
