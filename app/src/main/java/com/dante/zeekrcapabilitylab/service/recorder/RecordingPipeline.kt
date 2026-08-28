@@ -702,7 +702,15 @@ object GlFrameQueuePolicy {
     ): Boolean = active && !released && framePending && !renderQueued
 }
 
-/** Pure crop/rotation math in triangle-strip order: bottom-left, bottom-right, top-left, top-right. */
+/**
+ * Pure crop/rotation math in triangle-strip order: bottom-left, bottom-right,
+ * top-left, top-right.
+ *
+ * Crop rectangles use the top-origin coordinates shown by TextureView. The
+ * SurfaceTexture transform matrix expects pre-transform OpenGL coordinates, so
+ * Y must be inverted here before that matrix is applied by the shader. Without
+ * this conversion, lane 1 of a vertical composite is sampled as lane 4.
+ */
 object FrontTextureCoordinates {
     fun interleaved(crop: NormalizedCropRect, rotationDegrees: Int): FloatArray {
         require(crop.validate().isEmpty()) { "invalid crop" }
@@ -719,8 +727,10 @@ object FrontTextureCoordinates {
                 }
                 values[index * 4] = positions[index].first
                 values[index * 4 + 1] = positions[index].second
-                values[index * 4 + 2] = crop.left + rx * (crop.right - crop.left)
-                values[index * 4 + 3] = crop.top + ry * (crop.bottom - crop.top)
+                val cropX = crop.left + rx * (crop.right - crop.left)
+                val cropY = crop.top + ry * (crop.bottom - crop.top)
+                values[index * 4 + 2] = cropX
+                values[index * 4 + 3] = 1f - cropY
             }
         }
     }

@@ -87,6 +87,7 @@ class FrontFirstPolicyTest {
         assertEquals(FrontCropPolicy.FIXED_FRONT_LANE, selection.frontLane)
         assertEquals(1, selection.frontLane)
         assertEquals(FrontCropPolicy.FIXED_FRONT_ROTATION_DEGREES, selection.rotationDegrees)
+        assertEquals(0, selection.rotationDegrees)
         assertEquals(requireNotNull(FrontCropPolicy.laneCrop(composite, 1)), selection.crop)
         assertTrue(selection.matches(fingerprint, composite))
         assertNull(FrontCropPolicy.fixedFrontSelection(fingerprint, ProfileSize(1920, 1080)))
@@ -119,11 +120,37 @@ class FrontFirstPolicyTest {
         val rotated = FrontTextureCoordinates.interleaved(crop, 90)
 
         assertArrayEquals(
-            floatArrayOf(-1f, -1f, 0f, crop.bottom, 1f, -1f, 1f, crop.bottom),
-            zero.copyOfRange(0, 8),
+            floatArrayOf(
+                -1f, -1f, crop.left, 1f - crop.bottom,
+                1f, -1f, crop.right, 1f - crop.bottom,
+                -1f, 1f, crop.left, 1f - crop.top,
+                1f, 1f, crop.right, 1f - crop.top,
+            ),
+            zero,
+            0.0001f,
+        )
+        assertArrayEquals(
+            floatArrayOf(
+                -1f, -1f, crop.right, 1f - crop.bottom,
+                1f, -1f, crop.right, 1f - crop.top,
+                -1f, 1f, crop.left, 1f - crop.bottom,
+                1f, 1f, crop.left, 1f - crop.top,
+            ),
+            rotated,
             0.0001f,
         )
         assertFalse(zero.contentEquals(rotated))
+    }
+
+    @Test
+    fun frontLaneCropIsConvertedToSurfaceTexturePreTransformCoordinates() {
+        val front = requireNotNull(FrontCropPolicy.laneCrop(composite, 1))
+        val coordinates = FrontTextureCoordinates.interleaved(front, 0)
+
+        assertEquals(1f - front.bottom, coordinates[3], 0.000001f)
+        assertEquals(1f - front.top, coordinates[11], 0.000001f)
+        assertTrue(coordinates[3] > 0.7f)
+        assertTrue(coordinates[11] > coordinates[3])
     }
 
     @Test

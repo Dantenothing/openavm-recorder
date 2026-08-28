@@ -18,7 +18,7 @@ AVM Recorder records and displays the surround-view video stream exposed to a th
 The current alpha provides:
 
 - a 2×2 live view labelled Front, Rear, Left and Right;
-- explicit `Front only` and `360°` recording modes; front-only uses the fixed first/front lane and remains an experimental vehicle-test path;
+- explicit `Front only` and `360°` recording modes; front-only uses the fixed first/front lane and maps the encoder crop through the SurfaceTexture coordinate system so the recorded lane matches the preview, but remains an experimental vehicle-test path;
 - one-minute internal MP4 rollover files in the app's internal storage, presented as one recording for each explicit Start/Stop session;
 - protected/saved events that automatic cleanup does not remove;
 - a thumbnail-based recording library with multi-select and confirmed batch deletion;
