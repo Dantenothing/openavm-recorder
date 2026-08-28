@@ -149,6 +149,7 @@ fun SessionMediaLibraryScreen() {
     var sectionName by rememberSaveable { mutableStateOf(LibrarySection.ALL.name) }
     val section = LibrarySection.valueOf(sectionName)
     var detail by remember { mutableStateOf<MediaDetail?>(null) }
+    var exportDetail by remember { mutableStateOf<MediaDetail?>(null) }
     var playSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
     var sessionPlayback by remember { mutableStateOf<SessionPlaybackRequest?>(null) }
     var deleteSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
@@ -210,6 +211,7 @@ fun SessionMediaLibraryScreen() {
             detail = selected,
             onBack = { detail = null },
             onPlay = { index -> sessionPlayback = SessionPlaybackRequest(selected, index) },
+            onExport = { exportDetail = selected },
             onShare = { shareMediaFile(context, it.file) },
             onSave = { segment ->
                 scope.launch {
@@ -267,6 +269,7 @@ fun SessionMediaLibraryScreen() {
                 if (scanning) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
             }
         }
+        MediaExportQueueCard()
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -340,6 +343,10 @@ fun SessionMediaLibraryScreen() {
                 )
             }
         }
+    }
+
+    exportDetail?.let { selected ->
+        MediaExportDialog(segments = selected.segments, onDismiss = { exportDetail = null })
     }
 
     playSegment?.let { segment ->
@@ -602,6 +609,7 @@ private fun MediaDetailScreen(
     detail: MediaDetail,
     onBack: () -> Unit,
     onPlay: (Int) -> Unit,
+    onExport: () -> Unit,
     onShare: (IndexedMediaSegment) -> Unit,
     onSave: (IndexedMediaSegment) -> Unit,
     onNote: (IndexedMediaSegment) -> Unit,
@@ -639,8 +647,12 @@ private fun MediaDetailScreen(
                         ),
                     )
                 }
+                OutlinedButton(onClick = onExport, modifier = Modifier.padding(top = 8.dp)) {
+                    Text(t("Export recording clip", "导出录像片段"))
+                }
             }
         }
+        MediaExportQueueCard(Modifier.padding(top = 10.dp))
         Spacer(Modifier.height(16.dp))
         Text(t("Segment files", "分段文件"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         detail.segments.forEachIndexed { index, segment ->
