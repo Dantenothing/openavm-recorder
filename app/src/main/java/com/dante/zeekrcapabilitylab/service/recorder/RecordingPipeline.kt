@@ -47,6 +47,8 @@ data class PipelineRuntimeDiagnostics(
     val released: Boolean,
     val inputFramesReceived: Long? = null,
     val inputFramesRendered: Long? = null,
+    val inputFramePending: Boolean? = null,
+    val renderQueued: Boolean? = null,
     val muxerStarted: Boolean? = null,
     val drainThreadAlive: Boolean? = null,
     val runtimeFailure: String? = null,
@@ -58,6 +60,8 @@ data class PipelineRuntimeDiagnostics(
         put("${prefix}Released", released.toString())
         inputFramesReceived?.let { put("${prefix}InputFrames", it.toString()) }
         inputFramesRendered?.let { put("${prefix}RenderedFrames", it.toString()) }
+        inputFramePending?.let { put("${prefix}InputFramePending", it.toString()) }
+        renderQueued?.let { put("${prefix}RenderQueued", it.toString()) }
         muxerStarted?.let { put("${prefix}MuxerStarted", it.toString()) }
         drainThreadAlive?.let { put("${prefix}DrainAlive", it.toString()) }
         runtimeFailure?.let { put("${prefix}Failure", it) }
@@ -210,6 +214,8 @@ private class FrontCropCodecPipeline(
             return encoderDiagnostics.copy(
                 inputFramesReceived = bridgeDiagnostics.receivedFrames,
                 inputFramesRendered = bridgeDiagnostics.renderedFrames,
+                inputFramePending = bridgeDiagnostics.framePending,
+                renderQueued = bridgeDiagnostics.renderQueued,
                 runtimeFailure = bridgeDiagnostics.runtimeFailure ?: encoderDiagnostics.runtimeFailure,
             )
         }
@@ -403,6 +409,7 @@ private class GlCropBridge(
     private val renderQueued = AtomicBoolean(false)
     private val receivedFrames = AtomicLong(0)
     private val renderedFrames = AtomicLong(0)
+    private val framePending = AtomicBoolean(false)
     private val runtimeFailure = AtomicReference<String?>(null)
     @Volatile private var active = false
     private var eglDisplay = EGL14.EGL_NO_DISPLAY
@@ -418,6 +425,8 @@ private class GlCropBridge(
         get() = GlBridgeDiagnostics(
             receivedFrames = receivedFrames.get(),
             renderedFrames = renderedFrames.get(),
+            framePending = framePending.get(),
+            renderQueued = renderQueued.get(),
             runtimeFailure = runtimeFailure.get(),
         )
 
@@ -441,7 +450,21 @@ private class GlCropBridge(
     }
 
     fun start() {
-        handler.post { active = true }
+        val activated = CountDownLatch(1)
+        val activation = Runnable {
+            try {
+                active = true
+                schedulePendingFrame()
+            } finally {
+                activated.countDown()
+            }
+        }
+        if (thread.looper.thread === Thread.currentThread()) {
+            activation.run()
+            return
+        }
+        check(handler.post(activation)) { "FRONT_CROP_GL_START_REJECTED" }
+        check(activated.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS)) { "FRONT_CROP_GL_START_TIMEOUT" }
     }
 
     fun stop() {
@@ -510,10 +533,30 @@ private class GlCropBridge(
 
     private fun queueLatestFrame() {
         receivedFrames.incrementAndGet()
-        if (!active || released.get() || !renderQueued.compareAndSet(false, true)) return
-        handler.post {
+        framePending.set(true)
+        schedulePendingFrame()
+    }
+
+    /**
+     * Keeps one latest-frame token even when the first callback beats [start].
+     * SurfaceTexture may stop notifying until that pending buffer is consumed,
+     * so dropping the inactive callback can otherwise wedge the producer forever.
+     */
+    private fun schedulePendingFrame() {
+        if (!GlFrameQueuePolicy.shouldSchedule(
+                active = active,
+                released = released.get(),
+                framePending = framePending.get(),
+                renderQueued = renderQueued.get(),
+            ) || !renderQueued.compareAndSet(false, true)
+        ) {
+            return
+        }
+        val posted = handler.post {
             try {
-                if (active && !released.get()) renderFrame()
+                if (active && !released.get() && framePending.compareAndSet(true, false)) {
+                    renderFrame()
+                }
             } catch (t: Throwable) {
                 active = false
                 val message = "FRONT_CROP_GL_RUNTIME_ERROR: ${t.message ?: t.javaClass.simpleName}"
@@ -521,6 +564,15 @@ private class GlCropBridge(
                 onRuntimeError(message)
             } finally {
                 renderQueued.set(false)
+                if (framePending.get()) schedulePendingFrame()
+            }
+        }
+        if (!posted) {
+            renderQueued.set(false)
+            if (!released.get()) {
+                val message = "FRONT_CROP_GL_RENDER_REJECTED"
+                runtimeFailure.compareAndSet(null, message)
+                onRuntimeError(message)
             }
         }
     }
@@ -609,6 +661,7 @@ private class GlCropBridge(
 
     private companion object {
         const val EGL_RECORDABLE_ANDROID = 0x3142
+        const val START_TIMEOUT_MS = 2_000L
         const val VERTEX_SHADER = """
             attribute vec4 aPosition;
             attribute vec2 aTextureCoord;
@@ -634,8 +687,20 @@ private class GlCropBridge(
 private data class GlBridgeDiagnostics(
     val receivedFrames: Long,
     val renderedFrames: Long,
+    val framePending: Boolean,
+    val renderQueued: Boolean,
     val runtimeFailure: String?,
 )
+
+/** Pure guard for the single-token latest-frame queue used by [GlCropBridge]. */
+object GlFrameQueuePolicy {
+    fun shouldSchedule(
+        active: Boolean,
+        released: Boolean,
+        framePending: Boolean,
+        renderQueued: Boolean,
+    ): Boolean = active && !released && framePending && !renderQueued
+}
 
 /** Pure crop/rotation math in triangle-strip order: bottom-left, bottom-right, top-left, top-right. */
 object FrontTextureCoordinates {
