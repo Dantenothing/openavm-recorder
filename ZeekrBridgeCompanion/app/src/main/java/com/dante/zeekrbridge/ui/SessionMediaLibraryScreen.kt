@@ -346,6 +346,7 @@ fun SessionMediaLibraryScreen() {
         MediaPlaybackDialog(
             file = segment.file,
             laneLabels = playbackLabels(segment),
+            laneOrder = segment.playbackLaneOrder,
             onDismiss = { playSegment = null },
         )
     }
@@ -360,7 +361,7 @@ fun SessionMediaLibraryScreen() {
     deleteSegment?.let { segment ->
         AlertDialog(
             onDismissRequest = { deleteSegment = null },
-            title = { Text(t("Delete this segment?", "删除这个片段？")) },
+            title = { Text(t("Delete this segment?", "删除这个分段？")) },
             text = { Text(t("The MP4 and its metadata will move to OpenAVM trash.", "MP4 和对应元数据将移入 OpenAVM 回收站。")) },
             confirmButton = {
                 TextButton(onClick = {
@@ -382,12 +383,12 @@ fun SessionMediaLibraryScreen() {
                     if (request.isEvent) {
                         t(
                             "${request.logicalCount} events reference ${request.plan.physicalVideoCount} physical videos. Moving them to trash can also remove those segments from their Sessions.",
-                            "${request.logicalCount} 个事件引用 ${request.plan.physicalVideoCount} 个物理视频。移入回收站后，这些片段也会从对应 Session 中消失。",
+                            "${request.logicalCount} 个事件引用 ${request.plan.physicalVideoCount} 个分段文件。移入回收站后，这些分段也会从对应录像片段中消失。",
                         )
                     } else {
                         t(
                             "${request.logicalCount} Sessions contain ${request.plan.physicalVideoCount} unique physical videos. MP4 files and metadata will move to OpenAVM trash.",
-                            "${request.logicalCount} 个 Session 共包含 ${request.plan.physicalVideoCount} 个去重后的物理视频。MP4 和元数据将移入 OpenAVM 回收站。",
+                            "${request.logicalCount} 个录像片段共包含 ${request.plan.physicalVideoCount} 个分段文件。MP4 和元数据将移入 OpenAVM 回收站。",
                         )
                     },
                 )
@@ -415,7 +416,7 @@ fun SessionMediaLibraryScreen() {
     noteSegment?.let { segment ->
         AlertDialog(
             onDismissRequest = { noteSegment = null },
-            title = { Text(t("Segment note", "片段备注")) },
+            title = { Text(t("Segment note", "分段备注")) },
             text = {
                 OutlinedTextField(
                     value = noteText,
@@ -560,7 +561,7 @@ private fun LibraryCard(
                 Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(formatClock(startedAt), style = MaterialTheme.typography.bodySmall)
                 Text(
-                    "${sourceLabel(source)} · ${formatDuration(durationMs)} · ${t("$segmentCount segments", "$segmentCount 个片段")}",
+                    "${sourceLabel(source)} · ${formatDuration(durationMs)} · ${t("$segmentCount segments", "$segmentCount 个分段")}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -610,7 +611,7 @@ private fun MediaDetailScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, t("Back", "返回")) }
             Text(
-                if (detail.isEvent) t("Incident", "事件录像") else t("Recording session", "录像 Session"),
+                if (detail.isEvent) t("Incident", "事件录像") else t("Recording clip", "录像片段"),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -624,7 +625,7 @@ private fun MediaDetailScreen(
                 Text(
                     t(
                         "${detail.segments.size} physical segments · ${formatMediaBytes(detail.sizeBytes)}",
-                        "${detail.segments.size} 个物理片段 · ${formatMediaBytes(detail.sizeBytes)}",
+                        "${detail.segments.size} 个分段文件 · ${formatMediaBytes(detail.sizeBytes)}",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -632,13 +633,16 @@ private fun MediaDetailScreen(
                 Button(onClick = { onPlay(0) }, modifier = Modifier.padding(top = 10.dp)) {
                     Text(
                         if (detail.isEvent) t("Play incident continuously", "连续播放事件")
-                        else t("Play complete Session", "播放完整 Session"),
+                        else t(
+                            "Play ${formatPlaybackRange(detail.segments)}",
+                            "播放 ${formatPlaybackRange(detail.segments)}",
+                        ),
                     )
                 }
             }
         }
         Spacer(Modifier.height(16.dp))
-        Text(t("Included segments", "包含的片段"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(t("Segment files", "分段文件"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         detail.segments.forEachIndexed { index, segment ->
             SegmentCard(
                 index = index,
@@ -666,7 +670,7 @@ private fun SegmentCard(
 ) {
     Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Column(Modifier.padding(12.dp)) {
-            Text(t("Segment ${index + 1}", "片段 ${index + 1}"), fontWeight = FontWeight.SemiBold)
+            Text(t("Segment ${index + 1}", "分段 ${index + 1}"), fontWeight = FontWeight.SemiBold)
             Text(
                 "${formatClock(segment.startedAtEpochMs)} · ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}",
                 style = MaterialTheme.typography.bodySmall,
@@ -680,7 +684,7 @@ private fun SegmentCard(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 TextButton(onClick = onNote) { Text(t("Note", "备注")) }
-                TextButton(onClick = onDelete) { Text(t("Delete segment", "删除片段")) }
+                TextButton(onClick = onDelete) { Text(t("Delete segment", "删除分段")) }
             }
         }
     }

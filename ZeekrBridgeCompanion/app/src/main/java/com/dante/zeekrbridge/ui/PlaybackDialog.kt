@@ -56,6 +56,8 @@ import com.dante.zeekrbridge.player.FourLaneLensMode
 import com.dante.zeekrbridge.player.PlaybackTimeline
 import com.dante.zeekrbridge.player.canPreparePlayback
 import java.io.File
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.delay
 
 private data class PlaybackEntry(
@@ -65,6 +67,7 @@ private data class PlaybackEntry(
     val sourceRole: IndexedSourceRole,
     val layoutKind: IndexedLayoutKind,
     val laneLabels: List<String>,
+    val laneOrder: List<Int>,
     val originalWidth: Int?,
     val originalHeight: Int?,
 )
@@ -73,6 +76,7 @@ private data class PlaybackEntry(
 fun MediaPlaybackDialog(
     file: File,
     laneLabels: List<String>,
+    laneOrder: List<Int> = if (laneLabels.size == 4) listOf(4, 3, 2, 1) else emptyList(),
     onDismiss: () -> Unit,
 ) {
     PlaylistPlaybackDialog(
@@ -85,6 +89,7 @@ fun MediaPlaybackDialog(
                 sourceRole = IndexedSourceRole.UNKNOWN,
                 layoutKind = if (laneLabels.size == 4) IndexedLayoutKind.FOUR_LANE_V1 else IndexedLayoutKind.UNKNOWN,
                 laneLabels = laneLabels,
+                laneOrder = laneOrder,
                 originalWidth = null,
                 originalHeight = null,
             ),
@@ -110,13 +115,15 @@ fun MediaSessionPlaybackDialog(
                 sourceRole = segment.sourceRole,
                 layoutKind = segment.layoutKind,
                 laneLabels = segment.playbackLabels,
+                laneOrder = segment.playbackLaneOrder,
                 originalWidth = segment.originalWidth,
                 originalHeight = segment.originalHeight,
             )
         }
     }
+    val range = remember(segments) { formatPlaybackRange(segments) }
     PlaylistPlaybackDialog(
-        title = if (isEvent) t("Incident playback", "事件连续播放") else t("Session playback", "Session 连续播放"),
+        title = if (isEvent) "${t("Incident", "事件")} · $range" else range,
         entries = entries,
         initialIndex = initialIndex,
         onDismiss = onDismiss,
@@ -145,7 +152,7 @@ private fun PlaylistPlaybackDialog(
             } else {
                 t(
                     "This session contains mixed camera layouts and cannot be played continuously.",
-                    "这个 Session 包含不同摄像头布局，无法安全连续播放。",
+                    "这个录像片段包含不同摄像头布局，无法安全连续播放。",
                 )
             },
             onDismiss = onDismiss,
@@ -244,7 +251,7 @@ private fun PlaylistPlaybackDialog(
                     Text(
                         t(
                             "$missingCount missing segments were skipped.",
-                            "已跳过 $missingCount 个缺失片段。",
+                            "已跳过 $missingCount 个缺失分段。",
                         ),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
@@ -316,23 +323,13 @@ private fun PlaylistPlaybackDialog(
                                 color = Color.Black.copy(alpha = 0.55f),
                                 shape = MaterialTheme.shapes.small,
                             ) {
-                                TextButton(onClick = { mode = FourLaneGlView.MODE_GRID }) {
-                                    Text(t("All views", "四宫格"), color = Color.White)
-                                }
-                            }
-                            labels.getOrNull(mode - FourLaneGlView.MODE_LANE_1)?.let { label ->
-                                MaterialSurface(
-                                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    shape = MaterialTheme.shapes.small,
-                                ) {
-                                    Text(
-                                        label,
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    )
-                                }
+                                val selectedSlot = first.laneOrder.indexOf(mode)
+                                Text(
+                                    labels.getOrNull(selectedSlot) ?: t("View", "视角"),
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
                             }
                         }
                         if (!surroundFirstFrameRendered) {
@@ -355,8 +352,8 @@ private fun PlaylistPlaybackDialog(
                             t("Tap a view to enlarge", "点击任一画面放大")
                         } else {
                             t(
-                                "Pinch to zoom · Drag to move · Double-tap to reset",
-                                "双指缩放 · 拖动查看 · 双击复位",
+                                "Tap to return · Pinch to zoom · Drag to move · Double-tap to reset",
+                                "单击返回四宫格 · 双指缩放 · 拖动查看 · 双击复位",
                             )
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -452,8 +449,8 @@ private fun FourLaneVideoSurface(
     val currentOnModeChanged by rememberUpdatedState(onModeChanged)
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
     val currentOnRenderError by rememberUpdatedState(onRenderError)
-    LaunchedEffect(mode, lensMode) {
-        glView.setMode(mode)
+    LaunchedEffect(mode, lensMode, entry.laneOrder) {
+        glView.setMode(mode, entry.laneOrder)
         glView.setLensMode(lensMode)
         glView.requestRender()
     }
@@ -557,6 +554,23 @@ private fun readVideoSize(entry: PlaybackEntry): Pair<Int, Int> {
     }
     return detected.takeIf { it.first > 0 && it.second > 0 }
         ?: ((entry.originalWidth ?: 0) to (entry.originalHeight ?: 0))
+}
+
+internal fun formatPlaybackRange(segments: List<IndexedMediaSegment>): String {
+    if (segments.isEmpty()) return "—"
+    val start = segments.minOf { it.startedAtEpochMs }
+    val end = segments.maxOf { segment ->
+        segment.stoppedAtEpochMs
+            ?: (segment.startedAtEpochMs + segment.durationMs.coerceAtLeast(0L))
+    }.coerceAtLeast(start)
+    val dateFormat = DateFormat.getDateInstance(DateFormat.SHORT)
+    val sameDay = dateFormat.format(Date(start)) == dateFormat.format(Date(end))
+    val formatter = if (sameDay) {
+        DateFormat.getTimeInstance(DateFormat.SHORT)
+    } else {
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+    }
+    return "${formatter.format(Date(start))}–${formatter.format(Date(end))}"
 }
 
 private fun formatPlayerTime(milliseconds: Long): String {

@@ -73,10 +73,14 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
             override fun onDown(event: MotionEvent): Boolean = true
 
             override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
-                if (currentMode != MODE_GRID) return false
-                val lane = laneForGridTap(event.x, event.y, width, height, currentOrder) ?: return false
-                setMode(lane, currentOrder.toList())
-                modeChangedCallback?.invoke(lane)
+                val tappedLane = if (currentMode == MODE_GRID) {
+                    laneForGridTap(event.x, event.y, width, height, currentOrder) ?: return false
+                } else {
+                    currentMode
+                }
+                val nextMode = toggleFourLaneMode(currentMode, tappedLane)
+                setMode(nextMode, currentOrder.toList())
+                modeChangedCallback?.invoke(nextMode)
                 performClick()
                 return true
             }
@@ -234,8 +238,7 @@ private class FourLaneRenderer(
     private var pendingSurfaceTextureEmit: ((SurfaceTexture) -> Unit)? = null
     private var firstFrameDrawn = false
     private var textureReady = false
-    @Volatile
-    private var frameAvailable = false
+    private val frameSignal = SurfaceFrameSignal()
     @Volatile
     private var surfaceFrameCount = 0L
     @Volatile
@@ -282,7 +285,7 @@ private class FourLaneRenderer(
         this.source = source
         firstFrameDrawn = false
         textureReady = false
-        frameAvailable = false
+        frameSignal.clear()
         surfaceFrameCount = 0L
         lastExitReason = if (source == null) "SOURCE_CLEARED" else "SOURCE_SET"
         emitDiagnostic(force = true)
@@ -368,7 +371,7 @@ private class FourLaneRenderer(
         val st = SurfaceTexture(texId)
         st.setOnFrameAvailableListener({
             surfaceFrameCount += 1L
-            frameAvailable = true
+            frameSignal.markAvailable()
             onSurfaceFrame?.invoke(surfaceFrameCount)
             onFrameReady()
         }, null)
@@ -432,11 +435,12 @@ private class FourLaneRenderer(
             finishDraw("PROGRAM_ZERO")
             return
         }
-        if (frameAvailable) {
+        // Consume before updateTexImage(). If the producer posts another frame
+        // during the update, its notification remains pending for the next draw.
+        if (frameSignal.consumePending()) {
             try {
                 tex.updateTexImage()
                 tex.getTransformMatrix(texMatrix)
-                frameAvailable = false
                 textureReady = true
                 updateTexImageSuccessCount += 1L
             } catch (t: Throwable) {

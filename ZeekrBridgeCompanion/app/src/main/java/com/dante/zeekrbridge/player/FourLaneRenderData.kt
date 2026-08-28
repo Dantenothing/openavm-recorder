@@ -3,6 +3,7 @@ package com.dante.zeekrbridge.player
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.tan
 
 internal enum class FourLaneLensMode {
@@ -39,7 +40,9 @@ internal data class FourLaneViewport(
             zoom = nextZoom,
             centerX = (centerX - panXPx * 2f / viewWidth / nextZoom)
                 .coerceIn(-maxCenter, maxCenter),
-            centerY = (centerY - panYPx * 2f / viewHeight / nextZoom)
+            // SurfaceTexture's transform flips the source Y axis. Match the
+            // user's finger instead of mirroring the horizontal pan formula.
+            centerY = (centerY + panYPx * 2f / viewHeight / nextZoom)
                 .coerceIn(-maxCenter, maxCenter),
         )
     }
@@ -47,6 +50,27 @@ internal data class FourLaneViewport(
     companion object {
         const val MIN_ZOOM = 1f
         const val MAX_ZOOM = 3f
+    }
+}
+
+internal fun toggleFourLaneMode(currentMode: Int, tappedLane: Int): Int =
+    if (currentMode == tappedLane) FourLaneGlView.MODE_GRID else tappedLane
+
+/**
+ * Coalesces SurfaceTexture notifications without losing a frame that arrives
+ * while the GL thread is consuming the previous notification.
+ */
+internal class SurfaceFrameSignal {
+    private val pending = AtomicBoolean(false)
+
+    fun markAvailable() {
+        pending.set(true)
+    }
+
+    fun consumePending(): Boolean = pending.getAndSet(false)
+
+    fun clear() {
+        pending.set(false)
     }
 }
 

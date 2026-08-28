@@ -2,6 +2,7 @@ package com.dante.zeekrbridge.player
 
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -59,6 +60,16 @@ class FourLaneRenderDataTest {
     }
 
     @Test
+    fun gridTapUsesFrozenSourceOrderAndSecondTapReturnsToGrid() {
+        val reversedSourceOrder = intArrayOf(4, 3, 2, 1)
+
+        val frontSourceLane = laneForGridTap(20f, 20f, 100, 100, reversedSourceOrder)
+        assertEquals(4, frontSourceLane)
+        assertEquals(4, toggleFourLaneMode(currentMode = 0, tappedLane = frontSourceLane!!))
+        assertEquals(0, toggleFourLaneMode(currentMode = 4, tappedLane = frontSourceLane))
+    }
+
+    @Test
     fun enlargedViewportZoomsPansAndStaysInsideSourceBounds() {
         val zoomed = FourLaneViewport().applyGesture(
             zoomChange = 2f,
@@ -70,12 +81,12 @@ class FourLaneRenderDataTest {
 
         assertEquals(2f, zoomed.zoom, 0.000001f)
         assertEquals(-0.25f, zoomed.centerX, 0.000001f)
-        assertEquals(0.25f, zoomed.centerY, 0.000001f)
+        assertEquals(-0.25f, zoomed.centerY, 0.000001f)
 
         val clamped = zoomed.applyGesture(10f, 10_000f, -10_000f, 100, 100)
         assertEquals(3f, clamped.zoom, 0.000001f)
         assertEquals(-(1f - 1f / 3f), clamped.centerX, 0.000001f)
-        assertEquals(1f - 1f / 3f, clamped.centerY, 0.000001f)
+        assertEquals(-(1f - 1f / 3f), clamped.centerY, 0.000001f)
     }
 
     @Test
@@ -87,5 +98,17 @@ class FourLaneRenderDataTest {
         assertEquals(0.50f, correction.centerX, 0.000001f)
         assertEquals(0.47f, correction.centerY, 0.000001f)
         assertTrue(correction.halfFovTangent > 1f)
+    }
+
+    @Test
+    fun frameArrivingDuringDrawRemainsPendingForTheNextDraw() {
+        val signal = SurfaceFrameSignal()
+        signal.markAvailable()
+
+        assertTrue(signal.consumePending())
+        signal.markAvailable()
+
+        assertTrue(signal.consumePending())
+        assertFalse(signal.consumePending())
     }
 }

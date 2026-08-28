@@ -21,6 +21,8 @@ data class IndexedLane(
     val y0: Int,
     val y1: Int,
     val displayOrder: Int,
+    /** One-based position inside the raw composite file. */
+    val lane: Int = 0,
 )
 
 data class IndexedMediaSegment(
@@ -49,6 +51,17 @@ data class IndexedMediaSegment(
         get() = lanes.sortedBy { it.displayOrder }.map { it.label }.takeIf { it.size == 4 }
             ?: if (layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
                 listOf("Front", "Rear", "Left", "Right")
+            } else {
+                emptyList()
+            }
+    val playbackLaneOrder: List<Int>
+        get() = lanes.sortedBy { it.displayOrder }
+            .map { it.lane }
+            .takeIf { it.size == 4 && it.toSet() == setOf(1, 2, 3, 4) }
+            // Legacy Zeekr 7X recordings predate frozen lane metadata. Their
+            // physical composite is Right, Left, Rear, Front.
+            ?: if (layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
+                listOf(4, 3, 2, 1)
             } else {
                 emptyList()
             }
@@ -187,9 +200,25 @@ object MediaIndexScanner {
                     y0 = lane.long("y0")?.toInt() ?: return@runCatching null,
                     y1 = lane.long("y1")?.toInt() ?: return@runCatching null,
                     displayOrder = lane.long("displayOrder")?.toInt() ?: 0,
+                    lane = lane.long("lane")?.toInt() ?: 0,
                 )
             }.getOrNull()
-        }.sortedBy { it.displayOrder }
+        }.let(::restoreMissingLaneNumbers).sortedBy { it.displayOrder }
+    }
+
+    /** Older sidecars stored crop coordinates but not the explicit lane index. */
+    private fun restoreMissingLaneNumbers(lanes: List<IndexedLane>): List<IndexedLane> {
+        if (lanes.size != 4) return lanes
+        if (lanes.map { it.lane }.toSet() == setOf(1, 2, 3, 4)) return lanes
+        val xSpread = lanes.maxOf { it.x0 } - lanes.minOf { it.x0 }
+        val ySpread = lanes.maxOf { it.y0 } - lanes.minOf { it.y0 }
+        val sourceOrder = lanes.indices.sortedBy { index ->
+            if (ySpread >= xSpread) lanes[index].y0 else lanes[index].x0
+        }
+        val sourceLaneByIndex = sourceOrder.mapIndexed { sourceIndex, originalIndex ->
+            originalIndex to sourceIndex + 1
+        }.toMap()
+        return lanes.mapIndexed { index, lane -> lane.copy(lane = sourceLaneByIndex.getValue(index)) }
     }
 
     private fun durationBetween(start: Long, stop: Long?): Long? =
