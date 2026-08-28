@@ -29,6 +29,8 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     private val glRenderer = FourLaneRenderer { requestRender() }
     private var sourceCallback: ((SurfaceTexture) -> Unit)? = null
     private var firstFrameCallback: (() -> Unit)? = null
+    private var surfaceFrameCallback: ((Long) -> Unit)? = null
+    private var glMaxTextureCallback: ((Int) -> Unit)? = null
     private var renderErrorCallback: ((String) -> Unit)? = null
 
     init {
@@ -54,12 +56,18 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
 
     fun setPlaybackCallbacks(
         onFirstFrame: (() -> Unit)?,
+        onSurfaceFrame: ((Long) -> Unit)?,
+        onGlMaxTextureSize: ((Int) -> Unit)?,
         onRenderError: ((String) -> Unit)?,
     ) {
         firstFrameCallback = onFirstFrame
+        surfaceFrameCallback = onSurfaceFrame
+        glMaxTextureCallback = onGlMaxTextureSize
         renderErrorCallback = onRenderError
         glRenderer.setCallbacks(
             onFirstFrame = { mainHandler.post { firstFrameCallback?.invoke() } },
+            onSurfaceFrame = { count -> mainHandler.post { surfaceFrameCallback?.invoke(count) } },
+            onGlMaxTextureSize = { size -> mainHandler.post { glMaxTextureCallback?.invoke(size) } },
             onRenderError = { message -> mainHandler.post { renderErrorCallback?.invoke(message) } },
         )
     }
@@ -108,15 +116,29 @@ private class FourLaneRenderer(
     private var textureReady = false
     @Volatile
     private var frameAvailable = false
+    @Volatile
+    private var surfaceFrameCount = 0L
+    @Volatile
+    private var glMaxTextureSize = 0
     private var onFirstFrame: (() -> Unit)? = null
+    private var onSurfaceFrame: ((Long) -> Unit)? = null
+    private var onGlMaxTextureSize: ((Int) -> Unit)? = null
     private var onRenderError: ((String) -> Unit)? = null
+    private var lastRenderError: String? = null
 
     fun setCallbacks(
         onFirstFrame: (() -> Unit)?,
+        onSurfaceFrame: ((Long) -> Unit)?,
+        onGlMaxTextureSize: ((Int) -> Unit)?,
         onRenderError: ((String) -> Unit)?,
     ) {
         this.onFirstFrame = onFirstFrame
+        this.onSurfaceFrame = onSurfaceFrame
+        this.onGlMaxTextureSize = onGlMaxTextureSize
         this.onRenderError = onRenderError
+        if (surfaceFrameCount > 0L) onSurfaceFrame?.invoke(surfaceFrameCount)
+        if (glMaxTextureSize > 0) onGlMaxTextureSize?.invoke(glMaxTextureSize)
+        lastRenderError?.let { onRenderError?.invoke(it) }
     }
 
     fun setSource(source: SurfaceTexture?) {
@@ -124,6 +146,7 @@ private class FourLaneRenderer(
         firstFrameDrawn = false
         textureReady = false
         frameAvailable = false
+        surfaceFrameCount = 0L
     }
 
     fun setMode(mode: Int, order: List<Int>) {
@@ -173,7 +196,9 @@ private class FourLaneRenderer(
         }
         val st = SurfaceTexture(texId)
         st.setOnFrameAvailableListener({
+            surfaceFrameCount += 1L
             frameAvailable = true
+            onSurfaceFrame?.invoke(surfaceFrameCount)
             onFrameReady()
         }, null)
         created = st
@@ -181,6 +206,10 @@ private class FourLaneRenderer(
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        val maxTexture = IntArray(1)
+        GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTexture, 0)
+        glMaxTextureSize = maxTexture[0]
+        onGlMaxTextureSize?.invoke(glMaxTextureSize)
         program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
         uCellRect = GLES20.glGetUniformLocation(program, "uCellRect")
@@ -188,7 +217,7 @@ private class FourLaneRenderer(
         uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
         uTexture = GLES20.glGetUniformLocation(program, "uTexture")
         GLES20.glClearColor(0f, 0f, 0f, 1f)
-        if (program == 0) onRenderError?.invoke("GL shader initialization failed")
+        if (program == 0) reportRenderError("GL shader initialization failed")
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -207,7 +236,8 @@ private class FourLaneRenderer(
                 tex.getTransformMatrix(texMatrix)
                 frameAvailable = false
                 textureReady = true
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
+                reportRenderError("updateTexImage failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
                 return
             }
         }
@@ -234,7 +264,7 @@ private class FourLaneRenderer(
         GLES20.glDisableVertexAttribArray(aPosition)
         val glError = GLES20.glGetError()
         if (glError != GLES20.GL_NO_ERROR) {
-            onRenderError?.invoke("GL error 0x${glError.toString(16)}")
+            reportRenderError("GL error 0x${glError.toString(16)}")
         } else if (!firstFrameDrawn) {
             firstFrameDrawn = true
             onFirstFrame?.invoke()
@@ -274,6 +304,12 @@ private class FourLaneRenderer(
 
         vertexData.position(0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+    }
+
+    private fun reportRenderError(message: String) {
+        if (lastRenderError == message) return
+        lastRenderError = message
+        onRenderError?.invoke(message)
     }
 
     private fun createProgram(vertex: String, fragment: String): Int {

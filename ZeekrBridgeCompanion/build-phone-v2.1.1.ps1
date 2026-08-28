@@ -24,7 +24,7 @@ try {
 
     $sourceApk = Join-Path $projectRoot "app\build\outputs\apk\debug\app-debug.apk"
     $artifactDir = Join-Path (Split-Path -Parent $projectRoot) "release-artifacts"
-    $artifactApk = Join-Path $artifactDir "OpenAVM-Companion-v2.2.3.apk"
+    $artifactApk = Join-Path $artifactDir "OpenAVM-Companion-v2.2.4-diagnostic.apk"
     New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
     Copy-Item -LiteralPath $sourceApk -Destination $artifactApk -Force
 
