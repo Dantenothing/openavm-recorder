@@ -132,8 +132,10 @@ private class FourLaneRenderer(
     // can accept playback while leaving this view permanently black.
     private val vertexData = createFourLaneVertexBuffer()
     private val texMatrix = FloatArray(16)
+    private val glContextGate = FourLaneGlContextGate()
     private var texId = 0
     private var created: SurfaceTexture? = null
+    private var pendingSurfaceTextureEmit: ((SurfaceTexture) -> Unit)? = null
     private var firstFrameDrawn = false
     private var textureReady = false
     @Volatile
@@ -209,32 +211,47 @@ private class FourLaneRenderer(
             emit(it)
             return
         }
-        if (texId == 0) {
-            val ids = IntArray(1)
-            GLES20.glGenTextures(1, ids, 0)
-            texId = ids[0]
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
-            GLES20.glTexParameteri(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
-                GLES20.GL_TEXTURE_MIN_FILTER,
-                GLES20.GL_LINEAR,
-            )
-            GLES20.glTexParameteri(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
-                GLES20.GL_TEXTURE_MAG_FILTER,
-                GLES20.GL_LINEAR,
-            )
-            GLES20.glTexParameteri(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
-                GLES20.GL_TEXTURE_WRAP_S,
-                GLES20.GL_CLAMP_TO_EDGE,
-            )
-            GLES20.glTexParameteri(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
-                GLES20.GL_TEXTURE_WRAP_T,
-                GLES20.GL_CLAMP_TO_EDGE,
-            )
+        pendingSurfaceTextureEmit = emit
+        if (!glContextGate.requestTextureCreation()) {
+            lastExitReason = "TEXTURE_WAITING_FOR_GL_CONTEXT"
+            emitDiagnostic(force = true)
+            return
         }
+        createAndDeliverSurfaceTexture()
+    }
+
+    private fun createAndDeliverSurfaceTexture() {
+        val emit = pendingSurfaceTextureEmit ?: return
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        texId = ids[0]
+        if (texId == 0) {
+            reportRenderError("External GL texture creation returned id 0")
+            lastExitReason = "TEXTURE_CREATION_FAILED"
+            emitDiagnostic(force = true)
+            return
+        }
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+        GLES20.glTexParameteri(
+            GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            GLES20.GL_TEXTURE_MIN_FILTER,
+            GLES20.GL_LINEAR,
+        )
+        GLES20.glTexParameteri(
+            GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            GLES20.GL_TEXTURE_MAG_FILTER,
+            GLES20.GL_LINEAR,
+        )
+        GLES20.glTexParameteri(
+            GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            GLES20.GL_TEXTURE_WRAP_S,
+            GLES20.GL_CLAMP_TO_EDGE,
+        )
+        GLES20.glTexParameteri(
+            GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            GLES20.GL_TEXTURE_WRAP_T,
+            GLES20.GL_CLAMP_TO_EDGE,
+        )
         val st = SurfaceTexture(texId)
         st.setOnFrameAvailableListener({
             surfaceFrameCount += 1L
@@ -243,7 +260,9 @@ private class FourLaneRenderer(
             onFrameReady()
         }, null)
         created = st
-        lastExitReason = "TEXTURE_CREATED"
+        pendingSurfaceTextureEmit = null
+        glContextGate.onTextureCreated()
+        lastExitReason = "TEXTURE_CREATED_$texId"
         emitDiagnostic(force = true)
         emit(st)
     }
@@ -268,6 +287,9 @@ private class FourLaneRenderer(
         if (program == 0) reportRenderError("GL shader initialization failed")
         lastExitReason = if (program == 0) "PROGRAM_ZERO" else "PROGRAM_READY"
         emitDiagnostic(force = true)
+        if (glContextGate.onGlContextCreated()) {
+            createAndDeliverSurfaceTexture()
+        }
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
