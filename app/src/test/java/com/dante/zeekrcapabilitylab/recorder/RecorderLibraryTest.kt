@@ -279,7 +279,7 @@ class RecorderLibraryTest {
     }
 
     @Test
-    fun timeLapseChunksCollapseBySessionWhileNormalSegmentsRemainSeparate() {
+    fun allModernChunksCollapseByManualSessionWhileLegacyFilesRemainSeparate() {
         val dir = Files.createTempDirectory("rec-lib-session").toFile()
         managedMp4(
             dir,
@@ -311,15 +311,26 @@ class RecorderLibraryTest {
             recordingSessionId = "normal-drive",
             segmentNumber = 4,
         )
+        managedMp4(
+            dir,
+            "seg-0005-5-1280x5140-14M.mp4",
+            recordingSessionId = null,
+            segmentNumber = 5,
+        )
 
         val recordings = RecorderLibrary.listRecordings(dir)
         val timeLapse = recordings.single { it.isTimeLapse }
+        val normal = recordings.single { it.id == "session:normal-drive" }
+        val legacy = recordings.single { it.id.startsWith("file:") }
 
         assertEquals(3, recordings.size)
-        assertEquals("timelapse:drive-a", timeLapse.id)
+        assertEquals("session:drive-a", timeLapse.id)
         assertEquals(2, timeLapse.files.size)
         assertEquals(600_000L, timeLapse.realDurationMs)
         assertEquals(10_000L, timeLapse.encodedDurationMs)
+        assertEquals(2, normal.files.size)
+        assertEquals(1, normal.speedMultiplier)
+        assertEquals(1, legacy.files.size)
     }
 
     @Test

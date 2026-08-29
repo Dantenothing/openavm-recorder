@@ -3,6 +3,7 @@ package com.dante.zeekrcapabilitylab.recorder
 import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.ActualTrackInfo
+import com.dante.zeekrcapabilitylab.service.recorder.CaptureSubmissionMode
 import com.dante.zeekrcapabilitylab.service.recorder.FrameHealthReport
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentFrameStats
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
@@ -69,7 +70,7 @@ class SegmentSidecarTest {
         assertEquals(60_003L, decoded?.actualTrack?.durationMs)
         assertEquals(1800L, decoded?.frameStats?.count)
         assertEquals(5, decoded?.frameHealth?.maxHammingDistance)
-        assertEquals(6, decoded?.schemaVersion)
+        assertEquals(7, decoded?.schemaVersion)
         assertEquals("session-1700000000000-a", decoded?.recordingSessionId)
         assertEquals(RecordingSourceRole.SURROUND, decoded?.sourceRole)
         assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded?.layoutKind)
@@ -158,7 +159,7 @@ class SegmentSidecarTest {
             sampleSidecar(tempMp4()),
         )
         val legacy = encoded
-            .replace("\"schemaVersion\": 6", "\"schemaVersion\": 3")
+            .replace("\"schemaVersion\": 7", "\"schemaVersion\": 3")
             .lineSequence()
             .filterNot { line ->
                 line.contains("\"sourceRole\"") ||
@@ -180,7 +181,7 @@ class SegmentSidecarTest {
             sampleSidecar(tempMp4()),
         )
         val legacy = encoded
-            .replace("\"schemaVersion\": 6", "\"schemaVersion\": 4")
+            .replace("\"schemaVersion\": 7", "\"schemaVersion\": 4")
             .lineSequence()
             .filterNot { line -> line.contains("\"recordingSessionId\"") }
             .joinToString("\n")
@@ -198,8 +199,9 @@ class SegmentSidecarTest {
             recordingMode = RecordingMode.TIME_LAPSE,
             timeLapseMultiplier = 60,
             requestedCaptureRateFps = 0.5,
-            effectiveSegmentSeconds = 300,
-            realDurationMs = 300_000,
+            captureSubmissionMode = CaptureSubmissionMode.PACED_SINGLE_ENCODER,
+            effectiveSegmentSeconds = 600,
+            realDurationMs = 600_000,
             measuredMultiplier = 60.0,
             timeLapseRelativeError = 0.0,
             timeLapseAccuracy = TimeLapseAccuracy.PASS,
@@ -211,7 +213,8 @@ class SegmentSidecarTest {
         assertEquals(encoded, decoded)
         assertEquals(RecordingMode.TIME_LAPSE, decoded?.recordingMode)
         assertEquals(60, decoded?.timeLapseMultiplier)
-        assertEquals(300_000L, decoded?.realDurationMs)
+        assertEquals(600_000L, decoded?.realDurationMs)
+        assertEquals(CaptureSubmissionMode.PACED_SINGLE_ENCODER, decoded?.captureSubmissionMode)
     }
 
     @Test
@@ -224,6 +227,7 @@ class SegmentSidecarTest {
             "recordingMode",
             "timeLapseMultiplier",
             "requestedCaptureRateFps",
+            "captureSubmissionMode",
             "effectiveSegmentSeconds",
             "realDurationMs",
             "measuredMultiplier",

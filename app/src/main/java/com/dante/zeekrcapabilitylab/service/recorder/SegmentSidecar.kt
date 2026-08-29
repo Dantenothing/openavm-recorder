@@ -55,7 +55,7 @@ data class SegmentLaneInfo(
 
 @Serializable
 data class SegmentSidecar(
-    val schemaVersion: Int = 6,
+    val schemaVersion: Int = 7,
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
@@ -75,6 +75,8 @@ data class SegmentSidecar(
     val recordingMode: RecordingMode = RecordingMode.NORMAL,
     val timeLapseMultiplier: Int = 1,
     val requestedCaptureRateFps: Double? = null,
+    /** Whether the encoder received a continuous request or explicitly paced single frames. */
+    val captureSubmissionMode: CaptureSubmissionMode = CaptureSubmissionMode.REPEATING_ENCODER,
     /** Real-time safety boundary. Differs from [segmentSeconds] only for time-lapse. */
     val effectiveSegmentSeconds: Int = segmentSeconds,
     /** When the partial file was requested (filename timestamp), kept as evidence. */

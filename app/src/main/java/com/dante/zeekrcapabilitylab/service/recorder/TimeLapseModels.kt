@@ -2,6 +2,7 @@ package com.dante.zeekrcapabilitylab.service.recorder
 
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 @Serializable
 enum class RecordingMode {
@@ -12,11 +13,75 @@ enum class RecordingMode {
 /** Source-independent time-lapse policy shared by UI, recorder, metadata and tests. */
 object TimeLapsePolicy {
     const val PLAYBACK_FPS = 30.0
-    const val SAFETY_CHUNK_SECONDS = 5 * 60
+    const val SAFETY_CHUNK_SECONDS = 10 * 60
     const val DEFAULT_MULTIPLIER = 30
     val MULTIPLIERS = listOf(2, 5, 10, 15, 30, 60, 90, 120, 150)
 
     fun captureRateFps(multiplier: Int): Double = PLAYBACK_FPS / multiplier.toDouble()
+}
+
+enum class CaptureSubmissionMode {
+    REPEATING_ENCODER,
+    PACED_SINGLE_ENCODER,
+}
+
+data class CaptureCadencePlan(
+    val submissionMode: CaptureSubmissionMode,
+    val requestedEncoderFps: Double,
+    val encoderIntervalNs: Long?,
+)
+
+/**
+ * Camera2 submission policy for the MediaRecorder Surface.
+ *
+ * Normal recording keeps the proven repeating request. Time-lapse submits one
+ * encoder request per desired input frame; MediaRecorder.setCaptureRate then
+ * maps those real-time samples onto the fixed 30 fps playback timeline.
+ */
+object TimeLapseCaptureCadencePolicy {
+    fun plan(recordingMode: RecordingMode, multiplier: Int): CaptureCadencePlan =
+        when (recordingMode) {
+            RecordingMode.NORMAL -> CaptureCadencePlan(
+                submissionMode = CaptureSubmissionMode.REPEATING_ENCODER,
+                requestedEncoderFps = TimeLapsePolicy.PLAYBACK_FPS,
+                encoderIntervalNs = null,
+            )
+            RecordingMode.TIME_LAPSE -> {
+                val requestedFps = TimeLapsePolicy.captureRateFps(multiplier)
+                CaptureCadencePlan(
+                    submissionMode = CaptureSubmissionMode.PACED_SINGLE_ENCODER,
+                    requestedEncoderFps = requestedFps,
+                    encoderIntervalNs = (1_000_000_000.0 / requestedFps).roundToLong(),
+                )
+            }
+        }
+
+    /** Avoids bursts after a slow HAL callback while retaining stable cadence when on time. */
+    fun nextDeadlineNs(
+        previousDeadlineNs: Long,
+        completedAtNs: Long,
+        intervalNs: Long,
+    ): Long {
+        val cadenceDeadline = previousDeadlineNs + intervalNs
+        return if (cadenceDeadline > completedAtNs) cadenceDeadline else completedAtNs + intervalNs
+    }
+}
+
+/** Generation/ownership gate shared by every delayed Camera2 time-lapse request. */
+object CaptureCadenceOwnershipPolicy {
+    fun owns(
+        token: Long,
+        currentToken: Long,
+        segmentGeneration: Long,
+        currentSegmentGeneration: Long,
+        sameSession: Boolean,
+        sameEncoder: Boolean,
+        recording: Boolean,
+        stopping: Boolean,
+        releasing: Boolean,
+    ): Boolean = token == currentToken &&
+        segmentGeneration == currentSegmentGeneration && sameSession && sameEncoder &&
+        recording && !stopping && !releasing
 }
 
 @Serializable

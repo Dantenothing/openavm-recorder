@@ -131,6 +131,7 @@ class RecorderConfigTest {
 
     @Test
     fun everyTimeLapseMultiplierWorksWithEveryLogicalSource() {
+        assertEquals(600, TimeLapsePolicy.SAFETY_CHUNK_SECONDS)
         val sources = listOf(
             Triple(RecordingSourceRole.SURROUND, RecordingLayoutKind.FOUR_LANE_V1, "2"),
             Triple(RecordingSourceRole.CABIN, RecordingLayoutKind.SINGLE_V1, "1"),

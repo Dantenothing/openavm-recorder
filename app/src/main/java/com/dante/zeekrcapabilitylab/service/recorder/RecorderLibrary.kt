@@ -11,7 +11,7 @@ import java.io.File
  */
 object RecorderLibrary {
 
-    /** Product-facing recording: one normal segment or one time-lapse Session. */
+    /** Product-facing recording: one manual Session, or one legacy standalone file. */
     data class Recording(
         val id: String,
         val segments: List<Pair<File, SegmentSidecar>>,
@@ -20,6 +20,7 @@ object RecorderLibrary {
         val files: List<File> get() = segments.map { it.first }
         val sidecar: SegmentSidecar get() = segments.first().second
         val isTimeLapse: Boolean get() = sidecar.recordingMode == RecordingMode.TIME_LAPSE
+        val speedMultiplier: Int get() = if (isTimeLapse) sidecar.timeLapseMultiplier else 1
         val protected: Boolean get() = segments.all { it.second.protected }
         val protectedCount: Int get() = segments.count { it.second.protected }
         val realDurationMs: Long get() = segments.sumOf { (_, metadata) ->
@@ -35,6 +36,12 @@ object RecorderLibrary {
         }
         val encodedDurationMs: Long get() = segments.sumOf { it.second.actualTrack?.durationMs ?: 0L }
         val totalBytes: Long get() = files.sumOf(File::length)
+        val startedAtEpochMs: Long get() = segments.minOf { (file, metadata) ->
+            metadata.startedAtEpochMs ?: metadata.requestedAtEpochMs ?: file.lastModified()
+        }
+        val stoppedAtEpochMs: Long get() = segments.maxOf { (file, metadata) ->
+            metadata.stoppedAtEpochMs ?: file.lastModified()
+        }
     }
 
     const val DELETE_NOT_MANAGED = "NOT_MANAGED"
@@ -71,32 +78,28 @@ object RecorderLibrary {
             ?.sortedBy { it.lastModified() }
             ?: emptyList()
 
-    /** Normal segments stay separate; time-lapse safety chunks collapse by Session ID. */
+    /** Every modern manual Session collapses by ID; legacy files without an ID stay separate. */
     fun listRecordings(segmentsDir: File): List<Recording> {
         val entries = listFinalized(segmentsDir).mapNotNull { file ->
             SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.let { file to it }
         }
-        val groupedTimeLapse = entries
-            .filter { (_, sidecar) ->
-                sidecar.recordingMode == RecordingMode.TIME_LAPSE &&
-                    !sidecar.recordingSessionId.isNullOrBlank()
-            }
+        val groupedSessions = entries
+            .filter { (_, sidecar) -> !sidecar.recordingSessionId.isNullOrBlank() }
             .groupBy { it.second.recordingSessionId!! }
             .map { (sessionId, chunks) ->
                 Recording(
-                    id = "timelapse:$sessionId",
-                    segments = chunks.sortedBy { it.second.segmentNumber },
+                    id = "session:$sessionId",
+                    segments = chunks.sortedWith(
+                        compareBy<Pair<File, SegmentSidecar>> {
+                            it.second.startedAtElapsedRealtimeMs ?: Long.MAX_VALUE
+                        }.thenBy { it.second.segmentNumber },
+                    ),
                 )
             }
-        val normalAndLegacy = entries
-            .filterNot { (_, sidecar) ->
-                sidecar.recordingMode == RecordingMode.TIME_LAPSE &&
-                    !sidecar.recordingSessionId.isNullOrBlank()
-            }
+        val legacy = entries
+            .filter { (_, sidecar) -> sidecar.recordingSessionId.isNullOrBlank() }
             .map { (file, sidecar) -> Recording("file:${file.name}", listOf(file to sidecar)) }
-        return (normalAndLegacy + groupedTimeLapse).sortedBy { recording ->
-            recording.sidecar.startedAtEpochMs ?: recording.firstFile.lastModified()
-        }
+        return (legacy + groupedSessions).sortedBy(Recording::startedAtEpochMs)
     }
 
     fun setRecordingProtected(recording: Recording, protected: Boolean): Int =

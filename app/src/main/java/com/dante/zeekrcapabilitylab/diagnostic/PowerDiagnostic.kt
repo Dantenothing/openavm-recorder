@@ -244,6 +244,7 @@ object PowerDiagnosticCodec {
         "decision", "signal", "value", "lastReason", "cameraLoss",
         "mainDisplayState", "finalizeReason", "authorityReason", "vehicleAwayConfirmed",
         "recordingMode", "timeLapseMultiplier", "captureRateFps",
+        "captureSubmissionMode", "requestedEncoderFps", "intervalNs",
     ).mapNotNull { key -> event.payload[key]?.let { "$key=$it" } }.joinToString(" ")
 
     fun safeToken(value: String, maxLength: Int): String = value

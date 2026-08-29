@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureFailure
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
@@ -113,6 +114,10 @@ class RecorderSession(
     private val vehicleAway = VehicleAwayStateMachine()
     private var vehicleAwayTimerRunnable: Runnable? = null
     private var vehiclePowerReconciliationRunnable: Runnable? = null
+    private var pacedEncoderRunnable: Runnable? = null
+    private var pacedEncoderWatchdogRunnable: Runnable? = null
+    private var pacedEncoderWatchdogDeadlineNs: Long? = null
+    private var captureCadenceGeneration = 0L
     private var lastVehiclePowerSnapshot: VehiclePowerSnapshot? = null
     private var lastVehiclePowerSnapshotLogAtMs = 0L
     /** Finalized mp4 names whose sidecar/health analysis is still in flight. */
@@ -257,15 +262,13 @@ class RecorderSession(
             val preview = recordingPreviewSurface?.takeIf {
                 enabled && !state.previewFallbackUsed && it.isValid
             }
-            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(encoder)
-                preview?.let(::addTarget)
-            }.build()
             try {
-                session.setRepeatingRequest(
-                    request,
-                    createFrameCaptureCallback(segmentGeneration),
-                    cameraHandler,
+                applyActiveCaptureFlow(
+                    session = session,
+                    device = device,
+                    encoder = encoder,
+                    preview = preview,
+                    generation = segmentGeneration,
                 )
                 updateState(
                     state.copy(
@@ -284,16 +287,15 @@ class RecorderSession(
                 )
             } catch (t: Throwable) {
                 if (preview != null) {
-                    runCatching {
-                        val encoderOnly = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                            addTarget(encoder)
-                        }.build()
-                        session.setRepeatingRequest(
-                            encoderOnly,
-                            createFrameCaptureCallback(segmentGeneration),
-                            cameraHandler,
+                    val fallbackFailure = runCatching {
+                        applyActiveCaptureFlow(
+                            session = session,
+                            device = device,
+                            encoder = encoder,
+                            preview = null,
+                            generation = segmentGeneration,
                         )
-                    }
+                    }.exceptionOrNull()
                     updateState(
                         state.copy(
                             previewActive = false,
@@ -301,6 +303,13 @@ class RecorderSession(
                             message = "Preview target failed; recording continues",
                         ),
                     )
+                    if (fallbackFailure != null) {
+                        handleCameraLoss(
+                            fallbackFailure.message ?: "ENCODER_CAPTURE_FLOW_FAILED",
+                        )
+                    }
+                } else {
+                    handleCameraLoss(t.message ?: "ENCODER_CAPTURE_FLOW_FAILED")
                 }
                 EventLogger.markError(
                     Categories.SYSTEM,
@@ -381,6 +390,7 @@ class RecorderSession(
             )
             val replacementToken = ++previewReplacementGeneration
             val replacementSegment = segmentGeneration
+            cancelPacedEncoderCaptures()
             runCatching { captureSession?.stopRepeating() }
             runCatching { captureSession?.close() }
             captureSession = null
@@ -451,16 +461,14 @@ class RecorderSession(
                     return
                 }
                 try {
-                    val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        addTarget(encoder)
-                        previewTarget?.let(::addTarget)
-                    }.build()
-                    session.setRepeatingRequest(
-                        request,
-                        createFrameCaptureCallback(replacementSegment),
-                        cameraHandler,
-                    )
                     captureSession = session
+                    applyActiveCaptureFlow(
+                        session = session,
+                        device = device,
+                        encoder = encoder,
+                        preview = previewTarget,
+                        generation = replacementSegment,
+                    )
                     updateState(
                         state.copy(
                             previewRequested = previewTarget != null,
@@ -483,6 +491,8 @@ class RecorderSession(
                         ),
                     )
                 } catch (t: Throwable) {
+                    if (captureSession === session) captureSession = null
+                    cancelPacedEncoderCaptures()
                     closeQuietlySession(session)
                     if (previewTarget != null) {
                         fallbackActivePreviewReplacement(
@@ -1278,6 +1288,7 @@ class RecorderSession(
             recorder.prepare()
             val surface = recorder.surface
             activeEncoderSurface = surface
+            cancelPacedEncoderCaptures()
             captureSession?.close()
             captureSession = null
             fun configureSession(includePreview: Boolean) {
@@ -1298,15 +1309,14 @@ class RecorderSession(
                             }
                             captureSession = session
                             val previewTarget = preview?.takeIf { previewOutputDesired }
-                            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                addTarget(surface)
-                                previewTarget?.let(::addTarget)
-                            }.build()
-                            try {
-                                session.setRepeatingRequest(
-                                    request,
-                                    createFrameCaptureCallback(generation),
-                                    cameraHandler,
+                            val cadencePlan = try {
+                                installCaptureFlowBeforeRecorderStart(
+                                    session = session,
+                                    device = device,
+                                    encoder = surface,
+                                    preview = previewTarget,
+                                    generation = generation,
+                                    cfg = cfg,
                                 )
                             } catch (t: Throwable) {
                                 captureSession = null
@@ -1317,10 +1327,10 @@ class RecorderSession(
                                         partial = partial,
                                         recorder = recorder,
                                         sessionToken = sessionToken,
-                                        reason = t.message ?: "PREVIEW_REPEATING_REQUEST_FAILED",
+                                        reason = t.message ?: "PREVIEW_CAPTURE_FLOW_FAILED",
                                     ) { configureSession(includePreview = false) }
                                 } else {
-                                    failSegmentStart(generation, partial, t.message ?: "repeating request failed")
+                                    failSegmentStart(generation, partial, t.message ?: "capture flow failed")
                                 }
                                 return
                             }
@@ -1351,6 +1361,20 @@ class RecorderSession(
                                         previewActive = previewTarget != null,
                                     ),
                                 )
+                                if (cadencePlan.submissionMode ==
+                                    CaptureSubmissionMode.PACED_SINGLE_ENCODER
+                                ) {
+                                    startPacedEncoderCaptures(
+                                        session = session,
+                                        device = device,
+                                        encoder = surface,
+                                        generation = generation,
+                                        plan = cadencePlan,
+                                        // The pre-start request only primes the vendor input path;
+                                        // submit the first owned recording frame immediately.
+                                        initialDelayNs = 0L,
+                                    )
+                                }
                                 EventLogger.logEvent(
                                     Categories.SYSTEM,
                                     "RECORDER_SEGMENT_START",
@@ -1361,6 +1385,7 @@ class RecorderSession(
                                         "recordingMode" to cfg.recordingMode.name,
                                         "timeLapseMultiplier" to cfg.timeLapseMultiplier.toString(),
                                         "captureRateFps" to (cfg.captureRateFpsOrNull()?.toString() ?: "-"),
+                                        "captureSubmissionMode" to cadencePlan.submissionMode.name,
                                         "processStartId" to processStartId,
                                         "previewActive" to (previewTarget != null).toString(),
                                     ),
@@ -1557,6 +1582,291 @@ class RecorderSession(
         failSegmentStart(generation, partial, "CAMERA_SETUP_TIMEOUT")
     }
 
+    private fun captureRequest(
+        device: CameraDevice,
+        vararg targets: Surface,
+    ): CaptureRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+        targets.forEach(::addTarget)
+    }.build()
+
+    /**
+     * Installs the initial request flow before MediaRecorder.start(). Normal mode
+     * keeps its proven repeating encoder request. Time-lapse primes the encoder
+     * once, while an optional preview-only repeating request keeps the UI fluid.
+     */
+    private fun installCaptureFlowBeforeRecorderStart(
+        session: CameraCaptureSession,
+        device: CameraDevice,
+        encoder: Surface,
+        preview: Surface?,
+        generation: Long,
+        cfg: RecorderConfig,
+    ): CaptureCadencePlan {
+        cancelPacedEncoderCaptures()
+        val plan = TimeLapseCaptureCadencePolicy.plan(
+            recordingMode = cfg.recordingMode,
+            multiplier = cfg.timeLapseMultiplier,
+        )
+        when (plan.submissionMode) {
+            CaptureSubmissionMode.REPEATING_ENCODER -> {
+                val request = if (preview != null) {
+                    captureRequest(device, encoder, preview)
+                } else {
+                    captureRequest(device, encoder)
+                }
+                session.setRepeatingRequest(
+                    request,
+                    createFrameCaptureCallback(generation),
+                    cameraHandler,
+                )
+            }
+            CaptureSubmissionMode.PACED_SINGLE_ENCODER -> {
+                setTimeLapsePreviewRepeating(session, device, preview)
+                // Preserve the existing request-before-recorder.start ordering so
+                // vendor MediaRecorder implementations see an active input path.
+                session.capture(
+                    captureRequest(device, encoder),
+                    createFrameCaptureCallback(generation),
+                    cameraHandler,
+                )
+            }
+        }
+        return plan
+    }
+
+    /** Applies target changes while MediaRecorder is already running. */
+    private fun applyActiveCaptureFlow(
+        session: CameraCaptureSession,
+        device: CameraDevice,
+        encoder: Surface,
+        preview: Surface?,
+        generation: Long,
+    ) {
+        val cfg = config ?: throw IllegalStateException("RECORDER_CONFIG_MISSING")
+        cancelPacedEncoderCaptures()
+        val plan = TimeLapseCaptureCadencePolicy.plan(
+            recordingMode = cfg.recordingMode,
+            multiplier = cfg.timeLapseMultiplier,
+        )
+        when (plan.submissionMode) {
+            CaptureSubmissionMode.REPEATING_ENCODER -> {
+                val request = if (preview != null) {
+                    captureRequest(device, encoder, preview)
+                } else {
+                    captureRequest(device, encoder)
+                }
+                session.setRepeatingRequest(
+                    request,
+                    createFrameCaptureCallback(generation),
+                    cameraHandler,
+                )
+            }
+            CaptureSubmissionMode.PACED_SINGLE_ENCODER -> {
+                setTimeLapsePreviewRepeating(session, device, preview)
+                startPacedEncoderCaptures(
+                    session = session,
+                    device = device,
+                    encoder = encoder,
+                    generation = generation,
+                    plan = plan,
+                    initialDelayNs = 0L,
+                )
+            }
+        }
+    }
+
+    private fun setTimeLapsePreviewRepeating(
+        session: CameraCaptureSession,
+        device: CameraDevice,
+        preview: Surface?,
+    ) {
+        if (preview == null) {
+            session.stopRepeating()
+        } else {
+            session.setRepeatingRequest(
+                captureRequest(device, preview),
+                null,
+                cameraHandler,
+            )
+        }
+    }
+
+    private fun startPacedEncoderCaptures(
+        session: CameraCaptureSession,
+        device: CameraDevice,
+        encoder: Surface,
+        generation: Long,
+        plan: CaptureCadencePlan,
+        initialDelayNs: Long,
+    ) {
+        val intervalNs = plan.encoderIntervalNs
+            ?: throw IllegalArgumentException("PACED_CAPTURE_INTERVAL_MISSING")
+        cancelPacedEncoderCaptures()
+        val token = ++captureCadenceGeneration
+        val firstDeadlineNs = SystemClock.elapsedRealtimeNanos() + initialDelayNs
+        val request = captureRequest(device, encoder)
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_CAPTURE_CADENCE_STARTED",
+            payload = mapOf(
+                "segment" to segmentNumber.toString(),
+                "generation" to generation.toString(),
+                "mode" to plan.submissionMode.name,
+                "requestedEncoderFps" to plan.requestedEncoderFps.toString(),
+                "intervalNs" to intervalNs.toString(),
+                "previewRepeating" to state.previewActive.toString(),
+            ),
+        )
+        schedulePacedEncoderCapture(
+            session = session,
+            request = request,
+            encoder = encoder,
+            generation = generation,
+            token = token,
+            intervalNs = intervalNs,
+            deadlineNs = firstDeadlineNs,
+        )
+    }
+
+    private fun schedulePacedEncoderCapture(
+        session: CameraCaptureSession,
+        request: CaptureRequest,
+        encoder: Surface,
+        generation: Long,
+        token: Long,
+        intervalNs: Long,
+        deadlineNs: Long,
+    ) {
+        if (!ownsPacedCapture(session, encoder, generation, token)) return
+        val delayNs = (deadlineNs - SystemClock.elapsedRealtimeNanos()).coerceAtLeast(0L)
+        val delayMs = (delayNs + 999_999L) / 1_000_000L
+        val runnable = Runnable {
+            pacedEncoderRunnable = null
+            if (!ownsPacedCapture(session, encoder, generation, token)) return@Runnable
+            armPacedEncoderWatchdog(
+                session = session,
+                encoder = encoder,
+                generation = generation,
+                token = token,
+                intervalNs = intervalNs,
+                deadlineNs = deadlineNs,
+            )
+            try {
+                session.capture(
+                    request,
+                    object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(
+                            callbackSession: CameraCaptureSession,
+                            callbackRequest: CaptureRequest,
+                            result: TotalCaptureResult,
+                        ) {
+                            if (!ownsPacedCapture(session, encoder, generation, token)) return
+                            cancelPacedEncoderWatchdog(deadlineNs)
+                            recordFrameResult(generation, result)
+                            val completedAtNs = SystemClock.elapsedRealtimeNanos()
+                            val nextDeadlineNs = TimeLapseCaptureCadencePolicy.nextDeadlineNs(
+                                previousDeadlineNs = deadlineNs,
+                                completedAtNs = completedAtNs,
+                                intervalNs = intervalNs,
+                            )
+                            schedulePacedEncoderCapture(
+                                session,
+                                request,
+                                encoder,
+                                generation,
+                                token,
+                                intervalNs,
+                                nextDeadlineNs,
+                            )
+                        }
+
+                        override fun onCaptureFailed(
+                            callbackSession: CameraCaptureSession,
+                            callbackRequest: CaptureRequest,
+                            failure: CaptureFailure,
+                        ) {
+                            if (!ownsPacedCapture(session, encoder, generation, token)) return
+                            cancelPacedEncoderWatchdog(deadlineNs)
+                            handleCameraLoss(
+                                "TIME_LAPSE_CAPTURE_FAILED reason=${failure.reason} frame=${failure.frameNumber}",
+                            )
+                        }
+                    },
+                    cameraHandler,
+                )
+            } catch (t: Throwable) {
+                cancelPacedEncoderWatchdog(deadlineNs)
+                if (!ownsPacedCapture(session, encoder, generation, token)) return@Runnable
+                handleCameraLoss(
+                    "TIME_LAPSE_CAPTURE_SUBMIT_FAILED ${t.message ?: t.javaClass.simpleName}",
+                    recoverableContention = t is CameraAccessException &&
+                        isRecoverableCameraAccessReason(t.reason),
+                )
+            }
+        }
+        pacedEncoderRunnable = runnable
+        cameraHandler?.postDelayed(runnable, delayMs)
+    }
+
+    private fun armPacedEncoderWatchdog(
+        session: CameraCaptureSession,
+        encoder: Surface,
+        generation: Long,
+        token: Long,
+        intervalNs: Long,
+        deadlineNs: Long,
+    ) {
+        cancelPacedEncoderWatchdog()
+        val timeoutMs = maxOf(
+            PACED_CAPTURE_MIN_TIMEOUT_MS,
+            intervalNs / 1_000_000L + PACED_CAPTURE_EXTRA_TIMEOUT_MS,
+        )
+        val watchdog = Runnable {
+            if (pacedEncoderWatchdogDeadlineNs != deadlineNs ||
+                !ownsPacedCapture(session, encoder, generation, token)
+            ) {
+                return@Runnable
+            }
+            pacedEncoderWatchdogRunnable = null
+            pacedEncoderWatchdogDeadlineNs = null
+            handleCameraLoss("TIME_LAPSE_CAPTURE_TIMEOUT timeoutMs=$timeoutMs")
+        }
+        pacedEncoderWatchdogRunnable = watchdog
+        pacedEncoderWatchdogDeadlineNs = deadlineNs
+        cameraHandler?.postDelayed(watchdog, timeoutMs)
+    }
+
+    private fun cancelPacedEncoderWatchdog(deadlineNs: Long? = null) {
+        if (deadlineNs != null && pacedEncoderWatchdogDeadlineNs != deadlineNs) return
+        pacedEncoderWatchdogRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        pacedEncoderWatchdogRunnable = null
+        pacedEncoderWatchdogDeadlineNs = null
+    }
+
+    private fun ownsPacedCapture(
+        session: CameraCaptureSession,
+        encoder: Surface,
+        generation: Long,
+        token: Long,
+    ): Boolean = CaptureCadenceOwnershipPolicy.owns(
+        token = token,
+        currentToken = captureCadenceGeneration,
+        segmentGeneration = generation,
+        currentSegmentGeneration = segmentGeneration,
+        sameSession = captureSession === session,
+        sameEncoder = activeEncoderSurface === encoder,
+        recording = recording,
+        stopping = stopping,
+        releasing = releasing,
+    )
+
+    private fun cancelPacedEncoderCaptures() {
+        captureCadenceGeneration++
+        pacedEncoderRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        pacedEncoderRunnable = null
+        cancelPacedEncoderWatchdog()
+    }
+
     /**
      * Per-segment capture callback: queued results from a closed previous session
      * must never pollute the current segment's frameStats/timestamps.
@@ -1568,22 +1878,26 @@ class RecorderSession(
                 request: CaptureRequest,
                 result: TotalCaptureResult,
             ) {
-                if (generation != segmentGeneration || !recording) return
-                val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
-                val prev = lastTimestampNs
-                lastTimestampNs = ts
-                frameStats = frameStats.copy(
-                    count = frameStats.count + 1,
-                    firstTimestampNs = frameStats.firstTimestampNs ?: ts,
-                    lastTimestampNs = ts,
-                    maxGapNs = if (prev != null) {
-                        maxOf(frameStats.maxGapNs ?: 0L, ts - prev)
-                    } else {
-                        frameStats.maxGapNs
-                    },
-                )
+                recordFrameResult(generation, result)
             }
         }
+
+    private fun recordFrameResult(generation: Long, result: TotalCaptureResult) {
+        if (generation != segmentGeneration || !recording) return
+        val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+        val prev = lastTimestampNs
+        lastTimestampNs = ts
+        frameStats = frameStats.copy(
+            count = frameStats.count + 1,
+            firstTimestampNs = frameStats.firstTimestampNs ?: ts,
+            lastTimestampNs = ts,
+            maxGapNs = if (prev != null) {
+                maxOf(frameStats.maxGapNs ?: 0L, ts - prev)
+            } else {
+                frameStats.maxGapNs
+            },
+        )
+    }
 
     private fun failSegmentStart(generation: Long, partial: File, message: String) {
         cancelSetupWatchdog()
@@ -1594,6 +1908,7 @@ class RecorderSession(
         }
         val cfg = config ?: return
         cancelTimeout()
+        cancelPacedEncoderCaptures()
         recording = false
         try {
             mediaRecorder?.reset()
@@ -1668,6 +1983,7 @@ class RecorderSession(
     private fun finalizeCurrentSegment(reason: String, forcedError: String?) {
         cancelSetupWatchdog()
         cancelTimeout()
+        cancelPacedEncoderCaptures()
         val finalizeId = ++finalizeSequence
         val finalizeEnteredElapsed = SystemClock.elapsedRealtime()
         val partial = currentPartial ?: run {
@@ -2593,6 +2909,10 @@ class RecorderSession(
             recordingMode = s.recordingMode,
             timeLapseMultiplier = s.timeLapseMultiplier,
             requestedCaptureRateFps = s.requestedCaptureRateFps,
+            captureSubmissionMode = TimeLapseCaptureCadencePolicy.plan(
+                recordingMode = s.recordingMode,
+                multiplier = s.timeLapseMultiplier,
+            ).submissionMode,
             effectiveSegmentSeconds = s.effectiveSegmentSeconds,
             requestedAtEpochMs = s.requestedAtEpochMs,
             requestedAtElapsedRealtimeMs = s.requestedAtElapsedRealtimeMs,
@@ -2835,6 +3155,7 @@ class RecorderSession(
 
     private fun closeCamera() {
         cancelPreviewReplacementWatchdog()
+        cancelPacedEncoderCaptures()
         cameraOpenInFlight = false
         try {
             captureSession?.close()
@@ -2908,6 +3229,8 @@ class RecorderSession(
         const val PREVIEW_REPLACEMENT_TIMEOUT_MS = 6_000L
         const val POWER_RECONCILIATION_INTERVAL_MS = 5_000L
         const val POWER_RECONCILIATION_LOG_INTERVAL_MS = 60_000L
+        const val PACED_CAPTURE_MIN_TIMEOUT_MS = 5_000L
+        const val PACED_CAPTURE_EXTRA_TIMEOUT_MS = 3_000L
     }
 
     /** Immutable per-segment evidence captured on the camera thread before async work. */

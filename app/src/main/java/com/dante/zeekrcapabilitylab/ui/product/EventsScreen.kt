@@ -420,10 +420,10 @@ fun EventsScreen() {
             title = { Text(Utils.t("Delete this recording?", "删除这段录像？")) },
             text = {
                 Text(
-                    if (recording.isTimeLapse && recording.files.size > 1) {
+                    if (recording.files.size > 1) {
                         Utils.t(
-                            "All ${recording.files.size} safety files in this time-lapse Session will be permanently deleted.",
-                            "这会永久删除本次延时 Session 的全部 ${recording.files.size} 个安全分段。",
+                            "All ${recording.files.size} safety files in this recording will be permanently deleted.",
+                            "这会永久删除本次录像的全部 ${recording.files.size} 个安全分段。",
                         )
                     } else {
                         Utils.t("This will permanently delete the recording, including a protected recording.", "这会永久删除该录像，包括已保护录像。")
@@ -566,9 +566,7 @@ private fun RecordingCard(
                     if (recording.protectedCount > 0) {
                         StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
                     }
-                    if (recording.isTimeLapse) {
-                        StatusBadge("${recording.sidecar.timeLapseMultiplier}×", Color(0xFF64B5F6))
-                    }
+                    StatusBadge("${recording.speedMultiplier}×", Color(0xFF64B5F6))
                 }
                 StatusBadge(
                     text = recordingSourceLabel(segment.sidecar),
@@ -598,7 +596,7 @@ private fun RecordingCard(
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Text(
-                    formatRecordingTime(recordingEpoch(segment)),
+                    formatRecordingTimeRange(recording),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -609,7 +607,10 @@ private fun RecordingCard(
                             "实拍 ${Utils.formatDuration(recording.realDurationMs)} → 成片 ${Utils.formatDuration(recording.encodedDurationMs)} · ${recording.files.size} 个安全分段 · ${formatBytes(recording.totalBytes)}",
                         )
                     } else {
-                        "${formatDuration(segment)}  ·  ${formatBytes(recording.totalBytes)}"
+                        Utils.t(
+                            "${Utils.formatDuration(recording.realDurationMs)} recorded · ${recording.files.size} safety files · ${formatBytes(recording.totalBytes)}",
+                            "实录 ${Utils.formatDuration(recording.realDurationMs)} · ${recording.files.size} 个安全分段 · ${formatBytes(recording.totalBytes)}",
+                        )
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -748,11 +749,8 @@ private fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifie
     )
 }
 
-private fun recordingEpoch(segment: EventGroups.Segment): Long =
-    segment.sidecar.startedAtEpochMs ?: segment.file.lastModified()
-
 private fun recordingEpoch(recording: RecorderLibrary.Recording): Long =
-    recording.sidecar.startedAtEpochMs ?: recording.firstFile.lastModified()
+    recording.startedAtEpochMs
 
 private fun recordingDate(epochMs: Long): String =
     SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(epochMs))
@@ -767,6 +765,9 @@ private fun recordingSourceLabel(sidecar: com.dante.zeekrcapabilitylab.service.r
 private fun formatRecordingTime(epochMs: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
 
+private fun formatRecordingTimeRange(recording: RecorderLibrary.Recording): String =
+    "${formatRecordingTime(recording.startedAtEpochMs)}–${formatRecordingTime(recording.stoppedAtEpochMs)}"
+
 private fun formatDateHeader(value: String): String = runCatching {
     val source = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value) ?: return value
     SimpleDateFormat(
@@ -774,16 +775,6 @@ private fun formatDateHeader(value: String): String = runCatching {
         if (AppLanguage.usesChinese()) Locale.SIMPLIFIED_CHINESE else Locale.US,
     ).format(source)
 }.getOrDefault(value)
-
-private fun formatDuration(segment: EventGroups.Segment): String {
-    val duration = segment.sidecar.actualTrack?.durationMs
-        ?: run {
-            val start = segment.sidecar.startedAtEpochMs
-            val stop = segment.sidecar.stoppedAtEpochMs
-            if (start != null && stop != null) stop - start else segment.sidecar.segmentSeconds * 1000L
-        }
-    return Utils.formatDuration(duration)
-}
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
