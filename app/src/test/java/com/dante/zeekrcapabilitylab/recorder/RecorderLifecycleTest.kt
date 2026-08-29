@@ -146,6 +146,22 @@ class RecorderLifecycleTest {
                 encoderReady = true,
             ),
         )
+        assertFalse(
+            ActivePreviewReplacementPolicy.canRebuild(
+                replacementValid = true,
+                recording = true,
+                cameraReady = false,
+                encoderReady = true,
+            ),
+        )
+        assertFalse(
+            ActivePreviewReplacementPolicy.canRebuild(
+                replacementValid = true,
+                recording = true,
+                cameraReady = true,
+                encoderReady = false,
+            ),
+        )
     }
 
     @Test

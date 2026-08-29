@@ -144,6 +144,28 @@ class ProductHomeCameraPolicyTest {
             "recording must hand the surviving TextureView surface to the service",
             source.contains("previewController.acquireRecorderPreviewSurface()"),
         )
+        assertTrue(
+            "returning to Record must hand the recreated, source-sized surface to the service",
+            source.contains("previewController.acquireRecorderPreviewSurface(sourceProfile.size)"),
+        )
+        assertTrue(
+            "a recreated recording preview must be sent back to the service",
+            source.contains("CameraRecordingService.replacePreviewSurface(surface)"),
+        )
+        assertTrue(
+            "leaving Record must detach the destroyed preview target without stopping recording",
+            source.contains("CameraRecordingService.setPreviewOutputEnabled(false)"),
+        )
+        assertTrue(
+            "the TextureView controller must report recreated recording surfaces",
+            controllerSource.contains("onRecorderPreviewSurfaceAvailable?.invoke()"),
+        )
+        assertTrue(
+            "a recreated SurfaceTexture must use the active Camera2 source dimensions",
+            controllerSource.contains(
+                "texture.setDefaultBufferSize(targetBufferSize.width, targetBufferSize.height)",
+            ),
+        )
         assertFalse(
             "recording must not intentionally start with a null preview surface",
             source.contains("previewSurface = null"),

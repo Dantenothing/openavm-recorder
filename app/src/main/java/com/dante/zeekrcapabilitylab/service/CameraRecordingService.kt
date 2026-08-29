@@ -232,16 +232,12 @@ class CameraRecordingService : Service() {
         }
 
         /** Changes only the repeating request targets; the encoder keeps running. */
-        fun setPreviewOutputEnabled(context: Context, enabled: Boolean) {
+        fun setPreviewOutputEnabled(enabled: Boolean) {
             val active = instance ?: return
-            val intent = Intent(context, CameraRecordingService::class.java)
-                .setAction(RecorderCommands.ACTION_SET_PREVIEW_OUTPUT)
-                .putExtra(RecorderCommands.EXTRA_PREVIEW_ENABLED, enabled)
-            try {
-                context.startService(intent)
-            } catch (t: Throwable) {
-                active.session.setPreviewOutputEnabled(enabled)
-            }
+            // This is an in-process UI lifecycle signal. Posting directly to the
+            // session's camera thread preserves detach/reattach ordering across
+            // fast tab changes without starting or restarting the service.
+            active.session.setPreviewOutputEnabled(enabled)
         }
 
         /** Replaces a destroyed UI preview without restarting the recorder. */

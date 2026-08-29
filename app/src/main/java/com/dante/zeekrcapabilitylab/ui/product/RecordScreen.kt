@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -145,9 +146,28 @@ fun RecordScreen() {
 
     val serviceRunning = CameraRecordingService.isRunning()
     val recordingActive = serviceRunning && RecorderCommandPolicy.isActive(recorderState.status)
+    val latestRecorderState by rememberUpdatedState(recorderState)
+
+    val attachReplacementPreview: () -> Unit = {
+        val current = latestRecorderState
+        val sourceProfile = current.sourceProfile
+        if (current.status == RecorderStatus.RECORDING &&
+            sourceProfile != null && current.previewRequested && !current.previewFallbackUsed
+        ) {
+            val surface = previewController.acquireRecorderPreviewSurface(sourceProfile.size)
+            if (surface != null) CameraRecordingService.replacePreviewSurface(surface)
+        }
+    }
 
     DisposableEffect(previewController) {
-        onDispose { previewController.release() }
+        previewController.onRecorderPreviewSurfaceAvailable = attachReplacementPreview
+        previewController.onRecorderPreviewSurfaceDestroyed = {
+            CameraRecordingService.setPreviewOutputEnabled(false)
+        }
+        onDispose {
+            CameraRecordingService.setPreviewOutputEnabled(false)
+            previewController.release()
+        }
     }
 
     LaunchedEffect(
@@ -173,6 +193,21 @@ fun RecordScreen() {
                 previewEnabled = true
                 previewController.startPreview()
             }
+        }
+    }
+
+    LaunchedEffect(
+        recorderState.status,
+        recorderState.sourceProfile,
+        recorderState.previewRequested,
+        recorderState.previewActive,
+        recorderState.previewFallbackUsed,
+    ) {
+        if (recorderState.status == RecorderStatus.RECORDING &&
+            recorderState.previewRequested && !recorderState.previewActive &&
+            !recorderState.previewFallbackUsed
+        ) {
+            attachReplacementPreview()
         }
     }
 

@@ -161,6 +161,8 @@ object RecorderWorkLanePolicy {
 data class RecorderState(
     val status: String = RecorderStatus.IDLE,
     val cameraId: String? = null,
+    /** Camera2 input dimensions used to size a recreated recording preview SurfaceTexture. */
+    val sourceProfile: CameraFormatProfile? = null,
     val profile: CameraFormatProfile? = null,
     val sourceRole: RecordingSourceRole? = null,
     val layoutKind: RecordingLayoutKind? = null,
