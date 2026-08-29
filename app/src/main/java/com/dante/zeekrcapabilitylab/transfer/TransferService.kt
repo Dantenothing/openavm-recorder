@@ -59,6 +59,10 @@ class TransferService : Service() {
         try {
             while (true) {
                 val task = TransferRepository.nextWork() ?: break
+                if (task.state == TransferTaskState.CANCEL_PENDING && task.uploadId == null) {
+                    TransferRepository.finish(task, TransferTaskState.CANCELLED)
+                    continue
+                }
                 val endpoint = PhoneConnectionStore.saved()
                 if (endpoint == null) {
                     TransferRepository.update(task.copy(state = TransferTaskState.WAITING_RETRY, reason = "Phone is not paired"))
@@ -69,10 +73,20 @@ class TransferService : Service() {
                     TransferRepository.markConnected(endpoint, true, "Connected to ${endpoint.phoneName}")
                 } catch (t: Throwable) {
                     val latest = TransferRepository.get(task.id) ?: continue
-                    if (latest.state == TransferTaskState.CANCEL_PENDING) continue
-                    TransferRepository.update(latest.copy(state = TransferTaskState.WAITING_RETRY, reason = t.message ?: "Transfer interrupted"))
+                    if (latest.state == TransferTaskState.CANCEL_PENDING) {
+                        TransferRepository.update(
+                            latest.copy(reason = "Waiting for phone to remove the partial transfer"),
+                        )
+                    } else {
+                        TransferRepository.update(
+                            latest.copy(
+                                state = TransferTaskState.WAITING_RETRY,
+                                reason = t.message ?: "Transfer interrupted",
+                            ),
+                        )
+                    }
                     TransferRepository.markConnected(endpoint, false, t.message ?: "Phone unavailable")
-                    Thread.sleep(5_000)
+                    break
                 }
             }
         } finally {

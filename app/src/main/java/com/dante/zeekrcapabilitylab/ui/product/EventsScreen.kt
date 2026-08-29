@@ -62,7 +62,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun EventsScreen(onOpenPhone: () -> Unit = {}) {
+fun EventsScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val segmentsDir = remember { File(context.filesDir, "recordings/segments").apply { mkdirs() } }
@@ -235,19 +235,13 @@ fun EventsScreen(onOpenPhone: () -> Unit = {}) {
 
     fun queueForPhone(files: List<File>): Boolean {
         val uniqueFiles = files.distinctBy { it.absolutePath }
-        if (GalleryTransferActionPolicy.action(phoneConnection.connected) == GalleryTransferAction.OPEN_PHONE) {
-            playRecording = null
-            statusText = Utils.t(
-                "Phone is not connected; opening the Phone page",
-                "手机尚未连接，正在打开手机页面",
-            )
-            TransferRepository.reconnectInBackground()
-            onOpenPhone()
-            return false
-        }
         val results = uniqueFiles.map(TransferRepository::enqueue)
         val queued = results.count(Result<String>::isSuccess)
         statusText = when {
+            queued > 0 && !phoneConnection.connected -> Utils.t(
+                "Queued $queued recording${if (queued == 1) "" else "s"}; waiting for the phone connection",
+                "已加入 $queued 段录像；正在等待手机连接",
+            )
             queued == uniqueFiles.size && queued == 1 -> Utils.t("Added to phone transfer queue", "已加入手机传输队列")
             queued == uniqueFiles.size -> Utils.t("Queued $queued recordings for phone transfer", "已加入 $queued 段录像到手机传输队列")
             queued > 0 -> Utils.t(

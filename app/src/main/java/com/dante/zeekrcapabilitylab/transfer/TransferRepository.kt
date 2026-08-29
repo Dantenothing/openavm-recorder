@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -52,6 +53,7 @@ object TransferRepository {
     private val reconnectScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val connectionCheck = Mutex()
     private val backgroundReconnectRunning = AtomicBoolean(false)
+    private val reconnectRetryScheduled = AtomicBoolean(false)
 
     fun init(appContext: Context) {
         filesRoot = appContext.applicationContext.filesDir
@@ -79,7 +81,10 @@ object TransferRepository {
         }
         val address = parsed.getOrThrow()
         val result = PhoneConnectionStore.pair(address.host, code.trim(), address.port)
-        result.onSuccess { _connection.value = PhoneConnectionState(it, true, "Connected to ${it.phoneName}") }
+        result.onSuccess {
+            _connection.value = PhoneConnectionState(it, true, "Connected to ${it.phoneName}")
+            if (hasWork()) TransferService.start(ZeekrApp.appContext)
+        }
             .onFailure { _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), false, it.message ?: "Pairing failed") }
         return result
     }
@@ -110,12 +115,22 @@ object TransferRepository {
                 checkConnection()
             } finally {
                 backgroundReconnectRunning.set(false)
+                if (hasWork() && !_connection.value.connected) scheduleReconnectRetry()
             }
         }
     }
 
+    private fun scheduleReconnectRetry() {
+        if (!hasWork() || _connection.value.connected || _connection.value.endpoint == null) return
+        if (!reconnectRetryScheduled.compareAndSet(false, true)) return
+        reconnectScope.launch {
+            delay(10_000L)
+            reconnectRetryScheduled.set(false)
+            if (hasWork() && !_connection.value.connected) reconnectInBackground()
+        }
+    }
+
     fun enqueue(file: File): Result<String> = synchronized(lock) {
-        if (!_connection.value.connected) return Result.failure(IllegalStateException("Connect the phone first"))
         if (!RecorderLibrary.isManaged(file)) return Result.failure(IllegalArgumentException("Recording is not finalized"))
         if (_tasks.value.any { it.filePath == file.absolutePath && it.state !in TERMINAL }) {
             return Result.failure(IllegalStateException("Recording is already queued"))
@@ -124,10 +139,23 @@ object TransferRepository {
         if (!RecorderLibrary.pinForUpload(file)) return Result.failure(IllegalStateException("Unable to protect recording for transfer"))
         try {
             val id = UUID.randomUUID().toString()
-            val task = TransferTask(id, file.absolutePath, file.name, file.length(), sidecarJson = sidecar)
+            val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
+            val task = TransferTask(
+                id = id,
+                filePath = file.absolutePath,
+                fileName = file.name,
+                sizeBytes = file.length(),
+                sidecarJson = sidecar,
+                state = decision.initialState,
+                reason = decision.reason,
+            )
             _tasks.value = _tasks.value + task
             saveLocked()
-            TransferService.start(ZeekrApp.appContext)
+            if (decision.startServiceImmediately) {
+                TransferService.start(ZeekrApp.appContext)
+            } else {
+                reconnectInBackground()
+            }
             Result.success(id)
         } catch (t: Throwable) {
             RecorderLibrary.releaseUploadPin(file)
@@ -139,6 +167,17 @@ object TransferRepository {
         synchronized(lock) {
             val task = _tasks.value.firstOrNull { it.id == id } ?: return
             if (task.state in TERMINAL) return
+            if (TransferCancelPolicy.action(task.uploadId) == TransferCancelAction.FINISH_LOCALLY) {
+                updateLocked(
+                    task.copy(
+                        state = TransferTaskState.CANCELLED,
+                        reason = "Cancelled by user",
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+                RecorderLibrary.releaseUploadPin(File(task.filePath))
+                return
+            }
             updateLocked(task.copy(state = TransferTaskState.CANCEL_PENDING, reason = "Cancelled by user", updatedAt = System.currentTimeMillis()))
             // Once intent is durable and the active HTTP read is cancelled, remote cleanup only needs uploadId/token.
             TransferHttp.cancel(id)
@@ -167,7 +206,10 @@ object TransferRepository {
     fun hasWork(): Boolean = _tasks.value.any { it.state !in TERMINAL }
 
     fun update(task: TransferTask) = synchronized(lock) { updateLocked(task.copy(updatedAt = System.currentTimeMillis())) }
-    fun markConnected(endpoint: PhoneEndpoint, connected: Boolean, message: String) { _connection.value = PhoneConnectionState(endpoint, connected, message) }
+    fun markConnected(endpoint: PhoneEndpoint, connected: Boolean, message: String) {
+        _connection.value = PhoneConnectionState(endpoint, connected, message)
+        if (!connected && hasWork()) scheduleReconnectRetry()
+    }
 
     fun finish(task: TransferTask, state: TransferTaskState, reason: String? = null) = synchronized(lock) {
         updateLocked(task.copy(state = state, reason = reason, updatedAt = System.currentTimeMillis()))

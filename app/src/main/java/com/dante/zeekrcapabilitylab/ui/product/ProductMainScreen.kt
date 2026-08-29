@@ -61,10 +61,10 @@ fun ProductMainScreen() {
                         onClick = {
                             navController.navigate(item.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                                    saveState = false
                                 }
                                 launchSingleTop = true
-                                restoreState = true
+                                restoreState = false
                             }
                         },
                         icon = { Icon(item.icon, contentDescription = label) },
@@ -82,7 +82,7 @@ fun ProductMainScreen() {
             modifier = Modifier.padding(padding),
         ) {
             composable("record") { RecordScreen() }
-            composable("events") { EventsScreen(onOpenPhone = { navController.navigate("phone") }) }
+            composable("events") { EventsScreen() }
             composable("phone") { PhoneScreen() }
             composable("settings") { SettingsScreen() }
         }

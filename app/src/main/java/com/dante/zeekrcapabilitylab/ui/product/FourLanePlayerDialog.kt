@@ -58,6 +58,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dante.zeekrcapabilitylab.player.PlaybackDiagnostics
 import com.dante.zeekrcapabilitylab.player.PlaybackInspector
+import com.dante.zeekrcapabilitylab.player.PlaybackTrackText
 import com.dante.zeekrcapabilitylab.util.Utils
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
@@ -452,6 +453,15 @@ private fun PlaybackInfoCard(
     status: String,
 ) {
     val first = files.first()
+    val sidecar = remember(first.absolutePath, first.lastModified()) {
+        SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(first))
+    }
+    val actualBitrate = diagnostics?.bitrateBps?.toLong()
+        ?: sidecar?.actualTrack?.bitrateBps
+    val effectiveDurationMs = durationMs.takeIf { it > 0L }
+        ?: diagnostics?.durationMs
+        ?: sidecar?.actualTrack?.durationMs
+        ?: 0L
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text(
@@ -462,9 +472,15 @@ private fun PlaybackInfoCard(
             Spacer(Modifier.height(10.dp))
             PlaybackInfoRow(Utils.t("Status", "状态"), status)
             PlaybackInfoRow(Utils.t("Recorded", "录像时间"), Utils.formatEpoch(first.lastModified()))
-            PlaybackInfoRow(Utils.t("Duration", "时长"), formatPlaybackTime(durationMs.takeIf { it > 0L } ?: diagnostics?.durationMs ?: 0L))
+            PlaybackInfoRow(Utils.t("Duration", "时长"), formatPlaybackTime(effectiveDurationMs))
             if (recordingMode == RecordingMode.TIME_LAPSE && realDurationMs != null) {
                 PlaybackInfoRow(Utils.t("Captured time", "实拍时长"), formatPlaybackTime(realDurationMs))
+                if (effectiveDurationMs > 0L) {
+                    PlaybackInfoRow(
+                        Utils.t("Measured speed", "实测倍率"),
+                        String.format(java.util.Locale.US, "%.1f×", realDurationMs.toDouble() / effectiveDurationMs),
+                    )
+                }
             }
             PlaybackInfoRow(Utils.t("File size", "文件大小"), formatPlaybackBytes(files.sumOf(File::length)))
             if (files.size > 1) {
@@ -478,6 +494,20 @@ private fun PlaybackInfoCard(
                     Utils.t("Reading…", "读取中")
                 },
             )
+            PlaybackInfoRow(Utils.t("Actual bitrate", "实际码率"), PlaybackTrackText.bitrate(actualBitrate))
+            PlaybackInfoRow(Utils.t("Track frame rate", "轨道帧率"), PlaybackTrackText.frameRate(diagnostics?.frameRateFps))
+            sidecar?.profile?.let { requested ->
+                PlaybackInfoRow(
+                    Utils.t("Requested profile", "请求参数"),
+                    "${requested.size.width}×${requested.size.height} · ${PlaybackTrackText.bitrate(requested.bitrateBps.toLong())}",
+                )
+            }
+            sidecar?.requestedCaptureRateFps?.let { captureRate ->
+                PlaybackInfoRow(
+                    Utils.t("Capture request", "采集请求"),
+                    String.format(java.util.Locale.US, "%.3f fps", captureRate),
+                )
+            }
         }
     }
 }

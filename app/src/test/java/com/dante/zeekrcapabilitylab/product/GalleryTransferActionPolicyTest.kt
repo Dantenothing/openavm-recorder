@@ -11,6 +11,6 @@ class GalleryTransferActionPolicyTest {
     fun transferMenuIsNeverADevelopmentPlaceholder() {
         assertTrue(GalleryTransferActionPolicy.menuEnabled)
         assertEquals(GalleryTransferAction.ENQUEUE, GalleryTransferActionPolicy.action(connected = true))
-        assertEquals(GalleryTransferAction.OPEN_PHONE, GalleryTransferActionPolicy.action(connected = false))
+        assertEquals(GalleryTransferAction.ENQUEUE, GalleryTransferActionPolicy.action(connected = false))
     }
 }
