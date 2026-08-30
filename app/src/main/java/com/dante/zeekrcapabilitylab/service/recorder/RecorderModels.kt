@@ -221,6 +221,26 @@ object RecorderTransitionPolicy {
     fun shouldInvokeStop(wasRecording: Boolean): Boolean = wasRecording
 }
 
+/** Keeps an interruption reason separate from a real recorder/finalize failure. */
+object InterruptedSegmentFinalizePolicy {
+    const val ERROR_INVALID_VIDEO_TRACK = "FINALIZE_VIDEO_TRACK_INVALID"
+    const val ERROR_RECORDER_NOT_STARTED = "FINALIZE_RECORDER_NOT_STARTED"
+
+    fun effectiveStopError(
+        wasRecording: Boolean,
+        interruptionError: String?,
+        recorderStopError: String?,
+        videoTrackValid: Boolean,
+    ): String? {
+        if (!wasRecording) {
+            return recorderStopError ?: interruptionError ?: ERROR_RECORDER_NOT_STARTED
+        }
+        if (recorderStopError != null) return recorderStopError
+        if (interruptionError != null && !videoTrackValid) return ERROR_INVALID_VIDEO_TRACK
+        return null
+    }
+}
+
 /**
  * Single lock serializing in-process storage metadata read/select/delete with
  * upload-pin writes, so "selected for eviction then protected then deleted"

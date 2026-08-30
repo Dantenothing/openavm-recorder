@@ -25,6 +25,84 @@ enum class CaptureSubmissionMode {
     PACED_SINGLE_ENCODER,
 }
 
+enum class TimeLapsePowerGateAction {
+    NONE,
+    QUIESCE,
+    RESUME,
+}
+
+/**
+ * A preliminary power-off edge is enough to make paced capture quiet, but it is
+ * deliberately not enough to terminate the manual Session. VehicleAway keeps
+ * its stricter two-signal confirmation policy.
+ */
+object TimeLapsePowerGatePolicy {
+    fun action(
+        recordingMode: RecordingMode,
+        recording: Boolean,
+        appForeground: Boolean,
+        interactive: Boolean,
+        mainDisplayOn: Boolean,
+        currentlyQuiesced: Boolean,
+    ): TimeLapsePowerGateAction {
+        if (recordingMode != RecordingMode.TIME_LAPSE || !recording) {
+            return TimeLapsePowerGateAction.NONE
+        }
+        val preliminaryAwayEvidence = !appForeground && (!interactive || !mainDisplayOn)
+        return when {
+            preliminaryAwayEvidence && !currentlyQuiesced -> TimeLapsePowerGateAction.QUIESCE
+            !preliminaryAwayEvidence && currentlyQuiesced -> TimeLapsePowerGateAction.RESUME
+            else -> TimeLapsePowerGateAction.NONE
+        }
+    }
+}
+
+enum class TimeLapseTeardownStage {
+    NONE,
+    DRAINING,
+    CLOSING_SESSION,
+    CLOSING_DEVICE,
+    READY_TO_STOP_RECORDER,
+}
+
+/** Pure escalation policy; Android callbacks provide the actual producer-idle evidence. */
+object TimeLapseTeardownPolicy {
+    fun initialStage(
+        recordingMode: RecordingMode,
+        wasRecording: Boolean,
+        hasCaptureSession: Boolean,
+        hasEncoderSurface: Boolean,
+    ): TimeLapseTeardownStage = if (
+        recordingMode == RecordingMode.TIME_LAPSE &&
+        wasRecording &&
+        hasCaptureSession &&
+        hasEncoderSurface
+    ) {
+        TimeLapseTeardownStage.DRAINING
+    } else {
+        TimeLapseTeardownStage.NONE
+    }
+
+    fun onProducerIdle(stage: TimeLapseTeardownStage): TimeLapseTeardownStage =
+        if (stage in setOf(
+                TimeLapseTeardownStage.DRAINING,
+                TimeLapseTeardownStage.CLOSING_SESSION,
+                TimeLapseTeardownStage.CLOSING_DEVICE,
+            )
+        ) {
+            TimeLapseTeardownStage.READY_TO_STOP_RECORDER
+        } else {
+            stage
+        }
+
+    fun onTimeout(stage: TimeLapseTeardownStage): TimeLapseTeardownStage = when (stage) {
+        TimeLapseTeardownStage.DRAINING -> TimeLapseTeardownStage.CLOSING_SESSION
+        TimeLapseTeardownStage.CLOSING_SESSION -> TimeLapseTeardownStage.CLOSING_DEVICE
+        TimeLapseTeardownStage.CLOSING_DEVICE -> TimeLapseTeardownStage.READY_TO_STOP_RECORDER
+        else -> stage
+    }
+}
+
 data class CaptureCadencePlan(
     val submissionMode: CaptureSubmissionMode,
     val requestedEncoderFps: Double,
@@ -79,9 +157,10 @@ object CaptureCadenceOwnershipPolicy {
         recording: Boolean,
         stopping: Boolean,
         releasing: Boolean,
+        captureAllowed: Boolean,
     ): Boolean = token == currentToken &&
         segmentGeneration == currentSegmentGeneration && sameSession && sameEncoder &&
-        recording && !stopping && !releasing
+        recording && captureAllowed && !stopping && !releasing
 }
 
 @Serializable

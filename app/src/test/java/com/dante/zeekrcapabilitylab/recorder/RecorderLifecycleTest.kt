@@ -9,6 +9,7 @@ import com.dante.zeekrcapabilitylab.service.recorder.SegmentGapPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.SidecarProtectionPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.ActivePreviewReplacementPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.LibraryPublicationPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.InterruptedSegmentFinalizePolicy
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -92,6 +93,49 @@ class RecorderLifecycleTest {
     fun stopIsInvokedOnlyForSegmentsThatActuallyStarted() {
         assertTrue(RecorderTransitionPolicy.shouldInvokeStop(wasRecording = true))
         assertFalse(RecorderTransitionPolicy.shouldInvokeStop(wasRecording = false))
+    }
+
+    @Test
+    fun cameraLossDoesNotDiscardAValidFinalizedRecording() {
+        assertNull(
+            InterruptedSegmentFinalizePolicy.effectiveStopError(
+                wasRecording = true,
+                interruptionError = "CAMERA_DISCONNECTED",
+                recorderStopError = null,
+                videoTrackValid = true,
+            ),
+        )
+        assertEquals(
+            InterruptedSegmentFinalizePolicy.ERROR_INVALID_VIDEO_TRACK,
+            InterruptedSegmentFinalizePolicy.effectiveStopError(
+                wasRecording = true,
+                interruptionError = "CAMERA_DISCONNECTED",
+                recorderStopError = null,
+                videoTrackValid = false,
+            ),
+        )
+    }
+
+    @Test
+    fun interruptionCannotPromoteAnUnstartedOrStopFailedSegment() {
+        assertEquals(
+            "CAMERA_DISCONNECTED",
+            InterruptedSegmentFinalizePolicy.effectiveStopError(
+                wasRecording = false,
+                interruptionError = "CAMERA_DISCONNECTED",
+                recorderStopError = null,
+                videoTrackValid = false,
+            ),
+        )
+        assertEquals(
+            "recorder.stop failed",
+            InterruptedSegmentFinalizePolicy.effectiveStopError(
+                wasRecording = true,
+                interruptionError = "CAMERA_DISCONNECTED",
+                recorderStopError = "recorder.stop failed",
+                videoTrackValid = true,
+            ),
+        )
     }
 
     @Test

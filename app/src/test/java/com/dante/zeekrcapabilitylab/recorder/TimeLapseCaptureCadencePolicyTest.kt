@@ -3,7 +3,11 @@ package com.dante.zeekrcapabilitylab.recorder
 import com.dante.zeekrcapabilitylab.service.recorder.CaptureSubmissionMode
 import com.dante.zeekrcapabilitylab.service.recorder.CaptureCadenceOwnershipPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapsePowerGateAction
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapsePowerGatePolicy
 import com.dante.zeekrcapabilitylab.service.recorder.TimeLapseCaptureCadencePolicy
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapseTeardownPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapseTeardownStage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,6 +76,7 @@ class TimeLapseCaptureCadencePolicyTest {
             recording: Boolean = true,
             stopping: Boolean = false,
             releasing: Boolean = false,
+            captureAllowed: Boolean = true,
         ) = CaptureCadenceOwnershipPolicy.owns(
             token = token,
             currentToken = 3,
@@ -82,6 +87,7 @@ class TimeLapseCaptureCadencePolicyTest {
             recording = recording,
             stopping = stopping,
             releasing = releasing,
+            captureAllowed = captureAllowed,
         )
 
         assertTrue(owns())
@@ -92,5 +98,111 @@ class TimeLapseCaptureCadencePolicyTest {
         assertTrue(!owns(recording = false))
         assertTrue(!owns(stopping = true))
         assertTrue(!owns(releasing = true))
+        assertTrue(!owns(captureAllowed = false))
+    }
+
+    @Test
+    fun timeLapseQuiescesOnPreliminaryVehicleAwayEvidenceWithoutChangingNormalMode() {
+        assertEquals(
+            TimeLapsePowerGateAction.QUIESCE,
+            TimeLapsePowerGatePolicy.action(
+                recordingMode = RecordingMode.TIME_LAPSE,
+                recording = true,
+                appForeground = false,
+                interactive = false,
+                mainDisplayOn = true,
+                currentlyQuiesced = false,
+            ),
+        )
+        assertEquals(
+            TimeLapsePowerGateAction.QUIESCE,
+            TimeLapsePowerGatePolicy.action(
+                recordingMode = RecordingMode.TIME_LAPSE,
+                recording = true,
+                appForeground = false,
+                interactive = true,
+                mainDisplayOn = false,
+                currentlyQuiesced = false,
+            ),
+        )
+        assertEquals(
+            TimeLapsePowerGateAction.NONE,
+            TimeLapsePowerGatePolicy.action(
+                recordingMode = RecordingMode.NORMAL,
+                recording = true,
+                appForeground = false,
+                interactive = false,
+                mainDisplayOn = false,
+                currentlyQuiesced = false,
+            ),
+        )
+    }
+
+    @Test
+    fun timeLapseResumesFromNowWhenPowerEvidenceIsWithdrawn() {
+        assertEquals(
+            TimeLapsePowerGateAction.RESUME,
+            TimeLapsePowerGatePolicy.action(
+                recordingMode = RecordingMode.TIME_LAPSE,
+                recording = true,
+                appForeground = true,
+                interactive = true,
+                mainDisplayOn = true,
+                currentlyQuiesced = true,
+            ),
+        )
+        assertEquals(
+            TimeLapsePowerGateAction.NONE,
+            TimeLapsePowerGatePolicy.action(
+                recordingMode = RecordingMode.TIME_LAPSE,
+                recording = true,
+                appForeground = false,
+                interactive = false,
+                mainDisplayOn = true,
+                currentlyQuiesced = true,
+            ),
+        )
+    }
+
+    @Test
+    fun safeTeardownIsOnlyRequiredForAnActiveTimeLapseProducer() {
+        assertEquals(
+            TimeLapseTeardownStage.DRAINING,
+            TimeLapseTeardownPolicy.initialStage(
+                recordingMode = RecordingMode.TIME_LAPSE,
+                wasRecording = true,
+                hasCaptureSession = true,
+                hasEncoderSurface = true,
+            ),
+        )
+        assertEquals(
+            TimeLapseTeardownStage.NONE,
+            TimeLapseTeardownPolicy.initialStage(
+                recordingMode = RecordingMode.NORMAL,
+                wasRecording = true,
+                hasCaptureSession = true,
+                hasEncoderSurface = true,
+            ),
+        )
+    }
+
+    @Test
+    fun teardownEscalatesWithoutAssumingAbortOrCloseCompletedSynchronously() {
+        assertEquals(
+            TimeLapseTeardownStage.CLOSING_SESSION,
+            TimeLapseTeardownPolicy.onTimeout(TimeLapseTeardownStage.DRAINING),
+        )
+        assertEquals(
+            TimeLapseTeardownStage.CLOSING_DEVICE,
+            TimeLapseTeardownPolicy.onTimeout(TimeLapseTeardownStage.CLOSING_SESSION),
+        )
+        assertEquals(
+            TimeLapseTeardownStage.READY_TO_STOP_RECORDER,
+            TimeLapseTeardownPolicy.onTimeout(TimeLapseTeardownStage.CLOSING_DEVICE),
+        )
+        assertEquals(
+            TimeLapseTeardownStage.READY_TO_STOP_RECORDER,
+            TimeLapseTeardownPolicy.onProducerIdle(TimeLapseTeardownStage.DRAINING),
+        )
     }
 }

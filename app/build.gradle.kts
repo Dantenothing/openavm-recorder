@@ -20,8 +20,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.3.0-alpha4"
+        versionCode = 32
+        versionName = "0.3.0-alpha8-safe-lifecycle"
         buildConfigField("String", "GIT_SHA", "\"$buildGitSha\"")
         buildConfigField("boolean", "CAMERA_INTERRUPTION_RECOVERY_ENABLED", "true")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
