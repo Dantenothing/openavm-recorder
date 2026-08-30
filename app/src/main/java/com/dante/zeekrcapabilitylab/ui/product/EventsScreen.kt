@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.player.RecordingThumbnailCache
 import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.product.UsbExporter
+import com.dante.zeekrcapabilitylab.product.UsbStorage
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
@@ -77,6 +79,9 @@ fun EventsScreen() {
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
     var confirmDeleteUnprotected by remember { mutableStateOf(false) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
+    var usbVolume by remember { mutableStateOf<UsbStorage.UsbVolume?>(null) }
+    var confirmUsbExport by remember { mutableStateOf(false) }
+    var usbExportRunning by remember { mutableStateOf(false) }
 
     fun refresh() {
         scope.launch(Dispatchers.IO) {
@@ -85,8 +90,10 @@ fun EventsScreen() {
                     EventGroups.Segment(file, it)
                 }
             }
+            val volume = UsbStorage.findRemovableVolume(context)
             withContext(Dispatchers.Main) {
                 segments = items
+                usbVolume = volume
                 val names = items.mapTo(mutableSetOf()) { it.file.name }
                 covers = covers.filterKeys { it in names }
             }
@@ -210,6 +217,31 @@ fun EventsScreen() {
         }
     }
 
+    fun exportToUsb(volume: UsbStorage.UsbVolume) {
+        if (usbExportRunning) return
+        usbExportRunning = true
+        statusText = Utils.t("Preparing USB export…", "正在准备导出到U盘…")
+        scope.launch(Dispatchers.IO) {
+            val files = RecorderLibrary.listFinalized(segmentsDir)
+            val result = UsbExporter.exportAll(volume, files) { progress ->
+                scope.launch(Dispatchers.Main) {
+                    statusText = Utils.t(
+                        "Exporting to USB ${progress.done}/${progress.total}…",
+                        "正在导出到U盘 ${progress.done}/${progress.total}…",
+                    )
+                }
+            }
+            withContext(Dispatchers.Main) {
+                usbExportRunning = false
+                val summary = Utils.t(
+                    "USB export: ${result.copied} copied, ${result.skipped} already there, ${result.failed} failed",
+                    "U盘导出：新拷贝 ${result.copied}，已存在 ${result.skipped}，失败 ${result.failed}",
+                )
+                statusText = if (result.firstError != null) "$summary (${result.firstError})" else summary
+            }
+        }
+    }
+
     LaunchedEffect(recorderState.libraryRevision) { refresh() }
 
     val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
@@ -247,6 +279,18 @@ fun EventsScreen() {
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { confirmUsbExport = true },
+                            enabled = usbVolume != null && segments.isNotEmpty() && !usbExportRunning,
+                        ) {
+                            Text(
+                                if (usbVolume == null) {
+                                    Utils.t("No USB drive", "未检测到U盘")
+                                } else {
+                                    Utils.t("Export to USB", "导出到U盘")
+                                },
+                            )
+                        }
                         OutlinedButton(
                             onClick = { confirmDeleteUnprotected = true },
                             enabled = segments.any { !it.sidecar.protected },
@@ -375,6 +419,37 @@ fun EventsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteGroup = null }) { Text(Utils.t("Cancel", "取消")) }
+            },
+        )
+    }
+
+    if (confirmUsbExport) {
+        val volume = usbVolume
+        AlertDialog(
+            onDismissRequest = { confirmUsbExport = false },
+            title = { Text(Utils.t("Export recordings to USB?", "导出录像到U盘？")) },
+            text = {
+                Text(
+                    Utils.t(
+                        "Copies all ${segments.size} finalized recordings and their metadata to \"${volume?.description ?: "USB"}\" " +
+                            "(${(volume?.freeBytes ?: 0L) / (1024L * 1024L * 1024L)} GB free). " +
+                            "Files already on the drive are skipped, and nothing on this device is deleted. " +
+                            "On a computer, find them under Android/data/com.dante.zeekrcapabilitylab/files/AVMRecorder.",
+                        "将全部 ${segments.size} 段已完成录像及其元数据拷贝到“${volume?.description ?: "U盘"}”" +
+                            "（剩余 ${(volume?.freeBytes ?: 0L) / (1024L * 1024L * 1024L)} GB）。" +
+                            "U盘上已有的文件会跳过，本机文件不会被删除。" +
+                            "在电脑上可在 Android/data/com.dante.zeekrcapabilitylab/files/AVMRecorder 中找到。",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmUsbExport = false
+                    volume?.let { exportToUsb(it) }
+                }) { Text(Utils.t("Export", "导出")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUsbExport = false }) { Text(Utils.t("Cancel", "取消")) }
             },
         )
     }
