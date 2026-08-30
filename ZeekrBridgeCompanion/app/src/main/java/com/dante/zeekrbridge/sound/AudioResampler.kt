@@ -1,12 +1,12 @@
 package com.dante.zeekrbridge.sound
 
 /**
- * Deterministic linear-interpolation resampler toward 44,100 Hz.
+ * Deterministic linear-interpolation resampler toward 48,000 Hz.
  * Output length is the ceiling of inputFrames * outRate / inRate, matching the
  * streamed interpolation loop (last output position < inputFrames).
  */
 object AudioResampler {
-    const val TARGET_RATE = 44100
+    const val TARGET_RATE = 48000
 
     fun outputFrameCount(inputFrames: Long, inRate: Int, outRate: Int = TARGET_RATE): Long {
         require(inputFrames >= 0) { "negative frame count" }

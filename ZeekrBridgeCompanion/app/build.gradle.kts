@@ -13,8 +13,8 @@ android {
         applicationId = "com.dante.zeekrbridge"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "2.4.0-alpha1"
+        versionCode = 20
+        versionName = "2.5.0-alpha1"
     }
 
     signingConfigs {

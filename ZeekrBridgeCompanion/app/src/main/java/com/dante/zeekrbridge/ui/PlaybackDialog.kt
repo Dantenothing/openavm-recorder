@@ -63,7 +63,8 @@ import kotlinx.coroutines.delay
 
 private data class PlaybackEntry(
     val id: String,
-    val file: File,
+    val uri: Uri,
+    val readable: Boolean,
     val durationMs: Long,
     val sourceRole: IndexedSourceRole,
     val layoutKind: IndexedLayoutKind,
@@ -85,7 +86,8 @@ fun MediaPlaybackDialog(
         entries = listOf(
             PlaybackEntry(
                 id = file.absolutePath,
-                file = file,
+                uri = Uri.fromFile(file),
+                readable = file.isFile,
                 durationMs = 0L,
                 sourceRole = IndexedSourceRole.UNKNOWN,
                 layoutKind = if (laneLabels.size == 4) IndexedLayoutKind.FOUR_LANE_V1 else IndexedLayoutKind.UNKNOWN,
@@ -114,7 +116,8 @@ fun MediaSessionPlaybackDialog(
         segments.map { segment ->
             PlaybackEntry(
                 id = segment.id,
-                file = segment.file,
+                uri = Uri.fromFile(segment.file),
+                readable = segment.file.isFile,
                 durationMs = segment.durationMs,
                 sourceRole = segment.sourceRole,
                 layoutKind = segment.layoutKind,
@@ -144,6 +147,37 @@ fun MediaSessionPlaybackDialog(
     )
 }
 
+/** Plays a factory Sentry recording directly from a user-authorized USB tree. */
+@Composable
+fun UsbSentryPlaybackDialog(
+    uri: Uri,
+    displayName: String,
+    durationMs: Long,
+    originalWidth: Int?,
+    originalHeight: Int?,
+    onDismiss: () -> Unit,
+) {
+    PlaylistPlaybackDialog(
+        title = displayName,
+        entries = listOf(
+            PlaybackEntry(
+                id = uri.toString(),
+                uri = uri,
+                readable = true,
+                durationMs = durationMs,
+                sourceRole = IndexedSourceRole.SURROUND,
+                layoutKind = IndexedLayoutKind.FOUR_LANE_V1,
+                laneLabels = listOf("Front", "Rear", "Left", "Right"),
+                laneOrder = listOf(1, 2, 3, 4),
+                originalWidth = originalWidth,
+                originalHeight = originalHeight,
+            ),
+        ),
+        initialIndex = 0,
+        onDismiss = onDismiss,
+    )
+}
+
 @Composable
 private fun PlaylistPlaybackDialog(
     title: String,
@@ -152,7 +186,7 @@ private fun PlaylistPlaybackDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val playable = entries.filter { it.file.isFile }
+    val playable = entries.filter { it.readable }
     val missingCount = entries.size - playable.size
     val first = playable.firstOrNull()
     val compatible = first != null && playable.all {
@@ -207,7 +241,7 @@ private fun PlaylistPlaybackDialog(
         player.addListener(listener)
         player.setMediaItems(
             playable.map { entry ->
-                MediaItem.Builder().setMediaId(entry.id).setUri(Uri.fromFile(entry.file)).build()
+                MediaItem.Builder().setMediaId(entry.id).setUri(entry.uri).build()
             },
             currentIndex,
             0L,
@@ -486,7 +520,7 @@ private fun FourLaneVideoSurface(
                 return@createSurfaceTexture
             }
             texture = created
-            val size = readVideoSize(entry)
+            val size = readVideoSize(context, entry)
             if (size.first > 0 && size.second > 0) {
                 created.setDefaultBufferSize(size.first, size.second)
                 glView.setVideoSize(size.first, size.second)
@@ -554,10 +588,18 @@ private fun resolvedDurations(
     }
 }
 
-private fun readVideoSize(entry: PlaybackEntry): Pair<Int, Int> {
+private fun readVideoSize(context: android.content.Context, entry: PlaybackEntry): Pair<Int, Int> {
+    if (!entry.uri.scheme.equals("file", ignoreCase = true)) {
+        val known = (entry.originalWidth ?: 0) to (entry.originalHeight ?: 0)
+        if (known.first > 0 && known.second > 0) return known
+    }
     val retriever = MediaMetadataRetriever()
     val detected = try {
-        retriever.setDataSource(entry.file.absolutePath)
+        if (entry.uri.scheme.equals("file", ignoreCase = true)) {
+            retriever.setDataSource(entry.uri.path)
+        } else {
+            retriever.setDataSource(context, entry.uri)
+        }
         val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
         val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
         width to height

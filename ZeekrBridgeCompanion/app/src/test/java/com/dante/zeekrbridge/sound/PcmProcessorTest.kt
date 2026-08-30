@@ -51,7 +51,7 @@ class PcmProcessorTest {
 
     @Test
     fun trimBoundariesAndOutputDuration() {
-        val input = ArrayPcmInput(44100, 1, ramp(44100, 1, 100))
+        val input = ArrayPcmInput(48000, 1, ramp(48000, 1, 100))
         val (file, result) = process(
             input,
             AudioEditParams(startFrame = 10, endFrame = 30, gain = 1.0, outputChannels = 1),
@@ -60,7 +60,7 @@ class PcmProcessorTest {
         assertTrue(info.valid)
         assertEquals(20L, result.outFrames)
         assertEquals(40L, result.dataBytes)
-        assertEquals(20 * 1000L / 44100L, info.durationMs)
+        assertEquals(20 * 1000L / 48000L, info.durationMs)
         val samples = readSamples(file)
         assertEquals(20, samples.size)
         // first sample equals input frame 10 (0.10f)
@@ -70,22 +70,22 @@ class PcmProcessorTest {
     }
 
     @Test
-    fun resamples48000To44100WithExpectedLength() {
-        val input = ArrayPcmInput(48000, 1, ramp(48000, 1, 100))
+    fun resamples44100To48000WithExpectedLength() {
+        val input = ArrayPcmInput(44100, 1, ramp(44100, 1, 100))
         val (file, result) = process(
             input,
             AudioEditParams(startFrame = 0, endFrame = 100, gain = 1.0, outputChannels = 1),
         )
         val info = WavPcmValidator.validateWavFile(file)
         assertTrue(info.valid)
-        assertEquals(44100, result.sampleRate)
-        assertEquals(92L, result.outFrames)
-        assertEquals(184L, result.dataBytes)
+        assertEquals(48000, result.sampleRate)
+        assertEquals(109L, result.outFrames)
+        assertEquals(218L, result.dataBytes)
         val samples = readSamples(file)
-        assertEquals(92, samples.size)
+        assertEquals(109, samples.size)
         assertTrue(abs(samples[0] - 0.0f) < 0.002f)
         // last output frame lands near input end (0.99)
-        assertTrue(abs(samples[91] - 0.99f) < 0.02f)
+        assertTrue(abs(samples[108] - 0.99f) < 0.02f)
     }
 
     @Test
@@ -95,7 +95,7 @@ class PcmProcessorTest {
             stereo[f * 2] = 0.4f
             stereo[f * 2 + 1] = 0.2f
         }
-        val input = ArrayPcmInput(44100, 2, stereo)
+        val input = ArrayPcmInput(48000, 2, stereo)
         val (monoFile, monoResult) = process(
             input,
             AudioEditParams(startFrame = 0, endFrame = 10, gain = 1.0, outputChannels = 1),
@@ -117,7 +117,7 @@ class PcmProcessorTest {
 
     @Test
     fun gainScalesAndSaturationClamps() {
-        val input = ArrayPcmInput(44100, 1, floatArrayOf(0.5f, -0.5f, 0.25f))
+        val input = ArrayPcmInput(48000, 1, floatArrayOf(0.5f, -0.5f, 0.25f))
         val (file, result) = process(
             input,
             AudioEditParams(startFrame = 0, endFrame = 3, gain = 10.0, outputChannels = 1),
@@ -131,7 +131,7 @@ class PcmProcessorTest {
 
     @Test
     fun normalizationBringsPeakToTarget() {
-        val input = ArrayPcmInput(44100, 1, floatArrayOf(0.5f, -0.25f, 0.1f))
+        val input = ArrayPcmInput(48000, 1, floatArrayOf(0.5f, -0.25f, 0.1f))
         val (file, _) = process(
             input,
             AudioEditParams(
@@ -150,8 +150,8 @@ class PcmProcessorTest {
 
     @Test
     fun fadeInOutBoundarySamples() {
-        val frames = 44100 * 10
-        val input = ArrayPcmInput(44100, 1, FloatArray(frames) { 1f })
+        val frames = 48000 * 10
+        val input = ArrayPcmInput(48000, 1, FloatArray(frames) { 1f })
         // 100 ms fades
         val (file, _) = process(
             input,
@@ -166,8 +166,8 @@ class PcmProcessorTest {
         )
         val samples = readSamples(file)
         assertEquals(frames, samples.size)
-        val fadeIn = 4410
-        val fadeOut = 4410
+        val fadeIn = 4800
+        val fadeOut = 4800
         assertTrue(abs(samples[0]) < 0.002f)          // fade-in start ~0
         assertTrue(abs(samples[fadeIn - 1] - 1f) < 0.002f) // fade-in end ~1
         assertTrue(abs(samples[frames - fadeOut] - 1f) < 0.002f) // fade-out start ~1
@@ -178,7 +178,7 @@ class PcmProcessorTest {
 
     @Test
     fun emptyOrOutOfRangeSelectionRejected() {
-        val input = ArrayPcmInput(44100, 1, FloatArray(100))
+        val input = ArrayPcmInput(48000, 1, FloatArray(100))
         val file = File(tmp.root, "empty.wav")
         try {
             PcmProcessor.process(
@@ -195,8 +195,8 @@ class PcmProcessorTest {
 
     @Test
     fun cancellationStopsAndReleasesOutput() {
-        val frames = 44100 * 60
-        val input = ArrayPcmInput(44100, 1, FloatArray(frames) { 0.5f })
+        val frames = 48000 * 60
+        val input = ArrayPcmInput(48000, 1, FloatArray(frames) { 0.5f })
         val file = File(tmp.root, "cancel.wav")
         var cancelled = false
         var calls = 0

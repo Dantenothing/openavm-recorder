@@ -12,7 +12,7 @@ class SoundBackupPlannerTest {
     fun noConflictMeansNoBackup() {
         val plan = SoundBackupPlanner.plan("tone.wav", listOf("other.wav"), epoch = 1234L)
         assertEquals("tone.wav", plan.finalName)
-        assertEquals("tone.installing-1234.wav", plan.tempName)
+        assertEquals("tone.installing-1234.wav.tmp", plan.tempName)
         assertNull(plan.backupName)
         assertFalse(plan.conflict)
     }
@@ -22,27 +22,27 @@ class SoundBackupPlannerTest {
         val plan = SoundBackupPlanner.plan("tone.wav", listOf("TONE.WAV", "other.wav"), epoch = 1234L)
         assertTrue(plan.conflict)
         assertEquals("tone.wav", plan.finalName)
-        assertEquals("tone.backup-1234.wav", plan.backupName)
+        assertEquals("tone.backup-1234.wav.bak", plan.backupName)
     }
 
     @Test
     fun tempNameAvoidsExistingCollisions() {
         val plan = SoundBackupPlanner.plan(
             "tone.wav",
-            listOf("tone.wav", "tone.installing-1234.wav"),
+            listOf("tone.wav", "tone.installing-1234.wav.tmp"),
             epoch = 1234L,
         )
-        assertEquals("tone.installing-1234-1.wav", plan.tempName)
+        assertEquals("tone.installing-1234-1.wav.tmp", plan.tempName)
     }
 
     @Test
     fun backupNameAvoidsCollisions() {
         val plan = SoundBackupPlanner.plan(
             "tone.wav",
-            listOf("tone.wav", "tone.backup-1234.wav"),
+            listOf("tone.wav", "tone.backup-1234.wav.bak"),
             epoch = 1234L,
         )
-        assertEquals("tone.backup-1234-1.wav", plan.backupName)
+        assertEquals("tone.backup-1234-1.wav.bak", plan.backupName)
     }
 
     @Test

@@ -48,7 +48,7 @@ data class EditSettings(
     val normalize: Boolean = false,
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
-    val outputChannels: Int = 2,
+    val outputChannels: Int = 1,
     val loopPreview: Boolean = false,
 ) {
     companion object {
@@ -257,18 +257,35 @@ class SoundEditorController(
         }
     }
 
-    fun exportToUsb(treeUri: Uri, fileName: String) {
+    fun exportToUsb(treeUri: Uri, fileName: String, preset: ZeekrSoundPreset) {
         startExport(fileName) { converted, name ->
-            val result = UsbWavSaver.save(context, treeUri, converted, name)
+            val size = converted.length()
+            if (!preset.acceptsSize(size)) {
+                throw SoundInputException(
+                    text(
+                        "The ${formatBytes(size)} WAV is too large for the Zeekr 7X preset (must be under 1 MB). Shorten the selection or use Mono.",
+                        "导出 WAV 为 ${formatBytes(size)}，超过 Zeekr 7X 预设的限制（必须小于 1 MB）。请缩短选区或使用 Mono。",
+                    ),
+                    "ZEEKR_FILE_TOO_LARGE",
+                )
+            }
+            val result = UsbWavSaver.save(
+                context = context,
+                treeUri = treeUri,
+                source = converted,
+                requestedName = name,
+                targetDirectoryName = preset.targetDirectoryName,
+                maxWavFiles = preset.maxWavFiles,
+            )
             if (!result.ok) {
                 throw SoundIoException(result.message, result.errorCode ?: "USB_WRITE_FAILED")
             }
             ExportResult(
                 fileName = result.finalName ?: name,
-                sizeBytes = converted.length(),
+                sizeBytes = size,
                 durationMs = durationOf(converted),
-                target = "USB",
-                savedFile = converted,
+                target = preset.targetDirectoryName?.let { "USB /$it/" } ?: "USB",
+                savedFile = null,
                 verified = true,
                 backupName = result.backupName,
                 message = result.message,

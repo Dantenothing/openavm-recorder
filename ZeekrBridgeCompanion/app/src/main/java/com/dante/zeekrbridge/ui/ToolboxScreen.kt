@@ -43,6 +43,12 @@ fun ToolboxScreen() {
     var offers by remember { mutableStateOf<List<OutboundOffer>>(emptyList()) }
     var statusText by remember { mutableStateOf("") }
     var showEditor by remember { mutableStateOf(false) }
+    var showUsbSentry by remember { mutableStateOf(false) }
+
+    if (showUsbSentry) {
+        UsbSentryScreen(onBack = { showUsbSentry = false })
+        return
+    }
 
     if (showEditor) {
         SoundEditorScreen(onBack = { showEditor = false })
@@ -93,31 +99,37 @@ fun ToolboxScreen() {
         Text(t("Toolbox", "工具箱"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
 
-        ToolCard(
-            title = t("Zeekr USB helper", "Zeekr USB 助手"),
-            status = t("Available in the car Lab", "车机实验室可用"),
-            description = t(
-                "USB authorization, scanning, browsing, copying and factory-recording cleanup remain in the car Lab. Phone-side remote USB access will arrive with the authenticated control channel.",
-                "USB 授权、扫描、浏览、复制和原厂录像清理保留在车机实验室。手机远程访问将在双向控制通道完成后开放。",
-            ),
-        )
-        ToolCard(
-            title = t("USB health check", "USB 健康检查"),
-            status = t("Available in the car Lab", "车机实验室可用"),
-            description = t(
-                "Capacity, write access, empty files, damaged videos and directory integrity are checked locally in the car Lab.",
-                "容量、可写状态、零字节文件、损坏视频和目录完整性检查保留在车机实验室。",
-            ),
-        )
+        Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+            Column(Modifier.padding(14.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(t("Zeekr Sentry USB", "Zeekr 哨兵 USB"), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        t("Local USB", "手机直读"),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    t(
+                        "Connect the vehicle USB to this phone to browse and play factory four-lane 360° Sentry recordings. Save the original or export a time range as Front, Rear, Left or Right.",
+                        "将车辆 USB 连接到手机后，可浏览和播放原厂四路 360° 哨兵录像；支持保存原片，或按时间段导出前、后、左、右方向。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { showUsbSentry = true }) { Text(t("Open Sentry USB", "打开哨兵 USB")) }
+            }
+        }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(t("Sound maker (local audio editor)", "声音制作器（本地音频编辑）"), fontWeight = FontWeight.SemiBold)
+                    Text(t("Zeekr Lock / Unlock Sound Maker", "极氪解闭锁音效制作器"), fontWeight = FontWeight.SemiBold)
                     Text(
-                        t("Experimental", "实验性"),
+                        t("Zeekr 7X preset", "Zeekr 7X 预设"),
                         color = MaterialTheme.colorScheme.tertiary,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -125,19 +137,19 @@ fun ToolboxScreen() {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     t(
-                        "Import MP3, M4A, AAC, WAV, FLAC or OGG; trim by waveform, preview, adjust volume, normalize, fade and select Mono/Stereo. Export 44.1 kHz / 16-bit PCM WAV to the phone or an authorized USB folder. Processing stays on this phone.",
-                        "导入 MP3/M4A/AAC/WAV/FLAC/OGG，支持波形裁切、试听、音量、标准化、淡入淡出和 Mono/Stereo；输出 44.1 kHz / 16-bit PCM WAV，可保存到手机或安全写入已授权 USB。全部处理仅在本机完成。",
+                        "Import common audio, trim by waveform, adjust volume and fades, then create 48 kHz / 16-bit PCM WAV files for Zeekr 7X AU/NZ OS 2.1+ or Legacy 2.0. Generic WAV remains available.",
+                        "导入常见音频，使用波形裁切、音量及淡入淡出后，生成适配 Zeekr 7X 澳洲/NZ OS 2.1+ 或 Legacy 2.0 的 48 kHz / 16-bit PCM WAV；也可选择通用 WAV。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { showEditor = true }) { Text(t("Open sound maker", "打开声音制作器")) }
+                    Button(onClick = { showEditor = true }) { Text(t("Make lock / unlock sound", "制作解闭锁音效")) }
                 }
                 Text(
                     t(
-                        "Experimental: the app generates a standards-compliant WAV, but a specific Zeekr firmware may still reject its file name or duration.",
-                        "实验性说明：App 可以生成符合参数的 WAV，但特定 Zeekr 固件仍可能不识别文件名或音频长度。",
+                        "Recommended length: 5 seconds or less. Zeekr-compatible files must remain under 1 MB. The USB writer only manages the selected Zeekr sound folder.",
+                        "建议长度不超过 5 秒；Zeekr 兼容文件必须小于 1 MB。USB 写入器只管理所选的 Zeekr 音效目录。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -221,35 +233,6 @@ fun ToolboxScreen() {
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ToolCard(
-    title: String,
-    status: String,
-    description: String,
-) {
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp),
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(title, fontWeight = FontWeight.SemiBold)
-                Text(
-                    status,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(description, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

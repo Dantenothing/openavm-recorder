@@ -22,18 +22,20 @@ object SoundBackupPlanner {
         val finalName = SoundFileNames.wavFileName(requestedName, fallbackName)
         val base = finalName.substringBeforeLast('.')
         val lower = existingNames.map { it.lowercase() }.toSet()
-        var tempName = "$base.installing-$epoch.wav"
+        // A half-written temporary file must not look like a selectable vehicle sound.
+        var tempName = "$base.installing-$epoch.wav.tmp"
         var n = 1
         while (tempName.lowercase() in lower) {
-            tempName = "$base.installing-$epoch-${n++}.wav"
+            tempName = "$base.installing-$epoch-${n++}.wav.tmp"
         }
         val conflict = finalName.lowercase() in lower
         var backupName: String? = null
         if (conflict) {
-            var candidate = "$base.backup-$epoch.wav"
+            // Keep rollback copies outside the vehicle's WAV scan set.
+            var candidate = "$base.backup-$epoch.wav.bak"
             var bn = 1
             while (candidate.lowercase() in lower || candidate.lowercase() == tempName.lowercase()) {
-                candidate = "$base.backup-$epoch-${bn++}.wav"
+                candidate = "$base.backup-$epoch-${bn++}.wav.bak"
             }
             backupName = candidate
         }

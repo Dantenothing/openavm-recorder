@@ -82,7 +82,7 @@ data class AudioEditParams(
     val normalizeTarget: Double = 0.89,
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
-    val outputChannels: Int = 2,
+    val outputChannels: Int = 1,
 )
 
 data class ProcessedSound(
@@ -95,7 +95,7 @@ data class ProcessedSound(
 )
 
 /**
- * Sample-level editor pipeline: trim -> channel convert -> resample to 44.1 kHz
+ * Sample-level editor pipeline: trim -> channel convert -> resample to 48 kHz
  * -> gain (higher precision, saturation before write) -> optional peak
  * normalization -> linear fades -> little-endian 16-bit PCM WAV.
  *

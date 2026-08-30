@@ -22,6 +22,8 @@ data class UsbEntryInfo(
     val name: String,
     val sizeBytes: Long?,
     val flags: Int,
+    val mimeType: String? = null,
+    val lastModifiedMs: Long? = null,
 )
 
 /** Minimal SAF tree listing/querying used by the sound USB writer. */
@@ -32,6 +34,7 @@ object UsbSaf {
         DocumentsContract.Document.COLUMN_MIME_TYPE,
         DocumentsContract.Document.COLUMN_SIZE,
         DocumentsContract.Document.COLUMN_FLAGS,
+        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
     )
 
     fun rootDocumentUri(treeUri: Uri): Uri? =
@@ -44,12 +47,16 @@ object UsbSaf {
     fun documentUri(treeUri: Uri, documentId: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
 
-    fun listChildren(context: Context, treeUri: Uri): List<UsbEntryInfo>? =
+    fun listChildren(
+        context: Context,
+        treeUri: Uri,
+        parentDocumentId: String? = null,
+    ): List<UsbEntryInfo>? =
         try {
             val root = rootDocumentUri(treeUri) ?: return null
             val children = DocumentsContract.buildChildDocumentsUriUsingTree(
                 treeUri,
-                DocumentsContract.getDocumentId(root),
+                parentDocumentId ?: DocumentsContract.getDocumentId(root),
             )
             val entries = mutableListOf<UsbEntryInfo>()
             val cursor = context.contentResolver.query(children, PROJECTION, null, null, null)
@@ -57,21 +64,46 @@ object UsbSaf {
             cursor.use {
                 val idIdx = it.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                 val nameIdx = it.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = it.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
                 val sizeIdx = it.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
                 val flagsIdx = it.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+                val modifiedIdx = it.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
                 while (it.moveToNext()) {
                     val documentId = if (idIdx >= 0 && !it.isNull(idIdx)) it.getString(idIdx) else null
                     if (documentId == null) continue
                     val name = if (nameIdx >= 0 && !it.isNull(nameIdx)) it.getString(nameIdx) else documentId
                     val size = if (sizeIdx >= 0 && !it.isNull(sizeIdx)) it.getLong(sizeIdx) else null
                     val flags = if (flagsIdx >= 0 && !it.isNull(flagsIdx)) it.getInt(flagsIdx) else 0
-                    entries += UsbEntryInfo(documentId, name, size, flags)
+                    val mime = if (mimeIdx >= 0 && !it.isNull(mimeIdx)) it.getString(mimeIdx) else null
+                    val modified = if (modifiedIdx >= 0 && !it.isNull(modifiedIdx)) it.getLong(modifiedIdx) else null
+                    entries += UsbEntryInfo(documentId, name, size, flags, mime, modified)
                 }
             }
             entries
         } catch (t: Throwable) {
             null
         }
+
+    fun ensureDirectory(context: Context, treeUri: Uri, name: String): Uri? {
+        val cleanName = name.trim().trim('/').takeIf { it.isNotEmpty() } ?: return rootDocumentUri(treeUri)
+        val root = rootDocumentUri(treeUri) ?: return null
+        val existing = listChildren(context, treeUri)?.firstOrNull { it.name.equals(cleanName, ignoreCase = true) }
+        if (existing != null) {
+            return if (existing.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                documentUri(treeUri, existing.documentId)
+            } else {
+                null
+            }
+        }
+        return createDocument(
+            context,
+            root,
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            cleanName,
+        )
+    }
+
+    fun documentId(uri: Uri): String? = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull()
 
     fun availableBytes(context: Context, documentUri: Uri): Long? =
         try {
@@ -226,8 +258,10 @@ object UsbWavSaver {
         treeUri: Uri,
         source: File,
         requestedName: String,
+        targetDirectoryName: String? = null,
+        maxWavFiles: Int? = null,
     ): UsbSaveResult = withContext(Dispatchers.IO) {
-        saveBlocking(context, treeUri, source, requestedName)
+        saveBlocking(context, treeUri, source, requestedName, targetDirectoryName, maxWavFiles)
     }
 
     private fun saveBlocking(
@@ -235,17 +269,23 @@ object UsbWavSaver {
         treeUri: Uri,
         source: File,
         requestedName: String,
+        targetDirectoryName: String?,
+        maxWavFiles: Int?,
     ): UsbSaveResult {
         if (!source.isFile || source.length() == 0L) {
             return UsbSaveResult(false, message = "待写入文件不存在或为空", errorCode = "SOURCE_MISSING")
         }
-        val resolver = context.contentResolver
-        val rootUri = UsbSaf.rootDocumentUri(treeUri)
-            ?: return UsbSaveResult(false, message = "无法访问 USB 目录（可能已被拔出）", errorCode = "USB_UNAVAILABLE")
+        val rootUri = if (targetDirectoryName.isNullOrBlank()) {
+            UsbSaf.rootDocumentUri(treeUri)
+        } else {
+            UsbSaf.ensureDirectory(context, treeUri, targetDirectoryName)
+        } ?: return UsbSaveResult(false, message = "无法访问或创建目标 USB 目录", errorCode = "USB_UNAVAILABLE")
 
-        val entries = UsbSaf.listChildren(context, treeUri)
+        val parentId = UsbSaf.documentId(rootUri)
+            ?: return UsbSaveResult(false, message = "无法识别目标 USB 目录", errorCode = "USB_UNAVAILABLE")
+        val entries = UsbSaf.listChildren(context, treeUri, parentId)
             ?: return UsbSaveResult(false, message = "无法访问 USB 目录（可能已被拔出）", errorCode = "USB_UNAVAILABLE")
-        val names = entries.filter { !it.name.endsWith("/") }.map { it.name }
+        val names = entries.filter { it.mimeType != DocumentsContract.Document.MIME_TYPE_DIR }.map { it.name }
 
         val available = UsbSaf.availableBytes(context, treeUri)
         if (available != null && available >= 0L && available < source.length()) {
@@ -255,6 +295,18 @@ object UsbWavSaver {
         val epoch = System.currentTimeMillis()
         val plan = SoundBackupPlanner.plan(requestedName, names, epoch)
         val existing = entries.firstOrNull { it.name.equals(plan.finalName, ignoreCase = true) }
+        val wavCount = entries.count {
+            it.mimeType != DocumentsContract.Document.MIME_TYPE_DIR &&
+                it.name.endsWith(".wav", ignoreCase = true) &&
+                !it.name.contains(".installing-", ignoreCase = true)
+        }
+        if (maxWavFiles != null && existing == null && wavCount >= maxWavFiles) {
+            return UsbSaveResult(
+                false,
+                message = "目标目录已有 $wavCount 个 WAV；此预设最多允许 $maxWavFiles 个音效",
+                errorCode = "USB_MAX_FILES",
+            )
+        }
 
         var backupUri: Uri? = null
         var tempUri: Uri? = null
@@ -293,7 +345,7 @@ object UsbWavSaver {
                     backupUri = renamed
                 } else {
                     // Copy-based backup: copy existing -> backup doc, verify, then remove original.
-                    val backupDoc = UsbSaf.createDocument(context, rootUri, "audio/wav", plan.backupName)
+                    val backupDoc = UsbSaf.createDocument(context, rootUri, "application/octet-stream", plan.backupName)
                         ?: return UsbSaveResult(false, message = "同名文件备份失败，未覆盖原文件", errorCode = "USB_BACKUP_FAILED")
                     backupUri = backupDoc
                     val tmpFile = File.createTempFile("usb-backup-src-", ".bin", context.cacheDir)
