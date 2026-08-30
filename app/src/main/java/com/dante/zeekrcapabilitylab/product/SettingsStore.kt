@@ -32,6 +32,7 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_AUTO_CLEANUP = "auto_cleanup"
         const val KEY_PREVIEW_WHILE_RECORDING = "preview_while_recording_beta2"
         const val KEY_AUTO_START_RECORDING = "auto_start_recording"
+        const val KEY_RECORDING_STORAGE_TARGET = "recording_storage_target"
         const val KEY_LANE_ORDER = "lane_order"
         const val KEY_LANE_ROTATIONS = "lane_rotations"
         const val KEY_LANE_LABELS = "lane_labels"
@@ -85,6 +86,15 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     val autoStartRecordingEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_RECORDING, false)
+
+    /** Validated on read: anything but the two known targets resolves to internal. */
+    val recordingStorageTarget: String
+        get() = prefs.getString(KEY_RECORDING_STORAGE_TARGET, null)
+            ?.takeIf {
+                it == RecordingStorageTargetPolicy.TARGET_INTERNAL ||
+                    it == RecordingStorageTargetPolicy.TARGET_USB
+            }
+            ?: RecordingStorageTargetPolicy.TARGET_INTERNAL
 
     /** Display order: slot i shows source lane [laneOrder[i]] (1-based). */
     val laneOrder: List<Int>
@@ -173,6 +183,15 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     fun setAutoStartRecordingEnabled(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTO_START_RECORDING, value).apply()
+    }
+
+    fun setRecordingStorageTarget(value: String) {
+        if (value != RecordingStorageTargetPolicy.TARGET_INTERNAL &&
+            value != RecordingStorageTargetPolicy.TARGET_USB
+        ) {
+            return
+        }
+        prefs.edit().putString(KEY_RECORDING_STORAGE_TARGET, value).apply()
     }
 
     fun setLensMode(value: FourLaneLensMode) {

@@ -45,13 +45,18 @@ object UsbExporter {
         if (!targetDir.exists() && !targetDir.mkdirs()) {
             return Result(copied = 0, skipped = 0, failed = recordings.size, bytesCopied = 0L, firstError = "TARGET_DIR_CREATE_FAILED")
         }
+        // Direct-to-USB recordings already live on this volume; no copy needed.
+        val volumePrefix = volume.root.absolutePath + File.separator
+        val (alreadyOnVolume, pending) = recordings.partition {
+            it.absolutePath.startsWith(volumePrefix)
+        }
         var copied = 0
-        var skipped = 0
+        var skipped = alreadyOnVolume.size
         var failed = 0
         var bytesCopied = 0L
         var firstError: String? = null
-        recordings.forEachIndexed { index, source ->
-            onProgress(Progress(done = index, total = recordings.size, currentName = source.name))
+        pending.forEachIndexed { index, source ->
+            onProgress(Progress(done = index, total = pending.size, currentName = source.name))
             val outcome = exportOne(source, targetDir)
             when (outcome) {
                 Outcome.COPIED -> {
@@ -63,14 +68,14 @@ object UsbExporter {
                     failed++
                     if (firstError == null) firstError = outcome.name
                     if (outcome == Outcome.NO_SPACE) {
-                        failed += recordings.size - index - 1
-                        onProgress(Progress(done = recordings.size, total = recordings.size, currentName = null))
+                        failed += pending.size - index - 1
+                        onProgress(Progress(done = pending.size, total = pending.size, currentName = null))
                         return finish(copied, skipped, failed, bytesCopied, firstError, volume)
                     }
                 }
             }
         }
-        onProgress(Progress(done = recordings.size, total = recordings.size, currentName = null))
+        onProgress(Progress(done = pending.size, total = pending.size, currentName = null))
         return finish(copied, skipped, failed, bytesCopied, firstError, volume)
     }
 

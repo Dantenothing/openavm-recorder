@@ -51,8 +51,10 @@ class RecorderSession(
     private val publishState: (RecorderState) -> Unit,
     private val onStopped: () -> Unit,
 ) {
-    private val segmentsDir = File(context.filesDir, "recordings/segments").apply { mkdirs() }
-    private val quarantineDir = File(context.filesDir, "recordings/quarantine").apply { mkdirs() }
+    private var recordingsRoot = File(context.filesDir, "recordings")
+    private var segmentsDir = File(recordingsRoot, "segments").apply { mkdirs() }
+    private var quarantineDir = File(recordingsRoot, "quarantine").apply { mkdirs() }
+    private var storageRootFellBack = false
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val incidentStore = IncidentProtectionStore(context)
 
@@ -168,6 +170,8 @@ class RecorderSession(
                 return@postCamera
             }
             this.config = config
+            storageRootFellBack = false
+            applyRecordingsRoot(config)
             this.previewOutputDesired = true
             releaseRecordingPreviewSurface()
             releasePendingRecordingPreviewSurface()
@@ -1048,7 +1052,10 @@ class RecorderSession(
         val cfg = config ?: return
         if (stopping || releasing) return
         val device = cameraDevice ?: return
-        val decision = prepareStorage(cfg)
+        var decision = prepareStorage(cfg)
+        if (!decision.proceed && trySwapToInternalRoot(decision.reason ?: "STORAGE_BLOCKED")) {
+            decision = prepareStorage(cfg)
+        }
         if (!decision.proceed) {
             storageBlocked(decision.reason ?: "STORAGE_BLOCKED")
             return
@@ -1730,6 +1737,10 @@ class RecorderSession(
             return
         }
         if (!success) {
+            if (trySwapToInternalRoot("SEGMENT_FAILED: ${error ?: "unknown"}")) {
+                startSegment()
+                return
+            }
             closeCamera()
             setError("SEGMENT_FAILED: ${error ?: "unknown"}")
             return
@@ -1787,6 +1798,38 @@ class RecorderSession(
                 lastError = message,
             ),
         )
+    }
+
+    /** Camera thread. Points the whole recording tree at the config's root. */
+    private fun applyRecordingsRoot(cfg: RecorderConfig) {
+        recordingsRoot = cfg.recordingsRootPath?.let { File(it) }
+            ?: File(context.filesDir, "recordings")
+        segmentsDir = File(recordingsRoot, "segments").apply { mkdirs() }
+        quarantineDir = File(recordingsRoot, "quarantine").apply { mkdirs() }
+    }
+
+    /**
+     * Camera thread. When recording targets a removable root and storage fails
+     * (drive unplugged, write error, quota unfreeable), swap the tree back to
+     * internal storage once per session and keep recording instead of dying.
+     * The failed segment's finalize/quarantine already ran on the old root, so
+     * every rename stayed on one filesystem.
+     */
+    private fun trySwapToInternalRoot(reason: String): Boolean {
+        val cfg = config ?: return false
+        if (cfg.recordingsRootPath == null || storageRootFellBack || stopping || releasing) return false
+        storageRootFellBack = true
+        val internalCfg = cfg.copy(recordingsRootPath = null)
+        config = internalCfg
+        applyRecordingsRoot(internalCfg)
+        EventLogger.logEvent(
+            Categories.SYSTEM,
+            "RECORDER_STORAGE_ROOT_FALLBACK",
+            severity = Severity.WARN,
+            payload = mapOf("reason" to reason),
+        )
+        updateState(state.copy(message = "USB storage lost; continuing on internal storage"))
+        return true
     }
 
     private fun storageBlocked(reason: String) {
@@ -2161,7 +2204,7 @@ class RecorderSession(
 
     @SuppressLint("UsableSpace")
     private fun availableStorageBytes(): Long = try {
-        File(context.filesDir, "recordings").usableSpace
+        recordingsRoot.usableSpace
     } catch (t: Throwable) {
         -1L
     }

@@ -17,10 +17,15 @@ data class RecorderConfig(
     val segmentSeconds: Int,
     val storageLimitBytes: Long,
     val minFreeBytes: Long = 20L * 1024L * 1024L * 1024L,
+    /** Root of the recording tree; null means app-internal storage. */
+    val recordingsRootPath: String? = null,
 ) {
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
         if (cameraId.isBlank()) errors += "cameraId must not be blank"
+        if (recordingsRootPath != null && recordingsRootPath.isBlank()) {
+            errors += "recordingsRootPath must not be blank when set"
+        }
         if (profile.size.width <= 0 || profile.size.height <= 0) {
             errors += "profile size must be positive"
         }

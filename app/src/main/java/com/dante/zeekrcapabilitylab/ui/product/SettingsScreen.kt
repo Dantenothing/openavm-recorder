@@ -35,6 +35,7 @@ import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.product.RecordingStorageTargetPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 
 @Composable
@@ -51,6 +52,7 @@ fun SettingsScreen() {
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var correctionTuningVisible by remember { mutableStateOf(false) }
     var versionTapCount by remember { mutableStateOf(0) }
+    var recordingStorageTarget by remember { mutableStateOf(settings.recordingStorageTarget) }
 
     Column(
         Modifier
@@ -103,6 +105,28 @@ fun SettingsScreen() {
                         settings.setSegmentSeconds(segment)
                     },
                 )
+                OptionRow(
+                    label = Utils.t("Recording storage", "录像存储位置"),
+                    options = listOf(Utils.t("Internal", "本机存储"), Utils.t("USB drive", "U盘")),
+                    selectedIndex = if (recordingStorageTarget == RecordingStorageTargetPolicy.TARGET_USB) 1 else 0,
+                    onSelect = { index ->
+                        recordingStorageTarget = if (index == 1) {
+                            RecordingStorageTargetPolicy.TARGET_USB
+                        } else {
+                            RecordingStorageTargetPolicy.TARGET_INTERNAL
+                        }
+                        settings.setRecordingStorageTarget(recordingStorageTarget)
+                    },
+                )
+                Text(
+                    Utils.t(
+                        "USB needs a drive present when recording starts; without one, or if the drive is lost mid-recording, recording continues on internal storage. Applies from the next recording start.",
+                        "选择U盘时需在开始录像前插入U盘；未检测到或录像中U盘丢失时会自动改用本机存储。下次开始录像时生效。",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
                 OptionRow(
                     label = Utils.t("Storage limit", "最大存储"),
                     options = SettingsStore.STORAGE_OPTIONS.map { "${it / (1024L * 1024L * 1024L)} GB" },

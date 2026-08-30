@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.player.RecordingThumbnailCache
 import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.product.RecordingStorageTargetPolicy
 import com.dante.zeekrcapabilitylab.product.UsbExporter
 import com.dante.zeekrcapabilitylab.product.UsbStorage
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
@@ -85,12 +86,18 @@ fun EventsScreen() {
 
     fun refresh() {
         scope.launch(Dispatchers.IO) {
-            val items = RecorderLibrary.listFinalized(segmentsDir).mapNotNull { file ->
-                SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.let {
-                    EventGroups.Segment(file, it)
+            val volume = UsbStorage.findRemovableVolume(context)
+            val roots = listOf(segmentsDir) + listOfNotNull(
+                volume?.let { File(it.root, RecordingStorageTargetPolicy.USB_RECORDINGS_SUBDIR + "/segments") }
+                    ?.takeIf { it.isDirectory },
+            )
+            val items = roots.flatMap { root ->
+                RecorderLibrary.listFinalized(root).mapNotNull { file ->
+                    SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.let {
+                        EventGroups.Segment(file, it)
+                    }
                 }
             }
-            val volume = UsbStorage.findRemovableVolume(context)
             withContext(Dispatchers.Main) {
                 segments = items
                 usbVolume = volume
@@ -149,7 +156,7 @@ fun EventsScreen() {
     fun deleteFile(file: File) {
         scope.launch(Dispatchers.IO) {
             thumbnailCache.remove(file)
-            val result = RecorderLibrary.deleteManagedByUser(segmentsDir, file)
+            val result = RecorderLibrary.deleteManagedByUser(file.parentFile ?: segmentsDir, file)
             withContext(Dispatchers.Main) {
                 if (result.deleted) {
                     if (playFile == file) playFile = null
@@ -166,7 +173,7 @@ fun EventsScreen() {
         scope.launch(Dispatchers.IO) {
             val results = group.segments.map { segment ->
                 thumbnailCache.remove(segment.file)
-                RecorderLibrary.deleteManaged(segmentsDir, segment.file)
+                RecorderLibrary.deleteManaged(segment.file.parentFile ?: segmentsDir, segment.file)
             }
             val deleted = results.count { it.deleted }
             val blocked = results.size - deleted
@@ -182,7 +189,15 @@ fun EventsScreen() {
         val visibleFiles = segments.map { it.file }
         scope.launch(Dispatchers.IO) {
             visibleFiles.forEach(thumbnailCache::remove)
-            val result = RecorderLibrary.deleteAllManagedByUser(segmentsDir)
+            val bulkRoots = listOf(segmentsDir) + listOfNotNull(
+                usbVolume?.let { File(it.root, RecordingStorageTargetPolicy.USB_RECORDINGS_SUBDIR + "/segments") }
+                    ?.takeIf { it.isDirectory },
+            )
+            val bulkResults = bulkRoots.map { RecorderLibrary.deleteAllManagedByUser(it) }
+            val result = RecorderLibrary.BulkDeleteResult(
+                deleted = bulkResults.sumOf { it.deleted },
+                blocked = bulkResults.sumOf { it.blocked },
+            )
             withContext(Dispatchers.Main) {
                 playFile = null
                 covers = emptyMap()
@@ -200,7 +215,15 @@ fun EventsScreen() {
     fun deleteUnprotectedRecordings() {
         val unprotectedFiles = segments.filterNot { it.sidecar.protected }.map { it.file }
         scope.launch(Dispatchers.IO) {
-            val result = RecorderLibrary.deleteAllUnprotected(segmentsDir)
+            val bulkRoots = listOf(segmentsDir) + listOfNotNull(
+                usbVolume?.let { File(it.root, RecordingStorageTargetPolicy.USB_RECORDINGS_SUBDIR + "/segments") }
+                    ?.takeIf { it.isDirectory },
+            )
+            val bulkResults = bulkRoots.map { RecorderLibrary.deleteAllUnprotected(it) }
+            val result = RecorderLibrary.BulkDeleteResult(
+                deleted = bulkResults.sumOf { it.deleted },
+                blocked = bulkResults.sumOf { it.blocked },
+            )
             val deletedFiles = unprotectedFiles.filterNot { it.exists() }
             deletedFiles.forEach(thumbnailCache::remove)
             withContext(Dispatchers.Main) {
