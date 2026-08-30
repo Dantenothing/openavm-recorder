@@ -49,8 +49,10 @@ import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.transfer.TransferRepository
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -69,12 +71,14 @@ fun EventsScreen() {
     }
     val languageMode by AppLanguage.mode.collectAsState()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val phoneConnection by TransferRepository.connection.collectAsState()
 
     var segments by remember { mutableStateOf<List<EventGroups.Segment>>(emptyList()) }
+    var recordings by remember { mutableStateOf<List<RecorderLibrary.Recording>>(emptyList()) }
     var covers by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
     var statusText by remember { mutableStateOf("") }
-    var playFile by remember { mutableStateOf<File?>(null) }
-    var pendingDeleteFile by remember { mutableStateOf<File?>(null) }
+    var playRecording by remember { mutableStateOf<RecorderLibrary.Recording?>(null) }
+    var pendingDeleteRecording by remember { mutableStateOf<RecorderLibrary.Recording?>(null) }
     var pendingDeleteGroup by remember { mutableStateOf<EventGroups.EventGroup?>(null) }
     var confirmDeleteUnprotected by remember { mutableStateOf(false) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
@@ -86,8 +90,10 @@ fun EventsScreen() {
                     EventGroups.Segment(file, it)
                 }
             }
+            val recordingItems = RecorderLibrary.listRecordings(segmentsDir)
             withContext(Dispatchers.Main) {
                 segments = items
+                recordings = recordingItems
                 val names = items.mapTo(mutableSetOf()) { it.file.name }
                 covers = covers.filterKeys { it in names }
             }
@@ -142,17 +148,31 @@ fun EventsScreen() {
         }
     }
 
-    fun deleteFile(file: File) {
+    fun toggleRecordingProtection(recording: RecorderLibrary.Recording) {
         scope.launch(Dispatchers.IO) {
-            thumbnailCache.remove(file)
-            val result = RecorderLibrary.deleteManagedByUser(segmentsDir, file)
+            val protect = recording.protectedCount < recording.files.size
+            val changed = RecorderLibrary.setRecordingProtected(recording, protect)
             withContext(Dispatchers.Main) {
-                if (result.deleted) {
-                    if (playFile == file) playFile = null
-                    statusText = Utils.t("Recording deleted", "录像已删除")
+                statusText = if (protect) {
+                    Utils.t("Protected $changed files", "已保护 $changed 个文件")
                 } else {
-                    statusText = deleteFailureText(result.reason)
+                    Utils.t("Removed protection from $changed files", "已取消保护 $changed 个文件")
                 }
+            }
+            refresh()
+        }
+    }
+
+    fun deleteRecording(recording: RecorderLibrary.Recording) {
+        scope.launch(Dispatchers.IO) {
+            recording.files.forEach(thumbnailCache::remove)
+            val result = RecorderLibrary.deleteRecordingByUser(segmentsDir, recording)
+            withContext(Dispatchers.Main) {
+                if (playRecording?.id == recording.id) playRecording = null
+                statusText = Utils.t(
+                    "Deleted ${result.deleted} files" + if (result.blocked > 0) "; kept ${result.blocked} locked files" else "",
+                    "已删除 ${result.deleted} 个文件" + if (result.blocked > 0) "；保留 ${result.blocked} 个锁定中的文件" else "",
+                )
             }
             refresh()
         }
@@ -180,7 +200,7 @@ fun EventsScreen() {
             visibleFiles.forEach(thumbnailCache::remove)
             val result = RecorderLibrary.deleteAllManagedByUser(segmentsDir)
             withContext(Dispatchers.Main) {
-                playFile = null
+                playRecording = null
                 covers = emptyMap()
                 statusText = Utils.t(
                     "Deleted ${result.deleted} recordings" +
@@ -200,7 +220,7 @@ fun EventsScreen() {
             val deletedFiles = unprotectedFiles.filterNot { it.exists() }
             deletedFiles.forEach(thumbnailCache::remove)
             withContext(Dispatchers.Main) {
-                if (playFile?.let(deletedFiles::contains) == true) playFile = null
+                if (playRecording?.files?.any(deletedFiles::contains) == true) playRecording = null
                 covers = covers - deletedFiles.mapTo(mutableSetOf()) { it.name }
                 statusText = Utils.t(
                     "Deleted ${result.deleted} unprotected recordings" +
@@ -213,12 +233,46 @@ fun EventsScreen() {
         }
     }
 
+    fun queueForPhone(files: List<File>): Boolean {
+        val uniqueFiles = files.distinctBy { it.absolutePath }
+        val results = uniqueFiles.map(TransferRepository::enqueue)
+        val queued = results.count(Result<String>::isSuccess)
+        statusText = when {
+            queued > 0 && !phoneConnection.connected -> Utils.t(
+                "Queued $queued recording${if (queued == 1) "" else "s"}; waiting for the phone connection",
+                "已加入 $queued 段录像；正在等待手机连接",
+            )
+            queued == uniqueFiles.size && queued == 1 -> Utils.t("Added to phone transfer queue", "已加入手机传输队列")
+            queued == uniqueFiles.size -> Utils.t("Queued $queued recordings for phone transfer", "已加入 $queued 段录像到手机传输队列")
+            queued > 0 -> Utils.t(
+                "Queued $queued recordings; ${uniqueFiles.size - queued} could not be added",
+                "已加入 $queued 段；${uniqueFiles.size - queued} 段未能加入",
+            )
+            else -> results.firstOrNull()?.exceptionOrNull()?.message
+                ?: Utils.t("Unable to queue transfer", "无法加入传输队列")
+        }
+        return queued > 0
+    }
+
     LaunchedEffect(recorderState.libraryRevision) { refresh() }
 
-    val incidents = remember(segments, languageMode) { EventGroups.groupIncidents(segments) }
-    val dateGroups = remember(segments, languageMode) { EventGroups.groupByDate(segments) }
-    val playbackSegments = remember(segments) {
-        segments.sortedByDescending(::recordingEpoch)
+    LaunchedEffect(recordings, playRecording?.id) {
+        val selectedId = playRecording?.id ?: return@LaunchedEffect
+        playRecording = recordings.firstOrNull { it.id == selectedId }
+    }
+
+    val incidents = remember(segments, languageMode) {
+        EventGroups.groupIncidents(
+            segments.filter { it.sidecar.recordingMode == RecordingMode.NORMAL },
+        )
+    }
+    val recordingsByDate = remember(recordings, languageMode) {
+        recordings.groupBy { recordingDate(recordingEpoch(it)) }
+            .toList()
+            .sortedByDescending { it.first }
+    }
+    val playbackRecordings = remember(recordings) {
+        recordings.sortedByDescending(::recordingEpoch)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -244,7 +298,7 @@ fun EventsScreen() {
                     Column(Modifier.weight(1f)) {
                         Text(Utils.t("Recordings", "录像记录"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            Utils.t("${segments.size} recordings", "${segments.size} 段录像"),
+                            Utils.t("${recordings.size} recordings", "${recordings.size} 条录像"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -288,14 +342,15 @@ fun EventsScreen() {
                     SavedEventCard(
                         group = group,
                         cover = covers[first.file.name],
-                        onPlay = { playFile = first.file },
+                        onPlay = { playRecording = recordings.firstOrNull { first.file in it.files } },
                         onToggleProtect = { toggleGroupProtection(group) },
+                        onSendToPhone = { queueForPhone(group.segments.map { it.file }) },
                         onDelete = { pendingDeleteGroup = group },
                     )
                 }
             }
 
-            if (segments.isEmpty()) {
+            if (recordings.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Box(
                         Modifier
@@ -308,63 +363,81 @@ fun EventsScreen() {
                 }
             }
 
-            dateGroups.forEach { (date, group) ->
+            recordingsByDate.forEach { (date, group) ->
                 item(key = "date:$date", span = { GridItemSpan(maxLineSpan) }) {
-                    SectionTitle(formatDateHeader(date), Utils.t("${group.segments.size}", "${group.segments.size} 段"))
+                    SectionTitle(formatDateHeader(date), Utils.t("${group.size}", "${group.size} 条"))
                 }
                 items(
-                    items = group.segments.sortedByDescending { recordingEpoch(it) },
-                    key = { "recording:${it.file.name}" },
-                ) { segment ->
+                    items = group.sortedByDescending(::recordingEpoch),
+                    key = { "recording:${it.id}" },
+                ) { recording ->
+                    val segment = EventGroups.Segment(recording.firstFile, recording.sidecar)
                     LaunchedEffect(segment.file.name) { loadCover(segment) }
                     RecordingCard(
                         segment = segment,
+                        recording = recording,
                         cover = covers[segment.file.name],
-                        onPlay = { playFile = segment.file },
-                        onToggleProtect = { toggleFileProtection(segment) },
-                        onDelete = { pendingDeleteFile = segment.file },
+                        onPlay = { playRecording = recording },
+                        onToggleProtect = { toggleRecordingProtection(recording) },
+                        onSendToPhone = { queueForPhone(recording.files) },
+                        onDelete = { pendingDeleteRecording = recording },
                     )
                 }
             }
         }
     }
 
-    playFile?.let { file ->
-        val playbackIndex = playbackSegments.indexOfFirst { it.file == file }
-        val playbackSegment = playbackSegments.getOrNull(playbackIndex)
-        val presentation = playbackSegment?.sidecar?.let(RecordingPresentationPolicy::resolve)
-        val previousFile = playbackSegments.getOrNull(playbackIndex - 1)?.file
-        val nextFile = playbackSegments.getOrNull(playbackIndex + 1)?.file
+    playRecording?.let { recording ->
+        val file = recording.firstFile
+        val playbackIndex = playbackRecordings.indexOfFirst { it.id == recording.id }
+        val presentation = RecordingPresentationPolicy.resolve(recording.sidecar)
+        val previousRecording = playbackRecordings.getOrNull(playbackIndex - 1)
+        val nextRecording = playbackRecordings.getOrNull(playbackIndex + 1)
         FourLanePlayerDialog(
             file = file,
+            files = recording.files,
             layoutKind = presentation?.layoutKind,
             sourceRole = presentation?.sourceRole,
-            onPrevious = previousFile?.let { previous -> { playFile = previous } },
-            onNext = nextFile?.let { next -> { playFile = next } },
-            onSendToPhone = null,
-            onDelete = {
-                // Close playback first so its MediaPlayer and playback pin are
-                // released before the single confirmation dialog can delete.
-                playFile = null
-                pendingDeleteFile = file
+            recordingMode = recording.sidecar.recordingMode,
+            timeLapseMultiplier = recording.sidecar.timeLapseMultiplier,
+            realDurationMs = recording.realDurationMs.takeIf { recording.isTimeLapse },
+            onPrevious = previousRecording?.let { previous -> { playRecording = previous } },
+            onNext = nextRecording?.let { next -> { playRecording = next } },
+            onSendToPhone = {
+                queueForPhone(recording.files)
             },
-            onDismiss = { playFile = null },
+            onDelete = {
+                playRecording = null
+                pendingDeleteRecording = recording
+            },
+            onDismiss = { playRecording = null },
         )
     }
 
-    pendingDeleteFile?.let { file ->
+    pendingDeleteRecording?.let { recording ->
         AlertDialog(
-            onDismissRequest = { pendingDeleteFile = null },
+            onDismissRequest = { pendingDeleteRecording = null },
             title = { Text(Utils.t("Delete this recording?", "删除这段录像？")) },
-            text = { Text(Utils.t("This will permanently delete the recording, including a protected recording.", "这会永久删除该录像，包括已保护录像。")) },
+            text = {
+                Text(
+                    if (recording.files.size > 1) {
+                        Utils.t(
+                            "All ${recording.files.size} safety files in this recording will be permanently deleted.",
+                            "这会永久删除本次录像的全部 ${recording.files.size} 个安全分段。",
+                        )
+                    } else {
+                        Utils.t("This will permanently delete the recording, including a protected recording.", "这会永久删除该录像，包括已保护录像。")
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    pendingDeleteFile = null
-                    deleteFile(file)
+                    pendingDeleteRecording = null
+                    deleteRecording(recording)
                 }) { Text(Utils.t("Delete", "删除"), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteFile = null }) { Text(Utils.t("Cancel", "取消")) }
+                TextButton(onClick = { pendingDeleteRecording = null }) { Text(Utils.t("Cancel", "取消")) }
             },
         )
     }
@@ -463,12 +536,14 @@ private fun SectionTitle(title: String, count: String) {
 @Composable
 private fun RecordingCard(
     segment: EventGroups.Segment,
+    recording: RecorderLibrary.Recording,
     cover: Bitmap?,
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
+    onSendToPhone: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    var menuOpen by remember(segment.file.name) { mutableStateOf(false) }
+    var menuOpen by remember(recording.id) { mutableStateOf(false) }
     Card(
         Modifier
             .fillMaxWidth()
@@ -488,7 +563,10 @@ private fun RecordingCard(
                         .padding(9.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
-                    if (segment.sidecar.protected) StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
+                    if (recording.protectedCount > 0) {
+                        StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
+                    }
+                    StatusBadge("${recording.speedMultiplier}×", Color(0xFF64B5F6))
                 }
                 StatusBadge(
                     text = recordingSourceLabel(segment.sidecar),
@@ -508,21 +586,32 @@ private fun RecordingCard(
                     ) { Text("•••", color = Color.White) }
                     RecordingActionsMenu(
                         expanded = menuOpen,
-                        protected = segment.sidecar.protected,
+                        protected = recording.protected,
                         onDismiss = { menuOpen = false },
                         onToggleProtect = onToggleProtect,
+                        onSendToPhone = onSendToPhone,
                         onDelete = onDelete,
                     )
                 }
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Text(
-                    formatRecordingTime(recordingEpoch(segment)),
+                    formatRecordingTimeRange(recording),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "${formatDuration(segment)}  ·  ${formatBytes(segment.file.length())}",
+                    if (recording.isTimeLapse) {
+                        Utils.t(
+                            "${Utils.formatDuration(recording.realDurationMs)} captured → ${Utils.formatDuration(recording.encodedDurationMs)} video · ${recording.files.size} safety files · ${formatBytes(recording.totalBytes)}",
+                            "实拍 ${Utils.formatDuration(recording.realDurationMs)} → 成片 ${Utils.formatDuration(recording.encodedDurationMs)} · ${recording.files.size} 个安全分段 · ${formatBytes(recording.totalBytes)}",
+                        )
+                    } else {
+                        Utils.t(
+                            "${Utils.formatDuration(recording.realDurationMs)} recorded · ${recording.files.size} safety files · ${formatBytes(recording.totalBytes)}",
+                            "实录 ${Utils.formatDuration(recording.realDurationMs)} · ${recording.files.size} 个安全分段 · ${formatBytes(recording.totalBytes)}",
+                        )
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -537,6 +626,7 @@ private fun SavedEventCard(
     cover: Bitmap?,
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
+    onSendToPhone: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember(group.segments.first().file.name) { mutableStateOf(false) }
@@ -575,6 +665,7 @@ private fun SavedEventCard(
                         protected = group.protectedCount > 0,
                         onDismiss = { menuOpen = false },
                         onToggleProtect = onToggleProtect,
+                        onSendToPhone = onSendToPhone,
                         onDelete = onDelete,
                     )
                 }
@@ -604,6 +695,7 @@ private fun RecordingActionsMenu(
     protected: Boolean,
     onDismiss: () -> Unit,
     onToggleProtect: () -> Unit,
+    onSendToPhone: () -> Unit,
     onDelete: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -612,9 +704,9 @@ private fun RecordingActionsMenu(
             onClick = { onDismiss(); onToggleProtect() },
         )
         DropdownMenuItem(
-            text = { Text(Utils.t("Send to phone · In development", "发送到手机 · 开发中")) },
-            onClick = {},
-            enabled = false,
+            text = { Text(Utils.t("Send to phone", "发送到手机")) },
+            onClick = { onDismiss(); onSendToPhone() },
+            enabled = GalleryTransferActionPolicy.menuEnabled,
         )
         DropdownMenuItem(
             text = { Text(Utils.t("Delete", "删除")) },
@@ -657,8 +749,11 @@ private fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifie
     )
 }
 
-private fun recordingEpoch(segment: EventGroups.Segment): Long =
-    segment.sidecar.startedAtEpochMs ?: segment.file.lastModified()
+private fun recordingEpoch(recording: RecorderLibrary.Recording): Long =
+    recording.startedAtEpochMs
+
+private fun recordingDate(epochMs: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(epochMs))
 
 private fun recordingSourceLabel(sidecar: com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar): String =
     when (RecordingPresentationPolicy.resolve(sidecar).sourceRole) {
@@ -670,6 +765,9 @@ private fun recordingSourceLabel(sidecar: com.dante.zeekrcapabilitylab.service.r
 private fun formatRecordingTime(epochMs: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
 
+private fun formatRecordingTimeRange(recording: RecorderLibrary.Recording): String =
+    "${formatRecordingTime(recording.startedAtEpochMs)}–${formatRecordingTime(recording.stoppedAtEpochMs)}"
+
 private fun formatDateHeader(value: String): String = runCatching {
     val source = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value) ?: return value
     SimpleDateFormat(
@@ -677,16 +775,6 @@ private fun formatDateHeader(value: String): String = runCatching {
         if (AppLanguage.usesChinese()) Locale.SIMPLIFIED_CHINESE else Locale.US,
     ).format(source)
 }.getOrDefault(value)
-
-private fun formatDuration(segment: EventGroups.Segment): String {
-    val duration = segment.sidecar.actualTrack?.durationMs
-        ?: run {
-            val start = segment.sidecar.startedAtEpochMs
-            val stop = segment.sidecar.stoppedAtEpochMs
-            if (start != null && stop != null) stop - start else segment.sidecar.segmentSeconds * 1000L
-        }
-    return Utils.formatDuration(duration)
-}
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))

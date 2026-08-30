@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="received" path="received/" />
+    <files-path name="trash" path="trash/" />
+    <files-path name="root" path="." />
+</paths>

@@ -43,15 +43,20 @@ object VehicleAwayProbe {
     }
 
     private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) = snapshot("DISPLAY_ADDED", displayId.toString())
-        override fun onDisplayRemoved(displayId: Int) = snapshot("DISPLAY_REMOVED", displayId.toString())
+        override fun onDisplayAdded(displayId: Int) {
+            snapshot("DISPLAY_ADDED", displayId.toString())
+            refreshPowerSnapshot("DISPLAY_ADDED")
+        }
+
+        override fun onDisplayRemoved(displayId: Int) {
+            snapshot("DISPLAY_REMOVED", displayId.toString())
+            refreshPowerSnapshot("DISPLAY_REMOVED")
+        }
+
         override fun onDisplayChanged(displayId: Int) {
             snapshot("DISPLAY_CHANGED", displayId.toString())
             if (displayId == Display.DEFAULT_DISPLAY) {
-                val display = context.getSystemService(DisplayManager::class.java)?.getDisplay(displayId)
-                display?.let {
-                    CameraRecordingService.reportMainDisplayPower(it.state != Display.STATE_OFF)
-                }
+                refreshPowerSnapshot("DISPLAY_CHANGED")
             }
         }
     }
@@ -70,18 +75,16 @@ object VehicleAwayProbe {
         ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         context.getSystemService(DisplayManager::class.java)?.let { displayManager ->
             displayManager.registerDisplayListener(displayListener, null)
-            displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.let { display ->
-                CameraRecordingService.reportMainDisplayPower(display.state != Display.STATE_OFF)
-            }
         }
         recordCapabilities()
         snapshot("PROBE_INITIALIZED")
+        refreshPowerSnapshot("PROBE_INITIALIZED")
     }
 
     fun recordAppState(foreground: Boolean) {
         val event = if (foreground) "APP_FOREGROUND" else "APP_BACKGROUND"
         snapshot(event)
-        CameraRecordingService.reportAppForeground(foreground)
+        refreshPowerSnapshot(event)
         if (!foreground) scheduleSnapshots(event)
     }
 
@@ -97,10 +100,7 @@ object VehicleAwayProbe {
 
     private fun recordPowerEdge(event: String, delayed: Boolean) {
         snapshot(event)
-        when (event) {
-            "SCREEN_ON" -> CameraRecordingService.reportScreenPower(true)
-            "SCREEN_OFF" -> CameraRecordingService.reportScreenPower(false)
-        }
+        refreshPowerSnapshot(event)
         if (delayed) scheduleSnapshots(event)
         scheduler.execute { EventLogger.flushBlocking(1_500L) }
     }
@@ -110,11 +110,19 @@ object VehicleAwayProbe {
         lastIncidentId = incident
         listOf(5L, 30L, 120L).forEach { delaySeconds ->
             scheduler.schedule(
-                { snapshot("POWER_DELAYED_SNAPSHOT", "$trigger+$delaySeconds", incident) },
+                {
+                    snapshot("POWER_DELAYED_SNAPSHOT", "$trigger+$delaySeconds", incident)
+                    refreshPowerSnapshot("${trigger}_DELAYED_$delaySeconds")
+                },
                 delaySeconds,
                 TimeUnit.SECONDS,
             )
         }
+    }
+
+    private fun refreshPowerSnapshot(source: String) {
+        if (!::context.isInitialized) return
+        CameraRecordingService.refreshVehiclePowerSnapshot(context, source)
     }
 
     private fun snapshot(
@@ -145,6 +153,8 @@ object VehicleAwayProbe {
                 put("camera", recorder.cameraId ?: "NONE")
                 put("segment", recorder.segmentNumber.toString())
                 put("wakeLock", recorder.wakeLockHeld.toString())
+                put("recordingMode", recorder.recordingMode.name)
+                put("timeLapseMultiplier", recorder.timeLapseMultiplier.toString())
                 detail?.let { put("detail", it) }
                 testType?.let { put("testType", it) }
             },

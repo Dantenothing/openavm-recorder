@@ -48,7 +48,13 @@ object RecorderNotification {
         )
         val profile = state.profile
         val title = buildString {
-            append(Utils.t("Camera ", "摄像头 "))
+            if (state.recordingMode == RecordingMode.TIME_LAPSE) {
+                append(Utils.t("Time-lapse ", "延时摄影 "))
+                append(state.timeLapseMultiplier)
+                append("× · ")
+            } else {
+                append(Utils.t("Camera ", "摄像头 "))
+            }
             append(state.cameraId ?: "?")
             append(" ")
             append(profile?.label ?: "")
@@ -73,14 +79,17 @@ object RecorderNotification {
                 append(Utils.formatEpoch(it))
             }
         }
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
-            .addAction(0, Utils.t("Save clip", "保存片段"), bookmarkIntent)
+        if (state.recordingMode == RecordingMode.NORMAL) {
+            builder.addAction(0, Utils.t("Save clip", "保存片段"), bookmarkIntent)
+        }
+        return builder
             .addAction(0, Utils.t("Stop", "停止"), stopIntent)
             .build()
     }

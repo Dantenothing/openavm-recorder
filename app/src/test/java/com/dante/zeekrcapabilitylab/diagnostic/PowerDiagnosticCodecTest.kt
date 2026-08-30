@@ -17,6 +17,7 @@ class PowerDiagnosticCodecTest {
         assertTrue(payload.contains("|dark=1|"))
         assertTrue(payload.contains("|route=TERMINAL_STOP|"))
         assertTrue(payload.contains("|vr=CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF|"))
+        assertTrue(payload.contains("|stop=VEHICLE_AWAY_CONFIRMED|"))
         assertTrue(payload.toByteArray(Charsets.UTF_8).size <= 900)
         assertTrue(payload.endsWith("tr=1"))
     }
@@ -95,6 +96,7 @@ class PowerDiagnosticCodecTest {
             sawMainDisplayOffWhileBackground = false,
             cameraLossRoute = "TERMINAL_STOP",
             lastReason = "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF",
+            lastStopReason = "VEHICLE_AWAY_CONFIRMED",
         ),
     )
 

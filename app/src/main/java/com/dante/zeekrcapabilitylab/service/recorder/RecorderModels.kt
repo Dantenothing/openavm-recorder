@@ -16,6 +16,8 @@ data class RecorderConfig(
     val segmentSeconds: Int,
     val storageLimitBytes: Long,
     val minFreeBytes: Long = 20L * 1024L * 1024L * 1024L,
+    val recordingMode: RecordingMode = RecordingMode.NORMAL,
+    val timeLapseMultiplier: Int = 1,
 ) {
     val cameraId: String get() = source.cameraId
     val profile: CameraFormatProfile get() = source.profile
@@ -36,7 +38,33 @@ data class RecorderConfig(
         if (minFreeBytes !in MIN_FREE_OPTIONS_BYTES) {
             errors += "minFreeBytes must be one of ${MIN_FREE_OPTIONS_BYTES.sorted()}"
         }
+        when (recordingMode) {
+            RecordingMode.NORMAL -> if (timeLapseMultiplier != 1) {
+                errors += "normal mode multiplier must be 1"
+            }
+            RecordingMode.TIME_LAPSE -> if (timeLapseMultiplier !in TimeLapsePolicy.MULTIPLIERS) {
+                errors += "timeLapseMultiplier must be one of ${TimeLapsePolicy.MULTIPLIERS}"
+            }
+        }
         return errors
+    }
+
+    /** Segment timeout is real wall-clock time; normal settings remain untouched. */
+    fun effectiveSegmentSeconds(): Int = when (recordingMode) {
+        RecordingMode.NORMAL -> segmentSeconds
+        RecordingMode.TIME_LAPSE -> TimeLapsePolicy.SAFETY_CHUNK_SECONDS
+    }
+
+    /** Null is intentional: normal recording must never call MediaRecorder.setCaptureRate(). */
+    fun captureRateFpsOrNull(): Double? = when (recordingMode) {
+        RecordingMode.NORMAL -> null
+        RecordingMode.TIME_LAPSE -> TimeLapsePolicy.captureRateFps(timeLapseMultiplier)
+    }
+
+    fun estimatedEncodedSeconds(): Int = when (recordingMode) {
+        RecordingMode.NORMAL -> segmentSeconds
+        RecordingMode.TIME_LAPSE ->
+            (effectiveSegmentSeconds() + timeLapseMultiplier - 1) / timeLapseMultiplier
     }
 
     companion object {
@@ -89,6 +117,11 @@ data class RecorderState(
     val previewFallbackUsed: Boolean = false,
     /** PARTIAL_WAKE_LOCK held while segments are actively recording. */
     val wakeLockHeld: Boolean = false,
+    val recordingSessionId: String? = null,
+    val sessionStartedAtEpochMs: Long? = null,
+    val recordingMode: RecordingMode = RecordingMode.NORMAL,
+    val timeLapseMultiplier: Int = 1,
+    val effectiveSegmentSeconds: Int = segmentSeconds,
 )
 
 /**
@@ -186,6 +219,26 @@ object FinalizePolicy {
  */
 object RecorderTransitionPolicy {
     fun shouldInvokeStop(wasRecording: Boolean): Boolean = wasRecording
+}
+
+/** Keeps an interruption reason separate from a real recorder/finalize failure. */
+object InterruptedSegmentFinalizePolicy {
+    const val ERROR_INVALID_VIDEO_TRACK = "FINALIZE_VIDEO_TRACK_INVALID"
+    const val ERROR_RECORDER_NOT_STARTED = "FINALIZE_RECORDER_NOT_STARTED"
+
+    fun effectiveStopError(
+        wasRecording: Boolean,
+        interruptionError: String?,
+        recorderStopError: String?,
+        videoTrackValid: Boolean,
+    ): String? {
+        if (!wasRecording) {
+            return recorderStopError ?: interruptionError ?: ERROR_RECORDER_NOT_STARTED
+        }
+        if (recorderStopError != null) return recorderStopError
+        if (interruptionError != null && !videoTrackValid) return ERROR_INVALID_VIDEO_TRACK
+        return null
+    }
 }
 
 /**

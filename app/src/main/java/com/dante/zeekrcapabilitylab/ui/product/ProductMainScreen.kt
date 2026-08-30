@@ -61,10 +61,10 @@ fun ProductMainScreen() {
                         onClick = {
                             navController.navigate(item.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                                    saveState = false
                                 }
                                 launchSingleTop = true
-                                restoreState = true
+                                restoreState = false
                             }
                         },
                         icon = { Icon(item.icon, contentDescription = label) },

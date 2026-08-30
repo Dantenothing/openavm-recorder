@@ -24,6 +24,48 @@ class VehicleAwayStateMachineTest {
     }
 
     @Test
+    fun realtimeSnapshotRepairsMissedPowerCallbacksAtomically() {
+        val machine = activeMachine()
+
+        val action = machine.onPowerSnapshot(
+            generation = generation,
+            appForeground = false,
+            interactive = false,
+            mainDisplayOn = false,
+            nowMs = 5_000L,
+        )
+
+        assertTrue(action is VehicleAwayAction.Schedule)
+        assertEquals(VehicleAwayPhase.PENDING, machine.snapshot.phase)
+        assertFalse(machine.snapshot.appForeground)
+        assertFalse(machine.snapshot.screenOn)
+        assertFalse(machine.snapshot.mainDisplayOn)
+        assertEquals(35_000L, machine.snapshot.confirmAtMs)
+    }
+
+    @Test
+    fun realtimeSnapshotKeepsStrictTimerConditionWhenDisplayIsStillOn() {
+        val machine = activeMachine()
+
+        val action = machine.onPowerSnapshot(
+            generation = generation,
+            appForeground = false,
+            interactive = false,
+            mainDisplayOn = true,
+            nowMs = 5_000L,
+        )
+
+        assertEquals(VehicleAwayAction.None, action)
+        assertEquals(VehicleAwayPhase.ACTIVE, machine.snapshot.phase)
+        assertTrue(machine.snapshot.backgroundPowerOffEvidence)
+        assertNull(machine.nextWakeAtMs())
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF"),
+            machine.onCameraLoss(generation),
+        )
+    }
+
+    @Test
     fun allThreeSignalsArmOneBoundedConfirmationWindow() {
         val machine = activeMachine()
         machine.onAppForeground(generation, false, 1_000L)

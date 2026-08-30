@@ -2,6 +2,7 @@ package com.dante.zeekrcapabilitylab.product
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.dante.zeekrcapabilitylab.service.recorder.TimeLapsePolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 
 /**
@@ -38,6 +39,7 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_IR_CAMERA_MAPPING = "source_mapping_ir"
         const val KEY_CAMERA_MAPPING_REVISION = "source_mapping_revision"
         const val KEY_SOURCE_CONFLICT_WARNING_ACK = "source_conflict_warning_ack"
+        const val KEY_TIME_LAPSE_MULTIPLIER = "time_lapse_multiplier"
         const val KEY_LANE_ORDER = "lane_order"
         const val KEY_LANE_ROTATIONS = "lane_rotations"
         const val KEY_LANE_LABELS = "lane_labels"
@@ -97,6 +99,11 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     val sourceConflictWarningAcknowledged: Boolean
         get() = prefs.getBoolean(KEY_SOURCE_CONFLICT_WARNING_ACK, false)
+
+    /** The speed is remembered, but every fresh app process still starts in NORMAL mode. */
+    val timeLapseMultiplier: Int
+        get() = prefs.getInt(KEY_TIME_LAPSE_MULTIPLIER, TimeLapsePolicy.DEFAULT_MULTIPLIER)
+            .let { if (it in TimeLapsePolicy.MULTIPLIERS) it else TimeLapsePolicy.DEFAULT_MULTIPLIER }
 
     fun cameraMapping(role: RecordingSourceRole): String {
         val key = when (role) {
@@ -214,6 +221,12 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     fun acknowledgeSourceConflictWarning() {
         prefs.edit().putBoolean(KEY_SOURCE_CONFLICT_WARNING_ACK, true).apply()
+    }
+
+    fun setTimeLapseMultiplier(value: Int) {
+        if (value in TimeLapsePolicy.MULTIPLIERS) {
+            prefs.edit().putInt(KEY_TIME_LAPSE_MULTIPLIER, value).apply()
+        }
     }
 
     fun setLensMode(value: FourLaneLensMode) {

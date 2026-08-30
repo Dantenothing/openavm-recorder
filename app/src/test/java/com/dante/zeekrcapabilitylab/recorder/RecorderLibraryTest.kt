@@ -3,6 +3,7 @@ package com.dante.zeekrcapabilitylab.recorder
 import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentNaming
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
@@ -17,7 +18,16 @@ class RecorderLibraryTest {
 
     private val profile = CameraFormatProfile(ProfileSize(1280, 5140), 14_000_000)
 
-    private fun managedMp4(dir: File, name: String, protected: Boolean = false): File {
+    private fun managedMp4(
+        dir: File,
+        name: String,
+        protected: Boolean = false,
+        recordingMode: RecordingMode = RecordingMode.NORMAL,
+        recordingSessionId: String? = null,
+        segmentNumber: Int = 1,
+        realDurationMs: Long? = null,
+        encodedDurationMs: Long? = null,
+    ): File {
         val mp4 = File(dir, name)
         mp4.writeBytes(ByteArray(1024))
         SegmentSidecarIO.writeAtomic(
@@ -27,11 +37,18 @@ class RecorderLibraryTest {
                 cameraId = "2",
                 profile = profile,
                 segmentSeconds = 60,
-                segmentNumber = 1,
+                segmentNumber = segmentNumber,
                 processStartId = "1-1",
+                recordingSessionId = recordingSessionId,
+                recordingMode = recordingMode,
+                timeLapseMultiplier = if (recordingMode == RecordingMode.TIME_LAPSE) 60 else 1,
                 result = SegmentSidecar.RESULT_SUCCESS,
                 fileBytes = 1024,
                 protected = protected,
+                realDurationMs = realDurationMs,
+                actualTrack = encodedDurationMs?.let {
+                    com.dante.zeekrcapabilitylab.service.recorder.ActualTrackInfo(durationMs = it)
+                },
             ),
         )
         return mp4
@@ -259,5 +276,85 @@ class RecorderLibraryTest {
         assertTrue(protected.exists())
         assertTrue(uploadPinned.exists())
         assertTrue(unknown.exists())
+    }
+
+    @Test
+    fun allModernChunksCollapseByManualSessionWhileLegacyFilesRemainSeparate() {
+        val dir = Files.createTempDirectory("rec-lib-session").toFile()
+        managedMp4(
+            dir,
+            "seg-0001-1-1280x5140-14M.mp4",
+            recordingMode = RecordingMode.TIME_LAPSE,
+            recordingSessionId = "drive-a",
+            segmentNumber = 1,
+            realDurationMs = 300_000,
+            encodedDurationMs = 5_000,
+        )
+        managedMp4(
+            dir,
+            "seg-0002-2-1280x5140-14M.mp4",
+            recordingMode = RecordingMode.TIME_LAPSE,
+            recordingSessionId = "drive-a",
+            segmentNumber = 2,
+            realDurationMs = 300_000,
+            encodedDurationMs = 5_000,
+        )
+        managedMp4(
+            dir,
+            "seg-0003-3-1280x5140-14M.mp4",
+            recordingSessionId = "normal-drive",
+            segmentNumber = 3,
+        )
+        managedMp4(
+            dir,
+            "seg-0004-4-1280x5140-14M.mp4",
+            recordingSessionId = "normal-drive",
+            segmentNumber = 4,
+        )
+        managedMp4(
+            dir,
+            "seg-0005-5-1280x5140-14M.mp4",
+            recordingSessionId = null,
+            segmentNumber = 5,
+        )
+
+        val recordings = RecorderLibrary.listRecordings(dir)
+        val timeLapse = recordings.single { it.isTimeLapse }
+        val normal = recordings.single { it.id == "session:normal-drive" }
+        val legacy = recordings.single { it.id.startsWith("file:") }
+
+        assertEquals(3, recordings.size)
+        assertEquals("session:drive-a", timeLapse.id)
+        assertEquals(2, timeLapse.files.size)
+        assertEquals(600_000L, timeLapse.realDurationMs)
+        assertEquals(10_000L, timeLapse.encodedDurationMs)
+        assertEquals(2, normal.files.size)
+        assertEquals(1, normal.speedMultiplier)
+        assertEquals(1, legacy.files.size)
+    }
+
+    @Test
+    fun recordingLevelProtectionAndDeletionApplyToEverySafetyChunk() {
+        val dir = Files.createTempDirectory("rec-lib-session-actions").toFile()
+        repeat(2) { index ->
+            managedMp4(
+                dir,
+                "seg-000${index + 1}-${index + 1}-1280x5140-14M.mp4",
+                recordingMode = RecordingMode.TIME_LAPSE,
+                recordingSessionId = "drive-a",
+                segmentNumber = index + 1,
+            )
+        }
+        var recording = RecorderLibrary.listRecordings(dir).single()
+
+        assertEquals(2, RecorderLibrary.setRecordingProtected(recording, true))
+        recording = RecorderLibrary.listRecordings(dir).single()
+        assertTrue(recording.protected)
+        assertEquals(2, recording.protectedCount)
+
+        val result = RecorderLibrary.deleteRecordingByUser(dir, recording)
+        assertEquals(2, result.deleted)
+        assertEquals(0, result.blocked)
+        assertTrue(RecorderLibrary.listFinalized(dir).isEmpty())
     }
 }

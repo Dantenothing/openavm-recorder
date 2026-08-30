@@ -12,6 +12,7 @@ data class PlaybackDiagnostics(
     val height: Int? = null,
     val durationMs: Long? = null,
     val bitrateBps: Int? = null,
+    val frameRateFps: Float? = null,
     val decoderNames: List<String> = emptyList(),
     val sizeSupported: Boolean? = null,
     val error: String? = null,
@@ -42,12 +43,14 @@ object PlaybackInspector {
             val height = format.intOrNull(MediaFormat.KEY_HEIGHT)
             val durationMs = format.longOrNull(MediaFormat.KEY_DURATION)?.div(1_000L)
             val bitrate = format.intOrNull(MediaFormat.KEY_BIT_RATE)
+            val frameRate = format.intOrNull(MediaFormat.KEY_FRAME_RATE)?.toFloat()
             if (mime.isNullOrBlank()) {
                 return PlaybackDiagnostics(
                     width = width,
                     height = height,
                     durationMs = durationMs,
                     bitrateBps = bitrate,
+                    frameRateFps = frameRate,
                     error = "视频轨道没有编码类型",
                 )
             }
@@ -67,6 +70,7 @@ object PlaybackInspector {
                 height = height,
                 durationMs = durationMs,
                 bitrateBps = bitrate,
+                frameRateFps = frameRate,
                 decoderNames = decoders.map { it.name },
                 sizeSupported = when {
                     decoders.isEmpty() -> false

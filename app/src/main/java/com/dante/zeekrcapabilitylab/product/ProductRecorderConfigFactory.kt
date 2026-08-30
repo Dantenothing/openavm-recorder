@@ -5,6 +5,7 @@ import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentLaneLayoutFactory
 import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
@@ -54,7 +55,12 @@ object ProductRecorderConfigFactory {
         )
     }
 
-    fun create(context: Context, role: RecordingSourceRole): RecorderConfig? {
+    fun create(
+        context: Context,
+        role: RecordingSourceRole,
+        recordingMode: RecordingMode = RecordingMode.NORMAL,
+        timeLapseMultiplier: Int = 1,
+    ): RecorderConfig? {
         val settings = SettingsStore.get(context)
         val source = resolveSource(context, role) ?: return null
         return RecorderConfig(
@@ -62,6 +68,8 @@ object ProductRecorderConfigFactory {
             segmentSeconds = settings.segmentSeconds,
             storageLimitBytes = settings.storageLimitBytes,
             minFreeBytes = settings.minFreeBytes,
+            recordingMode = recordingMode,
+            timeLapseMultiplier = if (recordingMode == RecordingMode.NORMAL) 1 else timeLapseMultiplier,
         )
     }
 }

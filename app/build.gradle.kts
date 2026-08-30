@@ -20,8 +20,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.2.0-alpha9"
+        versionCode = 32
+        versionName = "0.3.0-alpha8-safe-lifecycle"
         buildConfigField("String", "GIT_SHA", "\"$buildGitSha\"")
         buildConfigField("boolean", "CAMERA_INTERRUPTION_RECOVERY_ENABLED", "true")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -51,6 +51,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":transfer-protocol"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

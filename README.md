@@ -11,21 +11,32 @@ Experimental surround-view recorder for compatible Zeekr App Lab environments.
 >
 > The fact that the app can access and record a video stream does **not** establish that doing so has zero impact on shared vehicle compute, memory, camera or storage resources.
 
+> [!CAUTION]
+> **v0.3.0 is an opt-in public test release, not the recommended stable path.** Normal recording inherits the extensively road-tested v0.2 baseline, but time-lapse and the exact v0.3.0 lifecycle changes have not yet completed real-car acceptance testing.
+>
+> When using time-lapse, always press **Stop** before leaving or locking the vehicle. Do not rely on automatic vehicle-away termination. Earlier development builds entered a persistent third-party Camera2/vendor-pipeline stall after repeated time-lapse and lock cycles. If AVM preview becomes black, frozen or unusually slow, stop using the app. If it does not recover, uninstall AVM Recorder and restart the head unit before testing again.
+>
+> OpenAVM Companion's direct recording download has been tested. Its **Toolbox is work in progress and must not be used in this release**.
+
 ## What it is
 
 AVM Recorder records and displays the surround-view video stream exposed to a third-party Android application running in a compatible Zeekr App Lab environment.
 
-The current alpha provides:
+The current public-test alpha provides:
 
-- a 2×2 live view labelled Front, Rear, Left and Right;
-- segmented recording to the app's internal storage;
+- selectable logical sources for 360°, Cabin and IR cameras, with compatibility mapping;
+- a 2×2 360° live view labelled Front, Rear, Left and Right, plus single-view Cabin/IR preview;
+- normal segmented recording to the app's internal storage, grouped into recording Sessions in the gallery;
+- experimental 2×–150× time-lapse recording;
 - protected/saved events that automatic cleanup does not remove;
 - a thumbnail-based recording library;
-- four-view playback, seeking, previous/next recording navigation and single-view zoom;
+- source-aware playback, seeking, Session navigation and single-view zoom;
 - optional display-only fisheye correction; and
-- automatic cleanup controlled by a storage limit and reserved free-space threshold.
+- automatic cleanup controlled by a storage limit and reserved free-space threshold;
+- local hotspot/LAN transfer to OpenAVM Companion; and
+- phone playback and local export of transferred recordings.
 
-Phone transfer is not part of this alpha. The phone page remains disabled while a reliable transport method for this vehicle environment is investigated.
+Phone transfer has been tested for pairing and downloading recordings over a local phone hotspot. Keep the hotspot active and preferably keep OpenAVM Companion in the foreground during a transfer. Automatic reconnection, every background state and every phone vendor have not been fully validated.
 
 ## How it works
 
@@ -253,7 +264,7 @@ AVM Recorder must not interfere with those functions.
 
 If Android reports that the camera is unavailable or already in use:
 
-1. stop or pause recording;
+1. stop recording;
 2. allow the factory vehicle function to retain the camera; and
 3. retry only after the factory function has released it.
 
@@ -266,11 +277,12 @@ AVM Recorder must never be treated as having priority over an OEM vehicle functi
 Once GitHub Releases can be accessed from the tested head-unit environment:
 
 1. Open this repository's GitHub Releases page.
-2. Download the signed `AVM-Recorder-v0.1.0-alpha.apk` release asset.
-3. Open the downloaded APK.
-4. Confirm installation through the available system/App Lab package installation flow.
-5. Launch AVM Recorder.
-6. Grant camera access when requested.
+2. For the more conservative normal-recording baseline, choose `v0.2.0-alpha9`. Volunteer testers may instead choose the clearly marked v0.3.0 prerelease.
+3. Download the signed OpenAVM Recorder APK. Install OpenAVM Companion separately on an Android phone only if phone transfer is required.
+4. Open the downloaded Recorder APK.
+5. Confirm installation through the available system/App Lab package installation flow.
+6. Launch AVM Recorder.
+7. Grant camera access when requested.
 
 Do not install a file whose name ends in `-unsigned.apk`.
 
@@ -295,14 +307,15 @@ Users are encouraged to review:
 - Zeekr-specific assumptions; and
 - cleanup and protected-recording behaviour.
 
-The current alpha requests:
+The current Recorder alpha requests:
 
 - camera permission;
+- Internet and local network/Wi-Fi state permissions for direct phone transfer;
 - notification permission;
 - foreground-service permission; and
 - wake-lock permission.
 
-It does **not** request the Android `INTERNET` permission.
+The network transport is intended for direct local communication with OpenAVM Companion. The public-test release does not require a project-operated cloud service.
 
 Source availability does not by itself prove that the application is safe for every vehicle configuration.
 
@@ -339,6 +352,12 @@ On macOS or Linux:
 ./gradlew clean :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
 ```
 
+OpenAVM Companion is a separate Android project under `ZeekrBridgeCompanion`. From that directory, run the corresponding wrapper command:
+
+```powershell
+.\gradlew.bat clean testReleaseUnitTest lintRelease assembleRelease
+```
+
 Without a locally configured private signing key, Gradle produces `app-release-unsigned.apk`.
 
 Signing keys and credentials must never be committed to the repository.
@@ -352,7 +371,11 @@ Signing keys and credentials must never be committed to the repository.
 - The head unit reported approximately `9 GB` of available RAM during the tested workload, but this observation was not independently validated and does not establish long-term RAM or memory-bandwidth behaviour.
 - Recordings use internal storage rather than external USB storage.
 - Long-term internal flash endurance has not been established.
-- Browser and dedicated-phone-app transfer are disabled in this alpha.
+- Only OpenAVM Companion pairing, direct recording download and core playback/export paths have received practical testing. Keep the phone hotspot active and preferably keep Companion in the foreground while transferring.
+- Companion Toolbox features, including Sentry USB handling and Zeekr lock/unlock sound creation or writing, are work in progress and must not be used in this release.
+- Time-lapse is experimental and has not completed real-car acceptance testing. Always press Stop before leaving or locking the vehicle.
+- Earlier development builds have produced a persistent third-party camera stall after repeated time-lapse/lock cycles. Uninstall AVM Recorder and restart the head unit if camera behaviour does not recover after stopping the app.
+- Automatic vehicle-away termination is not a substitute for manually stopping an experimental time-lapse Session.
 - The special `1280×5140` composite video may not play correctly in every third-party media player.
 - Camera access can become unavailable while a factory camera function owns the relevant resource.
 - The app has not completed long-term thermal, storage-wear or multi-day reliability testing.
