@@ -137,14 +137,27 @@ class VehicleAwayStateMachine(
     }
 
     fun onCameraLoss(generation: Long): VehicleAwayAction {
+        return onBackgroundResourceLoss(generation, "CAMERA_LOSS")
+    }
+
+    /**
+     * USB power can disappear before Camera2 disconnects or the away timer expires.
+     * A fallback must not start a fresh internal recorder during that shutdown.
+     * Recheck after cleanup too: the power edge can arrive while USB is draining.
+     */
+    fun onUsbFallback(generation: Long): VehicleAwayAction {
+        return onBackgroundResourceLoss(generation, "USB_FALLBACK")
+    }
+
+    private fun onBackgroundResourceLoss(generation: Long, reason: String): VehicleAwayAction {
         if (!isCurrent(generation)) {
             return VehicleAwayAction.None
         }
         return when {
-            snapshot.phase == VehicleAwayPhase.PENDING -> confirm("CAMERA_LOSS_DURING_PENDING")
+            snapshot.phase == VehicleAwayPhase.PENDING -> confirm("${reason}_DURING_PENDING")
             snapshot.phase == VehicleAwayPhase.ACTIVE &&
                 !snapshot.appForeground && snapshot.backgroundPowerOffEvidence -> {
-                confirm("CAMERA_LOSS_AFTER_BACKGROUND_POWER_OFF")
+                confirm("${reason}_AFTER_BACKGROUND_POWER_OFF")
             }
             else -> VehicleAwayAction.None
         }

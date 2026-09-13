@@ -2,6 +2,7 @@ package com.dante.zeekrbridge.service
 
 import android.app.Notification
 import android.app.NotificationChannel
+import com.dante.zeekrbridge.ui.t
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -32,6 +33,9 @@ import com.dante.zeekrbridge.core.MediaExportJob
 import com.dante.zeekrbridge.core.MediaExportQueue
 import com.dante.zeekrbridge.core.MediaExportTarget
 import com.dante.zeekrbridge.core.PixelCrop
+import com.dante.zeekrbridge.core.SavedMediaRecord
+import com.dante.zeekrbridge.core.SavedMediaStore
+import com.dante.zeekrbridge.core.ServerLog
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -233,6 +237,30 @@ class MediaExportService : Service() {
 
     private fun finishCompleted(job: MediaExportJob, output: PublishedOutput) {
         if (activeJob?.id != job.id) return
+        job.libraryMetadata?.let { metadata ->
+            runCatching {
+                SavedMediaStore.register(
+                    SavedMediaRecord(
+                        outputUri = output.uri,
+                        outputPath = output.filePath,
+                        displayName = job.outputName,
+                        origin = metadata.origin,
+                        sourceId = metadata.sourceId,
+                        exportTarget = job.plan.target.name,
+                        createdAtEpochMs = System.currentTimeMillis(),
+                        durationMs = job.plan.outputDurationMs,
+                        sizeBytes = output.sizeBytes,
+                        layoutKind = metadata.layoutKind.name,
+                        laneLabels = metadata.laneLabels,
+                        laneOrder = metadata.laneOrder,
+                        originalWidth = metadata.originalWidth,
+                        originalHeight = metadata.originalHeight,
+                    ),
+                )
+            }.onFailure {
+                ServerLog.log("MEDIA_LIBRARY_REGISTER_FAILED job=${job.id} error=${it.message}")
+            }
+        }
         MediaExportQueue.markCompleted(job.id, output.uri, output.filePath)
         clearActiveAndContinue()
     }
@@ -259,7 +287,7 @@ class MediaExportService : Service() {
             val root = File(filesDir, "exports").apply { mkdirs() }
             val target = uniqueFile(root, requestedName)
             source.inputStream().use { input -> target.outputStream().use { output -> copyCancellable(input, output) } }
-            return@withContext PublishedOutput(uri = null, filePath = target.absolutePath)
+            return@withContext PublishedOutput(uri = null, filePath = target.absolutePath, sizeBytes = target.length())
         }
         var uri: Uri? = null
         try {
@@ -280,7 +308,7 @@ class MediaExportService : Service() {
                 null,
                 null,
             )
-            PublishedOutput(uri = uri.toString(), filePath = null)
+            PublishedOutput(uri = uri.toString(), filePath = null, sizeBytes = source.length())
         } catch (error: Throwable) {
             uri?.let { runCatching { contentResolver.delete(it, null, null) } }
             throw error
@@ -311,7 +339,7 @@ class MediaExportService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(CHANNEL_ID, "OpenAVM media exports", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(CHANNEL_ID, t("OpenAVM media exports", "OpenAVM 媒体导出"), NotificationManager.IMPORTANCE_LOW)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
     }
 
@@ -330,7 +358,7 @@ class MediaExportService : Service() {
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText(job?.let { "Exporting ${it.outputName}" } ?: "Preparing media export")
+            .setContentText(job?.let { t("Exporting {0}", "正在导出 {0}", it.outputName) } ?: t("Preparing media export", "正在准备媒体导出"))
             .setContentIntent(openIntent)
             .setOngoing(job != null)
         if (job != null) {
@@ -343,10 +371,10 @@ class MediaExportService : Service() {
                     .putExtra(EXTRA_JOB_ID, job.id),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelIntent)
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, t("Cancel", "取消"), cancelIntent)
         }
         return builder.build()
     }
 
-    private data class PublishedOutput(val uri: String?, val filePath: String?)
+    private data class PublishedOutput(val uri: String?, val filePath: String?, val sizeBytes: Long)
 }

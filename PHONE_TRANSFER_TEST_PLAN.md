@@ -1,29 +1,59 @@
-# v0.2.0-alpha10 phone transfer test plan
+# V4 maintainer regression checklist
 
-This build contains two APKs:
+Use this checklist only while parked. The phone and head unit must share a
+trusted hotspot or private LAN; the authenticated local transfer is not
+end-to-end encrypted.
 
-- Car/head-unit: `app/build/outputs/apk/debug/app-debug.apk`
-- Android phone: `phone/build/outputs/apk/debug/phone-debug.apk`
+This checklist is for subsequent changes and device-specific regression checks.
+The V4 owner acceptance and automated build results are recorded in
+[RELEASE_VERIFICATION.json](RELEASE_VERIFICATION.json).
 
-Use only a trusted phone hotspot or private LAN. The alpha protocol is authenticated but not encrypted.
+The two release build outputs are:
 
-## First connection and integrity
+- Head unit: `app/build/outputs/apk/release/app-release.apk`
+- Android phone: `ZeekrBridgeCompanion/app/build/outputs/apk/release/app-release.apk`
 
-1. Install both APKs. Connect the car to the phone hotspot (or put both devices on the same private Wi-Fi).
-2. On the phone, open AVM Receiver, tap **Start receiver**, then **New code**.
-3. On the car, open **手机**, use **自动查找** or type the IP shown by the phone, enter the six-digit code, and pair.
-4. Open one finalized recording on the car and tap **发送到手机**.
-5. Confirm progress reaches completion, the phone lists exactly one MP4, and Play/Share work.
-6. Share the MP4 to a computer and compare SHA-256 with the car task evidence if deeper integrity validation is needed.
+## Pairing and transfer notification
 
-## Required reliability cases
+1. Start the receiver from OpenAVM Companion's **Vehicle** page and generate a
+   six-digit pairing code.
+2. On the head unit, open **Phone**, pair or reconnect, then send one finalized
+   recording or selected one-minute segment.
+3. Confirm the phone receives exactly one playable item and the head-unit
+   transfer task reaches **Completed**.
+4. Leave the notification shade open for at least 15 seconds. The recording
+   transfer notification must disappear automatically without restarting the
+   app. The persistent Companion receiver notification may remain while the
+   receiver itself is running.
 
-1. **Cancel queued:** queue two recordings, immediately cancel the second. It must become cancelled and never appear on the phone.
-2. **Cancel transferring:** cancel a large recording in progress. The phone must not expose a partial MP4. A completion that won the final commit race may correctly remain completed.
-3. **Network resume:** during a large transfer disable the hotspot/Wi-Fi for 30 seconds, then restore it. The task must show waiting and continue from received chunks rather than restart from zero.
-4. **Phone background:** start a transfer, put AVM Receiver in the background for at least three minutes, then return. Transfer should continue.
-5. **Car background:** start a transfer, switch the head unit to another app for at least three minutes, then return. Transfer should continue and recording/preview must remain unaffected.
-6. **Process recovery:** interrupt one side during transfer, reopen it, check/re-establish the connection, and verify the task resumes without a duplicate final file.
-7. **Concurrent recording regression:** record 360 while sending an older finalized segment. Confirm segment rollover, preview quality, manual Stop, OEM-camera recovery, and vehicle-away stop remain identical to alpha9.
+## Sound relay notification
 
-Do not publish this alpha until cases 1–7 pass on real devices.
+1. In Companion's sound maker, send a short valid WAV to the paired vehicle.
+2. Confirm the car verifies both supported USB sound folders and reports
+   completion.
+3. Confirm the sound-relay notification disappears automatically within
+   15 seconds. If the Zeekr sound list has not refreshed, leave and re-enter the
+   vehicle session before judging the installed WAV.
+
+## Recorder and USB regression
+
+1. Record for at least two one-minute segments with USB preferred.
+2. Open the recording and confirm its full duration and both segment entries.
+3. Send only the second segment and verify that the phone receives only that
+   selection.
+4. Delete one manifest-owned OpenAVM USB recording from the library and refresh.
+   Confirm it disappears and factory `/SentryMode/` remains unchanged.
+5. Unplug USB only after recording has stopped, wait for the library to show it
+   offline, reinsert it, refresh and confirm its recordings return without a
+   crash.
+
+## Release UI
+
+1. After a fresh install/update, confirm Gate, Fast Track, JSON report and Git
+   SHA controls are absent from normal Settings, Library, Phone and USB pages.
+2. Tap the version row seven times; confirm developer tools appear and Storage
+   diagnostics can be opened.
+3. Tap **Disable developer mode** and confirm those controls disappear again.
+
+Investigate before publishing a new release if either completed-transfer notification remains,
+factory Sentry content changes, the recorder fails to stop, or the app crashes.

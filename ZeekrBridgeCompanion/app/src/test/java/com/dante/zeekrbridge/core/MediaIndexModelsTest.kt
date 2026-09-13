@@ -13,6 +13,32 @@ class MediaIndexModelsTest {
     val temp = TemporaryFolder()
 
     @Test
+    fun known2560SquareProducesNeutralTwoByTwoLanes() {
+        val descriptor = FourLaneLayoutClassifier.classify(2560, 2560)!!
+
+        assertEquals(IndexedLayoutKind.FOUR_LANE_GRID_2X2, descriptor.kind)
+        assertEquals(
+            listOf("Top left", "Top right", "Bottom left", "Bottom right"),
+            descriptor.lanes.map { it.label },
+        )
+        assertEquals(
+            listOf(
+                listOf(0, 1280, 0, 1280),
+                listOf(1280, 2560, 0, 1280),
+                listOf(0, 1280, 1280, 2560),
+                listOf(1280, 2560, 1280, 2560),
+            ),
+            descriptor.lanes.map { listOf(it.x0, it.x1, it.y0, it.y1) },
+        )
+        assertEquals(listOf(1, 2, 3, 4), descriptor.lanes.map { it.lane })
+    }
+
+    @Test
+    fun arbitrarySquareIsNotAssumedToBeFourLane() {
+        assertEquals(null, FourLaneLayoutClassifier.classify(1920, 1920))
+    }
+
+    @Test
     fun stableSessionIdGroupsSegmentsAndKeepsDifferentSessionsApart() {
         val segments = listOf(
             segment("a", 1_000, 1, sessionId = "session-a"),

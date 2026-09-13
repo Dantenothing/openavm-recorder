@@ -1,5 +1,6 @@
 package com.dante.zeekrcapabilitylab.service.recorder
 
+import com.dante.zeekrcapabilitylab.usbexport.UsbExportPinRegistry
 import java.io.File
 
 /**
@@ -47,6 +48,7 @@ object RecorderLibrary {
     const val DELETE_NOT_MANAGED = "NOT_MANAGED"
     const val DELETE_BOOKMARKED = "BOOKMARKED"
     const val DELETE_UPLOAD_PINNED = "UPLOAD_PINNED"
+    const val DELETE_USB_EXPORT_PINNED = "USB_EXPORT_PINNED"
     const val DELETE_PLAYING = "PLAYING"
     const val DELETE_MEDIA_FAILED = "MEDIA_DELETE_FAILED"
     const val DELETE_SIDECAR_FAILED = "SIDECAR_DELETE_FAILED"
@@ -271,6 +273,9 @@ object RecorderLibrary {
             return@synchronized DeleteResult(false, DELETE_BOOKMARKED)
         }
         if (sidecar.uploadPinned) return@synchronized DeleteResult(false, DELETE_UPLOAD_PINNED)
+        if (UsbExportPinRegistry.isPinned(file)) {
+            return@synchronized DeleteResult(false, DELETE_USB_EXPORT_PINNED)
+        }
         if (PlaybackPinRegistry.isPinned(file)) return@synchronized DeleteResult(false, DELETE_PLAYING)
 
         val mediaDeleted = try {

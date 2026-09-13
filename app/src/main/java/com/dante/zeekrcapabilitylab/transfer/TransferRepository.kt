@@ -24,6 +24,18 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
 import com.dante.zeekrcapabilitylab.ZeekrApp
 
+import com.dante.zeekrcapabilitylab.usbexport.UsbBundleLeaseRegistry
+import com.dante.zeekrcapabilitylab.usbexport.UsbExportPolicy
+import com.dante.zeekrcapabilitylab.usbexport.UsbExportVolumeResolver
+import com.dante.zeekrcapabilitylab.usbexport.UsbMediaStoreBackend
+import com.dante.zeekrcapabilitylab.usbexport.UsbSegmentCatalog
+@Serializable
+enum class TransferSourceKind {
+    MANAGED_RECORDING,
+    FACTORY_SENTRY_USB,
+    OPENAVM_USB,
+}
+
 @Serializable
 data class TransferTask(
     val id: String,
@@ -38,8 +50,27 @@ data class TransferTask(
     val chunkSize: Int = 0,
     val totalChunks: Int = 0,
     val uploadedChunks: Int = 0,
+    /** One user-confirmed multi-segment transfer selection. Null for legacy tasks. */
+    val selectionId: String? = null,
+    val selectionOrder: Int? = null,
+    val selectionCount: Int? = null,
+    val sourceRecordingSessionId: String? = null,
+    val sourceKind: TransferSourceKind = TransferSourceKind.MANAGED_RECORDING,
+    val sourceStorageUuid: String? = null,
+    val sourceRelativePath: String? = null,
+    val sourceEventId: String? = null,
+    val sourceLastModifiedEpochMs: Long? = null,
+    val sourceBundleId: String? = null,
+    val sourceContentKey: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+)
+
+data class TransferSelectionResult(
+    val selectionId: String,
+    val taskIds: List<String>,
+    val fileCount: Int,
+    val totalBytes: Long,
 )
 
 object TransferRepository {
@@ -130,37 +161,261 @@ object TransferRepository {
         }
     }
 
-    fun enqueue(file: File): Result<String> = synchronized(lock) {
-        if (!RecorderLibrary.isManaged(file)) return Result.failure(IllegalArgumentException("Recording is not finalized"))
-        if (_tasks.value.any { it.filePath == file.absolutePath && it.state !in TERMINAL }) {
-            return Result.failure(IllegalStateException("Recording is already queued"))
+    fun enqueue(file: File): Result<String> =
+        enqueueSelection(recordingSessionId = null, files = listOf(file)).map { it.taskIds.single() }
+
+    /**
+     * Durably queues one user selection as an all-or-nothing operation.
+     * Every source is validated and pinned before the queue snapshot is replaced;
+     * a failure restores both the old queue and every pin acquired by this call.
+     */
+    fun enqueueSelection(
+        recordingSessionId: String?,
+        files: List<File>,
+    ): Result<TransferSelectionResult> {
+        val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
+        val result = synchronized(lock) {
+            val uniqueFiles = files.distinctBy { it.absolutePath }
+            if (uniqueFiles.isEmpty()) {
+                return@synchronized Result.failure(IllegalArgumentException("Select at least one segment"))
+            }
+
+            val candidates = uniqueFiles.map { file ->
+                if (!RecorderLibrary.isManaged(file)) {
+                    return@synchronized Result.failure(IllegalArgumentException("Recording is not finalized: ${file.name}"))
+                }
+                if (_tasks.value.any { it.filePath == file.absolutePath && it.state !in TERMINAL }) {
+                    return@synchronized Result.failure(IllegalStateException("Recording is already queued: ${file.name}"))
+                }
+                val sidecarFile = SegmentSidecarIO.sidecarFileFor(file)
+                val sidecar = SegmentSidecarIO.read(sidecarFile)
+                    ?: return@synchronized Result.failure(IllegalStateException("Recording metadata is unavailable: ${file.name}"))
+                val sidecarJson = runCatching { sidecarFile.readText() }.getOrElse {
+                    return@synchronized Result.failure(IllegalStateException("Recording metadata cannot be read: ${file.name}", it))
+                }
+                if (recordingSessionId != null && sidecar.recordingSessionId != recordingSessionId) {
+                    return@synchronized Result.failure(IllegalArgumentException("Selected segments do not belong to the same recording"))
+                }
+                Triple(file, sidecar, sidecarJson)
+            }.sortedWith(compareBy<Triple<File, com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar, String>> {
+                it.second.segmentNumber
+            }.thenBy { it.first.lastModified() })
+
+            val previousTasks = _tasks.value
+            val pinned = mutableListOf<File>()
+            try {
+                candidates.forEach { (file, _, _) ->
+                    if (!RecorderLibrary.pinForUpload(file)) {
+                        error("Unable to protect recording for transfer: ${file.name}")
+                    }
+                    pinned += file
+                }
+
+                val selectionId = UUID.randomUUID().toString()
+                val now = System.currentTimeMillis()
+                val newTasks = candidates.mapIndexed { index, (file, _, sidecarJson) ->
+                    TransferTask(
+                        id = UUID.randomUUID().toString(),
+                        filePath = file.absolutePath,
+                        fileName = file.name,
+                        sizeBytes = file.length(),
+                        sidecarJson = sidecarJson,
+                        state = decision.initialState,
+                        reason = decision.reason,
+                        selectionId = selectionId,
+                        selectionOrder = index,
+                        selectionCount = candidates.size,
+                        sourceRecordingSessionId = recordingSessionId,
+                        createdAt = now,
+                        updatedAt = now,
+                    )
+                }
+                _tasks.value = previousTasks + newTasks
+                saveLocked()
+                Result.success(
+                    TransferSelectionResult(
+                        selectionId = selectionId,
+                        taskIds = newTasks.map { it.id },
+                        fileCount = newTasks.size,
+                        totalBytes = newTasks.sumOf { it.sizeBytes },
+                    ),
+                )
+            } catch (t: Throwable) {
+                _tasks.value = previousTasks
+                runCatching { saveLocked() }
+                pinned.forEach(RecorderLibrary::releaseUploadPin)
+                Result.failure(t)
+            }
         }
-        val sidecar = runCatching { SegmentSidecarIO.sidecarFileFor(file).readText() }.getOrNull()
-        if (!RecorderLibrary.pinForUpload(file)) return Result.failure(IllegalStateException("Unable to protect recording for transfer"))
-        try {
-            val id = UUID.randomUUID().toString()
-            val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
+
+        activateSelection(decision, result)
+        return result
+    }
+
+    /** Queues one read-only factory SentryMode MP4 without mutating or pinning the USB source. */
+    fun enqueueFactorySentry(
+        storageUuid: String,
+        eventId: String,
+        startedAtEpochMs: Long,
+        videoFile: File,
+    ): Result<TransferSelectionResult> {
+        val snapshot = FactorySentryTransferSource.snapshotForQueue(
+            context = ZeekrApp.appContext,
+            storageUuid = storageUuid,
+            eventId = eventId,
+            startedAtEpochMs = startedAtEpochMs,
+            selectedFile = videoFile,
+        ).getOrElse { return Result.failure(it) }
+        val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
+        val result = synchronized(lock) {
+            if (_tasks.value.any {
+                    it.sourceKind == TransferSourceKind.FACTORY_SENTRY_USB &&
+                        it.sourceStorageUuid.equals(storageUuid, ignoreCase = true) &&
+                        it.sourceRelativePath == snapshot.relativePath &&
+                        it.state !in TERMINAL
+                }
+            ) {
+                return@synchronized Result.failure(
+                    IllegalStateException("Sentry event is already queued: $eventId"),
+                )
+            }
+            val selectionId = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
             val task = TransferTask(
-                id = id,
-                filePath = file.absolutePath,
-                fileName = file.name,
-                sizeBytes = file.length(),
-                sidecarJson = sidecar,
+                id = UUID.randomUUID().toString(),
+                filePath = snapshot.file.absolutePath,
+                fileName = snapshot.file.name,
+                sizeBytes = snapshot.sizeBytes,
+                sidecarJson = snapshot.sidecarJson,
                 state = decision.initialState,
                 reason = decision.reason,
+                selectionId = selectionId,
+                selectionOrder = 0,
+                selectionCount = 1,
+                sourceRecordingSessionId = snapshot.sourceId,
+                sourceKind = TransferSourceKind.FACTORY_SENTRY_USB,
+                sourceStorageUuid = storageUuid,
+                sourceRelativePath = snapshot.relativePath,
+                sourceEventId = eventId,
+                sourceLastModifiedEpochMs = snapshot.lastModifiedEpochMs,
+                createdAt = now,
+                updatedAt = now,
             )
-            _tasks.value = _tasks.value + task
-            saveLocked()
-            if (decision.startServiceImmediately) {
-                TransferService.start(ZeekrApp.appContext)
-            } else {
-                reconnectInBackground()
+            val previousTasks = _tasks.value
+            try {
+                _tasks.value = previousTasks + task
+                saveLocked()
+                Result.success(
+                    TransferSelectionResult(
+                        selectionId = selectionId,
+                        taskIds = listOf(task.id),
+                        fileCount = 1,
+                        totalBytes = task.sizeBytes,
+                    ),
+                )
+            } catch (t: Throwable) {
+                _tasks.value = previousTasks
+                runCatching { saveLocked() }
+                Result.failure(t)
             }
-            Result.success(id)
-        } catch (t: Throwable) {
-            RecorderLibrary.releaseUploadPin(file)
-            Result.failure(t)
         }
+        activateSelection(decision, result)
+        return result
+    }
+
+    /** Queues selected verified OpenAVM USB segment bundles without making an internal MP4 copy. */
+    fun enqueueOpenAvmUsb(
+        storageUuid: String,
+        recordingSessionId: String,
+        files: List<File>,
+    ): Result<TransferSelectionResult> {
+        val target = UsbExportVolumeResolver.mountedTargets(ZeekrApp.appContext).singleOrNull {
+            it.storageUuid.equals(storageUuid, ignoreCase = true)
+        } ?: return Result.failure(IllegalStateException("Reconnect the same USB before sending"))
+        val backend = UsbMediaStoreBackend(ZeekrApp.appContext)
+        val bundles = runCatching { UsbSegmentCatalog(ZeekrApp.appContext, backend).snapshot(target).segments }
+            .getOrElse { return Result.failure(it) }
+        val selected = files.distinctBy { it.absolutePath }.map { file ->
+            val bundle = bundles.singleOrNull {
+                it.video.displayName == file.name && it.video.sizeBytes == file.length()
+            } ?: return Result.failure(IllegalArgumentException("USB segment is not a verified OpenAVM bundle: ${file.name}"))
+            val sidecarJson = runCatching {
+                backend.readBytes(bundle.sidecar.uri).toString(Charsets.UTF_8)
+            }.getOrElse { return Result.failure(it) }
+            Triple(file, bundle, sidecarJson)
+        }.sortedBy { it.second.manifestData.segmentNumber }
+        if (selected.isEmpty()) return Result.failure(IllegalArgumentException("Select at least one USB segment"))
+        val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
+        val result = synchronized(lock) {
+            val duplicate = selected.firstOrNull { (_, bundle, _) ->
+                _tasks.value.any { task ->
+                    task.sourceKind == TransferSourceKind.OPENAVM_USB &&
+                        task.sourceStorageUuid.equals(storageUuid, ignoreCase = true) &&
+                        task.sourceBundleId == bundle.manifestData.bundleId &&
+                        task.state !in TERMINAL
+                }
+            }
+            if (duplicate != null) {
+                return@synchronized Result.failure(
+                    IllegalStateException("USB segment is already queued: ${duplicate.first.name}"),
+                )
+            }
+            val selectionId = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            val tasks = selected.mapIndexed { index, (file, bundle, sidecarJson) ->
+                val manifest = bundle.manifestData
+                val relativePath = listOfNotNull(
+                    bundle.video.relativePath?.trim()?.trim('/', '\\'),
+                    bundle.video.displayName,
+                ).joinToString("/")
+                TransferTask(
+                    id = UUID.randomUUID().toString(),
+                    filePath = file.absolutePath,
+                    fileName = file.name,
+                    sizeBytes = file.length(),
+                    sidecarJson = sidecarJson,
+                    state = decision.initialState,
+                    reason = decision.reason,
+                    selectionId = selectionId,
+                    selectionOrder = index,
+                    selectionCount = selected.size,
+                    sourceRecordingSessionId = recordingSessionId,
+                    sourceKind = TransferSourceKind.OPENAVM_USB,
+                    sourceStorageUuid = storageUuid,
+                    sourceRelativePath = relativePath,
+                    sourceLastModifiedEpochMs = file.lastModified(),
+                    sourceBundleId = manifest.bundleId,
+                    sourceContentKey = manifest.contentKey,
+                    createdAt = now,
+                    updatedAt = now,
+                )
+            }
+            val previous = _tasks.value
+            try {
+                tasks.forEach { task ->
+                    UsbBundleLeaseRegistry.acquire(storageUuid, requireNotNull(task.sourceBundleId))
+                }
+                _tasks.value = previous + tasks
+                saveLocked()
+                Result.success(
+                    TransferSelectionResult(
+                        selectionId = selectionId,
+                        taskIds = tasks.map { it.id },
+                        fileCount = tasks.size,
+                        totalBytes = tasks.sumOf { it.sizeBytes },
+                    ),
+                )
+            } catch (failure: Throwable) {
+                _tasks.value = previous
+                tasks.forEach { task ->
+                    UsbBundleLeaseRegistry.release(storageUuid, requireNotNull(task.sourceBundleId))
+                }
+                runCatching { saveLocked() }
+                Result.failure(failure)
+            }
+        }
+        activateSelection(decision, result)
+        return result
     }
 
     fun cancel(id: String) {
@@ -175,13 +430,13 @@ object TransferRepository {
                         updatedAt = System.currentTimeMillis(),
                     ),
                 )
-                RecorderLibrary.releaseUploadPin(File(task.filePath))
+                releaseSourcePin(task)
                 return
             }
             updateLocked(task.copy(state = TransferTaskState.CANCEL_PENDING, reason = "Cancelled by user", updatedAt = System.currentTimeMillis()))
             // Once intent is durable and the active HTTP read is cancelled, remote cleanup only needs uploadId/token.
             TransferHttp.cancel(id)
-            RecorderLibrary.releaseUploadPin(File(task.filePath))
+            releaseSourcePin(task)
             TransferService.start(ZeekrApp.appContext)
         }
     }
@@ -190,8 +445,14 @@ object TransferRepository {
         synchronized(lock) {
             val task = _tasks.value.firstOrNull { it.id == id } ?: return
             if (task.state !in setOf(TransferTaskState.FAILED, TransferTaskState.WAITING_RETRY)) return
+            val leaseWasReleased = task.state == TransferTaskState.FAILED
             updateLocked(task.copy(state = TransferTaskState.QUEUED, reason = null, updatedAt = System.currentTimeMillis()))
-            if (File(task.filePath).isFile) RecorderLibrary.pinForUpload(File(task.filePath))
+            if (task.sourceKind == TransferSourceKind.MANAGED_RECORDING && File(task.filePath).isFile) {
+                RecorderLibrary.pinForUpload(File(task.filePath))
+            }
+            if (task.sourceKind == TransferSourceKind.OPENAVM_USB && leaseWasReleased) {
+                UsbBundleLeaseRegistry.acquire(requireNotNull(task.sourceStorageUuid), requireNotNull(task.sourceBundleId))
+            }
             TransferService.start(ZeekrApp.appContext)
         }
     }
@@ -212,8 +473,11 @@ object TransferRepository {
     }
 
     fun finish(task: TransferTask, state: TransferTaskState, reason: String? = null) = synchronized(lock) {
-        updateLocked(task.copy(state = state, reason = reason, updatedAt = System.currentTimeMillis()))
-        RecorderLibrary.releaseUploadPin(File(task.filePath))
+        val current = _tasks.value.firstOrNull { it.id == task.id } ?: return@synchronized
+        updateLocked(current.copy(state = state, reason = reason, updatedAt = System.currentTimeMillis()))
+        if (current.state !in TERMINAL && current.state != TransferTaskState.CANCEL_PENDING) {
+            releaseSourcePin(current)
+        }
     }
 
     private fun updateLocked(task: TransferTask) {
@@ -240,12 +504,59 @@ object TransferRepository {
     val TERMINAL = setOf(TransferTaskState.COMPLETED, TransferTaskState.CANCELLED, TransferTaskState.FAILED)
 
     private fun reconcileUploadPins() {
-        val activePaths = _tasks.value.filter { it.state !in TERMINAL && it.state != TransferTaskState.CANCEL_PENDING }
+        UsbBundleLeaseRegistry.reset()
+        val activePaths = _tasks.value.filter {
+            it.sourceKind == TransferSourceKind.MANAGED_RECORDING &&
+                it.state !in TERMINAL && it.state != TransferTaskState.CANCEL_PENDING
+        }
             .mapTo(mutableSetOf()) { it.filePath }
         val segmentsDir = File(filesRoot, "recordings/segments")
         RecorderLibrary.listFinalized(segmentsDir).forEach { file ->
             if (file.absolutePath in activePaths) RecorderLibrary.pinForUpload(file)
             else if (RecorderLibrary.protectionOf(file)?.uploadPinned == true) RecorderLibrary.releaseUploadPin(file)
+        }
+        _tasks.value.filter {
+            it.sourceKind == TransferSourceKind.OPENAVM_USB &&
+                it.state !in TERMINAL && it.state != TransferTaskState.CANCEL_PENDING
+        }.forEach { task ->
+            val uuid = task.sourceStorageUuid ?: return@forEach
+            val bundleId = task.sourceBundleId ?: return@forEach
+            UsbBundleLeaseRegistry.acquire(uuid, bundleId)
+        }
+    }
+
+    private fun activateSelection(
+        decision: TransferEnqueueDecision,
+        result: Result<TransferSelectionResult>,
+    ) {
+        result.onSuccess { selection ->
+            if (decision.startServiceImmediately) {
+                runCatching { TransferService.start(ZeekrApp.appContext) }.onFailure { failure ->
+                    synchronized(lock) {
+                        val taskIds = selection.taskIds.toSet()
+                        _tasks.value = _tasks.value.map { task ->
+                            if (task.id in taskIds) task.copy(
+                                state = TransferTaskState.WAITING_RETRY,
+                                reason = failure.message ?: "Transfer service unavailable",
+                                updatedAt = System.currentTimeMillis(),
+                            ) else task
+                        }
+                        saveLocked()
+                    }
+                    reconnectInBackground()
+                }
+            } else {
+                reconnectInBackground()
+            }
+        }
+    }
+
+    private fun releaseSourcePin(task: TransferTask) {
+        if (task.sourceKind == TransferSourceKind.MANAGED_RECORDING) {
+            RecorderLibrary.releaseUploadPin(File(task.filePath))
+        }
+        if (task.sourceKind == TransferSourceKind.OPENAVM_USB) {
+            UsbBundleLeaseRegistry.release(requireNotNull(task.sourceStorageUuid), requireNotNull(task.sourceBundleId))
         }
     }
 }

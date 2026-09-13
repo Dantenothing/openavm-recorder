@@ -8,6 +8,10 @@ enum class MediaExportTarget(val fileSuffix: String) {
     REAR("Rear"),
     LEFT("Left"),
     RIGHT("Right"),
+    TOP_LEFT("TopLeft"),
+    TOP_RIGHT("TopRight"),
+    BOTTOM_LEFT("BottomLeft"),
+    BOTTOM_RIGHT("BottomRight"),
 }
 
 data class PixelCrop(
@@ -61,8 +65,18 @@ data class MediaExportPlan(
 
 object MediaExportPlanner {
     fun supportedTargets(sourceRole: IndexedSourceRole): List<MediaExportTarget> =
-        if (sourceRole == IndexedSourceRole.SURROUND) MediaExportTarget.entries
+        if (sourceRole == IndexedSourceRole.SURROUND) DIRECTION_TARGETS
         else listOf(MediaExportTarget.ORIGINAL)
+
+    fun supportedTargets(segments: List<IndexedMediaSegment>): List<MediaExportTarget> {
+        val first = segments.firstOrNull() ?: return listOf(MediaExportTarget.ORIGINAL)
+        if (first.sourceRole != IndexedSourceRole.SURROUND) return listOf(MediaExportTarget.ORIGINAL)
+        return if (first.layoutKind == IndexedLayoutKind.FOUR_LANE_GRID_2X2) {
+            QUADRANT_TARGETS
+        } else {
+            DIRECTION_TARGETS
+        }
+    }
 
     fun totalDurationMs(segments: List<IndexedMediaSegment>): Long =
         segments.sumOf { it.durationMs.coerceAtLeast(0L) }
@@ -79,7 +93,7 @@ object MediaExportPlanner {
         )
         val sourceRole = ordered.first().sourceRole
         require(ordered.all { it.sourceRole == sourceRole }) { "A single export cannot mix camera sources" }
-        require(target in supportedTargets(sourceRole)) { "Direction export requires a 360° recording" }
+        require(target in supportedTargets(ordered)) { "This output is not available for the recording layout" }
         val total = totalDurationMs(ordered)
         require(total > 0L) { "Recording duration is unavailable" }
         val start = requestedStartMs.coerceIn(0L, total)
@@ -126,16 +140,26 @@ object MediaExportPlanner {
     internal fun cropFor(segment: IndexedMediaSegment, target: MediaExportTarget): PixelCrop? {
         if (target == MediaExportTarget.ORIGINAL) return null
         require(segment.sourceRole == IndexedSourceRole.SURROUND) { "Direction export requires 360° input" }
+        require(target in supportedTargets(listOf(segment))) {
+            "This output is not available for the recording layout"
+        }
         val targetIndex = when (target) {
             MediaExportTarget.FRONT -> 0
             MediaExportTarget.REAR -> 1
             MediaExportTarget.LEFT -> 2
             MediaExportTarget.RIGHT -> 3
+            MediaExportTarget.TOP_LEFT -> 0
+            MediaExportTarget.TOP_RIGHT -> 1
+            MediaExportTarget.BOTTOM_LEFT -> 2
+            MediaExportTarget.BOTTOM_RIGHT -> 3
             MediaExportTarget.ORIGINAL -> error("unreachable")
         }
         val sourceWidth = segment.originalWidth ?: 1280
         val sourceHeight = segment.originalHeight ?: 5140
-        val lane = segment.lanes.sortedBy { it.displayOrder }.getOrNull(targetIndex)
+        val lanes = segment.lanes.takeIf { it.size == 4 }
+            ?: FourLaneLayoutClassifier.classify(sourceWidth, sourceHeight)?.lanes?.takeIf { it.size == 4 }
+            ?: emptyList()
+        val lane = lanes.sortedBy { it.displayOrder }.getOrNull(targetIndex)
         if (lane != null) {
             return PixelCrop(
                 sourceWidth = sourceWidth,
@@ -173,4 +197,19 @@ object MediaExportPlanner {
         }
         return count to duration
     }
+
+    private val DIRECTION_TARGETS = listOf(
+        MediaExportTarget.ORIGINAL,
+        MediaExportTarget.FRONT,
+        MediaExportTarget.REAR,
+        MediaExportTarget.LEFT,
+        MediaExportTarget.RIGHT,
+    )
+    private val QUADRANT_TARGETS = listOf(
+        MediaExportTarget.ORIGINAL,
+        MediaExportTarget.TOP_LEFT,
+        MediaExportTarget.TOP_RIGHT,
+        MediaExportTarget.BOTTOM_LEFT,
+        MediaExportTarget.BOTTOM_RIGHT,
+    )
 }

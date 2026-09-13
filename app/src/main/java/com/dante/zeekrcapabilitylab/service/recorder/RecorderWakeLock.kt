@@ -21,7 +21,7 @@ class RecorderWakeLockHolder(
         private set
 
     /** Called on every state change; no-op when the decision is NONE. */
-    fun sync(status: String) {
+    @Synchronized fun sync(status: String) {
         when (RecorderWakeLockPolicy.decide(isHeld, status)) {
             WakeLockAction.ACQUIRE -> acquire()
             WakeLockAction.RELEASE -> release("STATE_$status")
@@ -83,7 +83,7 @@ class RecorderWakeLockHolder(
     }
 
     /** Idempotent teardown for STOPPED / camera-loss / error / storage-block / onDestroy. */
-    fun releaseAll() {
+    @Synchronized fun releaseAll() {
         release("SHUTDOWN")
     }
 }

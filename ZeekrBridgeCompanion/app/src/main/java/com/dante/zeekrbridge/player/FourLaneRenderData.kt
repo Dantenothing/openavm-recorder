@@ -1,5 +1,7 @@
 package com.dante.zeekrbridge.player
 
+import com.dante.zeekrbridge.core.FourLaneLayoutClassifier
+import com.dante.zeekrbridge.core.IndexedLayoutKind
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -130,6 +132,21 @@ internal object FourLaneTextureLayout {
         require(videoWidth > 0) { "videoWidth must be positive" }
         require(videoHeight > 0) { "videoHeight must be positive" }
         require(lane in 1..4) { "lane must be in 1..4" }
+
+        val classified = FourLaneLayoutClassifier.classify(videoWidth, videoHeight)
+        if (classified?.kind == IndexedLayoutKind.FOUR_LANE_GRID_2X2) {
+            val source = classified.lanes.first { it.lane == lane }
+            return LaneTextureWindow(
+                u = source.x0.toFloat() / videoWidth,
+                v = source.y0.toFloat() / videoHeight,
+                width = (source.x1 - source.x0).toFloat() / videoWidth,
+                height = (source.y1 - source.y0).toFloat() / videoHeight,
+                sourceLeftPx = source.x0.toFloat(),
+                sourceTopPx = source.y0.toFloat(),
+                sourceWidthPx = (source.x1 - source.x0).toFloat(),
+                sourceHeightPx = (source.y1 - source.y0).toFloat(),
+            )
+        }
 
         val index = lane - 1
         val horizontal = videoWidth.toFloat() / videoHeight >= STRONG_FOUR_LANE_RATIO

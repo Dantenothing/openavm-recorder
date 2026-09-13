@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,19 +52,34 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.dante.zeekrbridge.core.OutboundOfferStore
+import com.dante.zeekrbridge.core.PairedDevice
+import com.dante.zeekrbridge.core.PairingManager
 import com.dante.zeekrbridge.sound.EditSettings
 import com.dante.zeekrbridge.sound.AudioResampler
+import com.dante.zeekrbridge.sound.SafSoundTargetAction
+import com.dante.zeekrbridge.sound.SafSoundTargetResolution
 import com.dante.zeekrbridge.sound.SoundEditorController
 import com.dante.zeekrbridge.sound.SoundFileNames
 import com.dante.zeekrbridge.sound.SoundPhase
 import com.dante.zeekrbridge.sound.SoundPurpose
+import com.dante.zeekrbridge.sound.UsbSaf
 import com.dante.zeekrbridge.sound.ZeekrSoundPreset
+import io.github.dantenothing.avmtransfer.protocol.SoundOfferStates
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
 private enum class DragHandle { None, Start, End, Move }
+
+private data class PendingUsbSelection(
+    val treeUri: android.net.Uri,
+    val resolution: SafSoundTargetResolution,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,9 +92,18 @@ fun SoundEditorScreen(onBack: () -> Unit) {
     val edit = controller.edit
 
     var fileName by remember { mutableStateOf("") }
-    var pendingUsbUri by remember { mutableStateOf<android.net.Uri?>(null) }
-    var preset by remember { mutableStateOf(ZeekrSoundPreset.ZEEKR_7X_AUNZ_OS_2_1) }
+    var pendingUsbSelection by remember { mutableStateOf<PendingUsbSelection?>(null) }
+    var preset by remember { mutableStateOf(ZeekrSoundPreset.ZEEKR_7X_AUNZ) }
     var purpose by remember { mutableStateOf(SoundPurpose.UNLOCK) }
+    val pairedCars by PairingManager.devices.collectAsState()
+    val offerRevision by OutboundOfferStore.revision.collectAsState()
+    val relayOffers = remember(offerRevision) { OutboundOfferStore.offers().filter { it.targetCarDeviceId != null } }
+    val recentRelayOffers = relayOffers.take(5)
+    var targetCarId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pairedCars) {
+        if (targetCarId !in pairedCars.map { it.carDeviceId }) targetCarId = pairedCars.firstOrNull()?.carDeviceId
+    }
+    val targetCar = pairedCars.firstOrNull { it.carDeviceId == targetCarId }
     LaunchedEffect(imported) {
         fileName = SoundFileNames.wavFileName(imported?.name, "sound.wav")
     }
@@ -99,7 +124,12 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                 )
             }
-            pendingUsbUri = uri
+            scope.launch {
+                val resolution = withContext(Dispatchers.IO) {
+                    UsbSaf.resolveSoundTargets(context, uri, preset.targetDirectoryNames)
+                }
+                pendingUsbSelection = PendingUsbSelection(uri, resolution)
+            }
         }
     }
 
@@ -170,6 +200,40 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                 onPurpose = { purpose = it },
             )
             Spacer(Modifier.height(10.dp))
+            if (recentRelayOffers.isNotEmpty()) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(t("Recent vehicle USB sends", "最近的车机 USB 发送"), style = MaterialTheme.typography.titleMedium)
+                            OutlinedButton(
+                                onClick = { scope.launch { withContext(Dispatchers.IO) { OutboundOfferStore.clearFinished() } } },
+                                enabled = relayOffers.any { it.state in SoundOfferStates.terminal },
+                            ) {
+                                Text(t("Clear finished", "清理已结束"))
+                            }
+                        }
+                        recentRelayOffers.forEach { offer ->
+                            Text(
+                                "${offer.fileName} · ${offer.targetCarName ?: offer.targetCarDeviceId} · ${offer.state}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (offer.state == "FAILED" || offer.state == "FAILED_RECOVERABLE") {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                            offer.statusMessage?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
 
             when (controller.phase) {
                 SoundPhase.Idle -> {
@@ -233,6 +297,11 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                             imported = imported,
                             edit = edit,
                             fileName = fileName,
+                            preset = preset,
+                            purpose = purpose,
+                            pairedCars = pairedCars,
+                            targetCar = targetCar,
+                            onTargetCar = { targetCarId = it.carDeviceId },
                             onFileNameChange = { fileName = it },
                             onCreateDocument = { createDocLauncher.launch(SoundFileNames.cleanBase(fileName) ?: "sound") },
                             onPickUsb = { pickUsbLauncher.launch(null) },
@@ -267,28 +336,24 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                             Column(Modifier.padding(14.dp)) {
                                 Text(t("Completed", "已完成"), style = MaterialTheme.typography.titleMedium)
                                 Spacer(Modifier.height(4.dp))
-                                Text(t("Destination: ${result.target}", "目标：${result.target}"), style = MaterialTheme.typography.bodyMedium)
-                                Text(t("File: ${result.fileName}", "文件名：${result.fileName}"), style = MaterialTheme.typography.bodyMedium)
+                                Text(t("Destination: {0}", "目标：{0}", result.target), style = MaterialTheme.typography.bodyMedium)
+                                Text(t("File: {0}", "文件名：{0}", result.fileName), style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     t(
-                                        "Size: ${SoundEditorController.formatBytes(result.sizeBytes)} | Duration: ${SoundEditorController.formatDuration(result.durationMs)}",
-                                        "大小：${SoundEditorController.formatBytes(result.sizeBytes)} | 时长：${SoundEditorController.formatDuration(result.durationMs)}",
-                                    ),
+                                        "Size: {0} | Duration: {1}", "大小：{0} | 时长：{1}", SoundEditorController.formatBytes(result.sizeBytes), SoundEditorController.formatDuration(result.durationMs)),
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
                                 if (result.backupName != null) {
                                     Text(
                                         t(
-                                            "The previous same-name file was backed up as ${result.backupName}",
-                                            "同名原文件已备份：${result.backupName}",
-                                        ),
+                                            "The previous same-name file was backed up as {0}", "同名原文件已备份：{0}", result.backupName),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                                 if (result.savedFile != null) {
                                     Text(
-                                        t("Path: ${result.savedFile.absolutePath}", "路径：${result.savedFile.absolutePath}"),
+                                        t("Path: {0}", "路径：{0}", result.savedFile.absolutePath),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -323,9 +388,16 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                                     )
                                 }
                                 Spacer(Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = { controller.resetEdit() }) { Text(t("Continue editing", "继续编辑")) }
-                                    OutlinedButton(onClick = onBack) { Text(t("Back to Toolbox", "返回工具箱")) }
+                                OutlinedButton(
+                                    onClick = { controller.continueEditing() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text(t("Continue editing current audio", "继续编辑当前音频")) }
+                                OutlinedButton(
+                                    onClick = { controller.startAnotherSound() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text(t("Make another lock / unlock sound", "制作另一段解闭锁音效")) }
+                                TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                                    Text(t("Back to Toolbox", "返回工具箱"))
                                 }
                             }
                         }
@@ -361,44 +433,58 @@ fun SoundEditorScreen(onBack: () -> Unit) {
         }
     }
 
-    val usbUri = pendingUsbUri
+    val usbSelection = pendingUsbSelection
     val usbImported = imported
-    if (usbUri != null && usbImported != null) {
+    if (usbSelection != null && usbImported != null) {
+        val usbUri = usbSelection.treeUri
+        val targetResolution = usbSelection.resolution
         val selFrames = edit.endFrame - edit.startFrame
         val outFrames = AudioResampler.outputFrameCount(selFrames, usbImported.meta.sampleRate)
         val estBytes = 44L + outFrames * edit.outputChannels * 2L
         AlertDialog(
-            onDismissRequest = { pendingUsbUri = null },
+            onDismissRequest = { pendingUsbSelection = null },
             title = { Text(t("Write to USB?", "写入 USB？")) },
             text = {
                 Column {
                     Text(
                         t(
-                            "Preset: ${soundPresetLabel(preset)}",
-                            "预设：${soundPresetLabel(preset)}",
-                        ),
+                            "Preset: {0}", "预设：{0}", soundPresetLabel(preset)),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
                         t(
-                            "Purpose label: ${soundPurposeLabel(purpose)}",
-                            "用途标签：${soundPurposeLabel(purpose)}",
-                        ),
+                            "Purpose label: {0}", "用途标签：{0}", soundPurposeLabel(purpose)),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
                         t(
-                            "Folder: ${preset.targetDirectoryName?.let { "/$it/" } ?: "the selected folder"}",
-                            "目录：${preset.targetDirectoryName?.let { "/$it/" } ?: "所选目录"}",
-                        ),
+                            "Selected tree: {0}", "已选目录：{0}", targetResolution.selectedDisplayName ?: targetResolution.selectedDocumentId ?: t("Unknown", "未知")),
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    Text(t("File: ${SoundFileNames.wavFileName(fileName)}", "文件名：${SoundFileNames.wavFileName(fileName)}"), style = MaterialTheme.typography.bodySmall)
                     Text(
                         t(
-                            "Estimated size: ${SoundEditorController.formatBytes(estBytes)}",
-                            "预计大小：${SoundEditorController.formatBytes(estBytes)}",
-                        ),
+                            "Resolved destination: {0}", "最终写入目录：{0}", soundTargetDirectories(preset)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (targetResolution.action == SafSoundTargetAction.REJECT_AMBIGUOUS) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                    )
+                    if (targetResolution.action == SafSoundTargetAction.REJECT_AMBIGUOUS) {
+                        Text(
+                            t(
+                                "Bilingual-folder mode requires the USB root. Cancel and select the drive itself.",
+                                "中英文双目录模式必须选择 U 盘根目录。请取消并选择 U 盘本身。",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Text(t("File: {0}", "文件名：{0}", SoundFileNames.wavFileName(fileName)), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        t(
+                            "Estimated size: {0}", "预计大小：{0}", SoundEditorController.formatBytes(estBytes)),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (preset.acceptsSize(estBytes)) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.error,
@@ -407,10 +493,10 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                     Text(
                         t("Parameters: ", "参数：") + "48 kHz / 16-bit PCM / " +
                             (if (edit.outputChannels == 2) "Stereo" else "Mono") +
-                            t(" | Volume ${edit.volumePercent}%", " | 音量 ${edit.volumePercent}%") +
+                            t(" | Volume {0}%", " | 音量 {0}%", edit.volumePercent) +
                             (if (edit.normalize) t(" | Normalize on", " | 标准化 开") else "") +
-                            (if (edit.fadeInMs > 0) t(" | Fade in ${edit.fadeInMs / 1000.0}s", " | 淡入 ${edit.fadeInMs / 1000.0}s") else "") +
-                            (if (edit.fadeOutMs > 0) t(" | Fade out ${edit.fadeOutMs / 1000.0}s", " | 淡出 ${edit.fadeOutMs / 1000.0}s") else ""),
+                            (if (edit.fadeInMs > 0) t(" | Fade in {0}s", " | 淡入 {0}s", edit.fadeInMs / 1000.0) else "") +
+                            (if (edit.fadeOutMs > 0) t(" | Fade out {0}s", " | 淡出 {0}s", edit.fadeOutMs / 1000.0) else ""),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(6.dp))
@@ -422,28 +508,19 @@ fun SoundEditorScreen(onBack: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (preset == ZeekrSoundPreset.ZEEKR_7X_AUNZ_LEGACY) {
-                        Text(
-                            t(
-                                "Some early OS 2.0 versions may only display the first four sounds.",
-                                "部分早期 OS 2.0 版本可能只显示前 4 个音效。",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = preset.acceptsSize(estBytes),
+                    enabled = preset.acceptsSize(estBytes) &&
+                        targetResolution.action != SafSoundTargetAction.REJECT_AMBIGUOUS,
                     onClick = {
-                    pendingUsbUri = null
+                    pendingUsbSelection = null
                     controller.exportToUsb(usbUri, fileName, preset)
                 }) { Text(t("Generate and write", "生成并写入")) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingUsbUri = null }) { Text(t("Cancel", "取消")) }
+                TextButton(onClick = { pendingUsbSelection = null }) { Text(t("Cancel", "取消")) }
             },
         )
     }
@@ -480,10 +557,11 @@ private fun SoundPresetCard(
             }
             Text(
                 when (preset) {
-                    ZeekrSoundPreset.ZEEKR_7X_AUNZ_OS_2_1 ->
-                        t("USB folder: /Lock Status Tones/ · recommended", "USB 目录：/Lock Status Tones/ · 推荐")
-                    ZeekrSoundPreset.ZEEKR_7X_AUNZ_LEGACY ->
-                        t("USB folder: /解闭锁音效/ · some versions show only 4 sounds", "USB 目录：/解闭锁音效/ · 部分版本只显示 4 个音效")
+                    ZeekrSoundPreset.ZEEKR_7X_AUNZ ->
+                        t(
+                            "Creates both /Lock Status Tones/ and /解闭锁音效/ for all vehicle languages.",
+                            "同时创建 /Lock Status Tones/ 和 /解闭锁音效/，兼容中英文车机。",
+                        )
                     ZeekrSoundPreset.GENERIC_WAV ->
                         t("No Zeekr folder rule; write to the folder you choose.", "不套用 Zeekr 目录规则，写入你选择的目录。")
                 },
@@ -513,10 +591,15 @@ private fun SoundPresetCard(
 }
 
 private fun soundPresetLabel(preset: ZeekrSoundPreset): String = when (preset) {
-    ZeekrSoundPreset.ZEEKR_7X_AUNZ_OS_2_1 -> t("AU/NZ · OS 2.1+", "澳洲/NZ · OS 2.1+")
-    ZeekrSoundPreset.ZEEKR_7X_AUNZ_LEGACY -> t("AU/NZ · Legacy OS 2.0", "澳洲/NZ · Legacy OS 2.0")
+    ZeekrSoundPreset.ZEEKR_7X_AUNZ -> t("Zeekr 7X · bilingual folders", "极氪 7X · 中英文双目录")
     ZeekrSoundPreset.GENERIC_WAV -> t("Generic WAV", "通用 WAV")
 }
+
+private fun soundTargetDirectories(preset: ZeekrSoundPreset): String =
+    preset.targetDirectoryNames
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString(" + ") { "/$it/" }
+        ?: t("the selected folder", "所选目录")
 
 private fun soundPurposeLabel(purpose: SoundPurpose): String = when (purpose) {
     SoundPurpose.UNLOCK -> t("Unlock sound", "解锁音效")
@@ -529,6 +612,11 @@ private fun EditorSection(
     imported: com.dante.zeekrbridge.sound.ImportedSound,
     edit: EditSettings,
     fileName: String,
+    preset: ZeekrSoundPreset,
+    purpose: SoundPurpose,
+    pairedCars: List<PairedDevice>,
+    targetCar: PairedDevice?,
+    onTargetCar: (PairedDevice) -> Unit,
     onFileNameChange: (String) -> Unit,
     onCreateDocument: () -> Unit,
     onPickUsb: () -> Unit,
@@ -546,12 +634,11 @@ private fun EditorSection(
             Text(imported.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
                 t(
-                    "Format ${imported.formatLabel} | Source ${imported.meta.sampleRate} Hz | " +
-                        "${if (imported.meta.channels == 2) "Stereo" else "Mono"} | " +
-                        "Duration ${SoundEditorController.formatDuration(imported.durationMs)}",
-                    "格式 ${imported.formatLabel} | 源采样率 ${imported.meta.sampleRate} Hz | " +
-                        "${if (imported.meta.channels == 2) "立体声" else "单声道"} | " +
-                        "总时长 ${SoundEditorController.formatDuration(imported.durationMs)}",
+                    "Format {0} | Source {1} Hz | {2} | Duration {3}",
+                    "格式 {0} | 源采样率 {1} Hz | {2} | 总时长 {3}",
+                    imported.formatLabel, imported.meta.sampleRate,
+                    if (imported.meta.channels == 2) t("Stereo", "立体声") else t("Mono", "单声道"),
+                    SoundEditorController.formatDuration(imported.durationMs),
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -591,12 +678,11 @@ private fun EditorSection(
             Spacer(Modifier.height(2.dp))
             Text(
                 t(
-                    "Selection ${SoundEditorController.formatDuration(edit.startFrame * 1000L / imported.meta.sampleRate)}" +
-                        " — ${SoundEditorController.formatDuration(edit.endFrame * 1000L / imported.meta.sampleRate)}" +
-                        " (output ${SoundEditorController.formatDuration(selDurationMs)})",
-                    "选区 ${SoundEditorController.formatDuration(edit.startFrame * 1000L / imported.meta.sampleRate)}" +
-                        " — ${SoundEditorController.formatDuration(edit.endFrame * 1000L / imported.meta.sampleRate)}" +
-                        "（输出时长 ${SoundEditorController.formatDuration(selDurationMs)}）",
+                    "Selection {0} — {1} (output {2})",
+                    "选区 {0} — {1}（输出时长 {2}）",
+                    SoundEditorController.formatDuration(edit.startFrame * 1000L / imported.meta.sampleRate),
+                    SoundEditorController.formatDuration(edit.endFrame * 1000L / imported.meta.sampleRate),
+                    SoundEditorController.formatDuration(selDurationMs),
                 ),
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -635,7 +721,7 @@ private fun EditorSection(
         Column(Modifier.padding(14.dp)) {
             Text(t("Adjust", "调整"), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
-            Text(t("Volume ${edit.volumePercent}%", "音量 ${edit.volumePercent}%"), style = MaterialTheme.typography.bodySmall)
+            Text(t("Volume {0}%", "音量 {0}%", edit.volumePercent), style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = edit.volumePercent.toFloat(),
                 onValueChange = { controller.updateEdit(edit.copy(volumePercent = it.toInt())) },
@@ -653,14 +739,14 @@ private fun EditorSection(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            Text(t("Fade in ${edit.fadeInMs / 1000L}.${(edit.fadeInMs % 1000L) / 100L} s", "淡入 ${edit.fadeInMs / 1000L}.${(edit.fadeInMs % 1000L) / 100L} 秒"), style = MaterialTheme.typography.bodySmall)
+            Text(t("Fade in {0}.{1} s", "淡入 {0}.{1} 秒", edit.fadeInMs / 1000L, (edit.fadeInMs % 1000L) / 100L), style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = edit.fadeInMs.toFloat(),
                 onValueChange = { controller.updateEdit(edit.copy(fadeInMs = it.toLong())) },
                 valueRange = 0f..10000f,
                 steps = 99,
             )
-            Text(t("Fade out ${edit.fadeOutMs / 1000L}.${(edit.fadeOutMs % 1000L) / 100L} s", "淡出 ${edit.fadeOutMs / 1000L}.${(edit.fadeOutMs % 1000L) / 100L} 秒"), style = MaterialTheme.typography.bodySmall)
+            Text(t("Fade out {0}.{1} s", "淡出 {0}.{1} 秒", edit.fadeOutMs / 1000L, (edit.fadeOutMs % 1000L) / 100L), style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = edit.fadeOutMs.toFloat(),
                 onValueChange = { controller.updateEdit(edit.copy(fadeOutMs = it.toLong())) },
@@ -712,10 +798,28 @@ private fun EditorSection(
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(t("Write to Zeekr USB", "写入 Zeekr USB（SAF 授权）")) }
             Spacer(Modifier.height(4.dp))
+            Text(t("Target vehicle", "目标车机"), style = MaterialTheme.typography.labelLarge)
+            if (pairedCars.isEmpty()) {
+                Text(t("Pair a vehicle on the receiver page first.", "请先在接收页配对车机。"), color = MaterialTheme.colorScheme.error)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pairedCars.forEach { car ->
+                        if (car.carDeviceId == targetCar?.carDeviceId) {
+                            Button(onClick = {}) { Text("${car.name} ✓") }
+                        } else {
+                            OutlinedButton(onClick = { onTargetCar(car) }) { Text(car.name) }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
             OutlinedButton(
-                onClick = { controller.sendToCar(fileName) },
+                onClick = {
+                    targetCar?.let { controller.sendToCar(fileName, preset, purpose, it.carDeviceId, it.name) }
+                },
+                enabled = targetCar != null && preset.isZeekrCompatible,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(t("Send to car (experimental, ≤1 MiB)", "发送到车机（实验性次要入口，≤1 MiB）")) }
+            ) { Text(t("Send to vehicle USB", "发送到车机 USB")) }
             Spacer(Modifier.height(6.dp))
             Text(
                 t(

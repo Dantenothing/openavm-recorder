@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Build
 import android.util.LruCache
 import java.io.File
@@ -29,9 +30,47 @@ object MediaThumbnailCache {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
     }
 
-    suspend fun loadOrCreate(context: Context, segment: IndexedMediaSegment): Bitmap? =
-        withContext(Dispatchers.IO) {
-            val key = cacheKey(segment)
+    suspend fun loadOrCreate(context: Context, segment: IndexedMediaSegment): Bitmap? = loadOrCreate(
+        context = context,
+        key = cacheKey(segment),
+    ) {
+        createCover(
+            context = context,
+            uri = Uri.fromFile(segment.file),
+            layoutKind = segment.layoutKind,
+            lanes = segment.lanes,
+            expectedWidth = segment.originalWidth,
+            expectedHeight = segment.originalHeight,
+        )
+    }
+
+    suspend fun loadOrCreate(context: Context, record: SavedMediaRecord): Bitmap? {
+        val uri = record.uri ?: return null
+        val key = hashKey(
+            listOf(
+                uri.toString(),
+                record.sizeBytes.toString(),
+                record.layoutKind,
+                record.laneLabels.joinToString("|"),
+            ).joinToString("|"),
+        )
+        return loadOrCreate(context, key) {
+            createCover(
+                context = context,
+                uri = uri,
+                layoutKind = record.indexedLayoutKind,
+                lanes = emptyList(),
+                expectedWidth = record.originalWidth,
+                expectedHeight = record.originalHeight,
+            )
+        }
+    }
+
+    private suspend fun loadOrCreate(
+        context: Context,
+        key: String,
+        create: () -> Bitmap?,
+    ): Bitmap? = withContext(Dispatchers.IO) {
             memory.get(key)?.let { return@withContext it }
             generationMutex.withLock {
                 memory.get(key)?.let { return@withLock it }
@@ -41,7 +80,7 @@ object MediaThumbnailCache {
                     memory.put(key, it)
                     return@withLock it
                 }
-                val created = createCover(segment) ?: return@withLock null
+                val created = create() ?: return@withLock null
                 runCatching {
                     FileOutputStream(target).use { out -> created.compress(Bitmap.CompressFormat.JPEG, 84, out) }
                     target.parentFile?.let(::trimDiskCache)
@@ -56,16 +95,27 @@ object MediaThumbnailCache {
         cacheDir(context).listFiles().orEmpty().forEach(File::delete)
     }
 
-    private fun createCover(segment: IndexedMediaSegment): Bitmap? {
+    private fun createCover(
+        context: Context,
+        uri: Uri,
+        layoutKind: IndexedLayoutKind,
+        lanes: List<IndexedLane>,
+        expectedWidth: Int?,
+        expectedHeight: Int?,
+    ): Bitmap? {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(segment.filePath)
+            if (uri.scheme.equals("file", ignoreCase = true)) {
+                retriever.setDataSource(uri.path)
+            } else {
+                retriever.setDataSource(context, uri)
+            }
             val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
-                ?: segment.originalWidth ?: 0
+                ?: expectedWidth ?: 0
             val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
-                ?: segment.originalHeight ?: 0
-            val fourLane = segment.layoutKind == IndexedLayoutKind.FOUR_LANE_V1 ||
-                (segment.layoutKind == IndexedLayoutKind.UNKNOWN && strongFourLane(width, height))
+                ?: expectedHeight ?: 0
+            val fourLane = layoutKind.isFourLane ||
+                (layoutKind == IndexedLayoutKind.UNKNOWN && strongFourLane(width, height))
             val sampleSize = sampleSize(width, height, fourLane)
             val frame = if (Build.VERSION.SDK_INT >= 27 && sampleSize.first > 0 && sampleSize.second > 0) {
                 retriever.getScaledFrameAtTime(
@@ -78,7 +128,7 @@ object MediaThumbnailCache {
                 retriever.getFrameAtTime(500_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } ?: return null
             try {
-                if (fourLane) fourLaneCover(frame, segment, width, height) else singleCover(frame)
+                if (fourLane) fourLaneCover(frame, lanes, width, height) else singleCover(frame)
             } finally {
                 frame.recycle()
             }
@@ -91,14 +141,14 @@ object MediaThumbnailCache {
 
     private fun fourLaneCover(
         frame: Bitmap,
-        segment: IndexedMediaSegment,
+        lanes: List<IndexedLane>,
         originalWidth: Int,
         originalHeight: Int,
     ): Bitmap {
         val output = Bitmap.createBitmap(COVER_WIDTH, COVER_HEIGHT, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output).apply { drawColor(Color.BLACK) }
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        val sources = sourceRects(frame, segment, originalWidth, originalHeight)
+        val sources = sourceRects(frame, lanes, originalWidth, originalHeight)
         sources.take(4).forEachIndexed { index, source ->
             val left = (index % 2) * (COVER_WIDTH / 2)
             val top = (index / 2) * (COVER_HEIGHT / 2)
@@ -114,14 +164,16 @@ object MediaThumbnailCache {
 
     private fun sourceRects(
         frame: Bitmap,
-        segment: IndexedMediaSegment,
+        lanes: List<IndexedLane>,
         originalWidth: Int,
         originalHeight: Int,
     ): List<Rect> {
-        if (segment.lanes.size == 4 && originalWidth > 0 && originalHeight > 0) {
+        val frozenLanes = lanes.takeIf { it.size == 4 }
+            ?: FourLaneLayoutClassifier.classify(originalWidth, originalHeight)?.lanes?.takeIf { it.size == 4 }
+        if (frozenLanes != null && originalWidth > 0 && originalHeight > 0) {
             val sx = frame.width.toFloat() / originalWidth
             val sy = frame.height.toFloat() / originalHeight
-            return segment.lanes.sortedBy { it.displayOrder }.map { lane ->
+            return frozenLanes.sortedBy { it.displayOrder }.map { lane ->
                 Rect(
                     (lane.x0 * sx).roundToInt().coerceIn(0, frame.width - 1),
                     (lane.y0 * sy).roundToInt().coerceIn(0, frame.height - 1),
@@ -189,10 +241,12 @@ object MediaThumbnailCache {
             append(segment.layoutKind).append('|')
             segment.lanes.forEach { append(it).append('|') }
         }
-        return MessageDigest.getInstance("SHA-256")
-            .digest(material.toByteArray())
-            .joinToString("") { "%02x".format(it) }
+        return hashKey(material)
     }
+
+    private fun hashKey(material: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(material.toByteArray())
+        .joinToString("") { "%02x".format(it) }
 
     private fun cacheDir(context: Context): File =
         File(context.applicationContext.cacheDir, "media-covers-v1").apply { mkdirs() }

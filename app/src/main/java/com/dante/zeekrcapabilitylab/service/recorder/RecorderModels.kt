@@ -16,6 +16,8 @@ data class RecorderConfig(
     val segmentSeconds: Int,
     val storageLimitBytes: Long,
     val minFreeBytes: Long = 20L * 1024L * 1024L * 1024L,
+    val storagePreference: RecordingStoragePreference = RecordingStoragePreference.USB_PREFERRED,
+    val usbQuotaBytes: Long = UsbRecordingQuotaPolicy.DEFAULT_QUOTA_BYTES,
     val recordingMode: RecordingMode = RecordingMode.NORMAL,
     val timeLapseMultiplier: Int = 1,
 ) {
@@ -37,6 +39,9 @@ data class RecorderConfig(
         }
         if (minFreeBytes !in MIN_FREE_OPTIONS_BYTES) {
             errors += "minFreeBytes must be one of ${MIN_FREE_OPTIONS_BYTES.sorted()}"
+        }
+        if (!UsbRecordingQuotaPolicy.isValidQuota(usbQuotaBytes)) {
+            errors += "usbQuotaBytes must be within the supported custom range"
         }
         when (recordingMode) {
             RecordingMode.NORMAL -> if (timeLapseMultiplier != 1) {
@@ -84,6 +89,8 @@ data class RecorderConfig(
 }
 
 object RecorderStatus {
+    const val AWAKE_IDLE = "AWAKE_IDLE"
+    const val SENTRY_LISTENING = "SENTRY_LISTENING"
     const val IDLE = "IDLE"
     const val STARTING = "STARTING"
     const val RECORDING = "RECORDING"
@@ -104,6 +111,9 @@ data class RecorderState(
     val layoutKind: RecordingLayoutKind? = null,
     val segmentSeconds: Int = 60,
     val storageLimitBytes: Long = 15L * 1024L * 1024L * 1024L,
+    val storagePreference: RecordingStoragePreference = RecordingStoragePreference.USB_PREFERRED,
+    val usbQuotaBytes: Long = UsbRecordingQuotaPolicy.DEFAULT_QUOTA_BYTES,
+    val activeStorageKind: RecordingStorageKind = RecordingStorageKind.INTERNAL,
     val segmentNumber: Int = 0,
     val currentFile: String? = null,
     val segmentStartedAtEpochMs: Long? = null,
@@ -131,6 +141,8 @@ data class RecorderState(
 object RecorderCommandPolicy {
 
     val ACTIVE_SERVICE_STATUSES = setOf(
+        RecorderStatus.AWAKE_IDLE,
+        RecorderStatus.SENTRY_LISTENING,
         RecorderStatus.STARTING,
         RecorderStatus.RECORDING,
         RecorderStatus.FINALIZING,

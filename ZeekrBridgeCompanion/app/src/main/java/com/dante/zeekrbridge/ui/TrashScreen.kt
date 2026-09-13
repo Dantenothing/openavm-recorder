@@ -73,9 +73,7 @@ fun TrashScreen(onBack: () -> Unit) {
                             )
                             Text(
                                 t(
-                                    "${entry.videoNames.size} videos · ${formatTrashBytes(entry.sizeBytes)} · deleted ${formatTrashDate(entry.deletedAtEpochMs)}",
-                                    "${entry.videoNames.size} 个视频 · ${formatTrashBytes(entry.sizeBytes)} · 删除于 ${formatTrashDate(entry.deletedAtEpochMs)}",
-                                ),
+                                    "{0} videos · {1} · deleted {2}", "{0} 个视频 · {1} · 删除于 {2}", entry.videoNames.size, formatTrashBytes(entry.sizeBytes), formatTrashDate(entry.deletedAtEpochMs)),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -83,7 +81,7 @@ fun TrashScreen(onBack: () -> Unit) {
                                 OutlinedButton(onClick = {
                                     val restored = TrashStore.restore(entry.id)
                                     MediaIndexStore.invalidate()
-                                    message = t("Restored $restored videos", "已恢复 $restored 个视频")
+                                    message = t("Restored {0} videos", "已恢复 {0} 个视频", restored)
                                 }) { Text(t("Restore", "恢复")) }
                                 TextButton(onClick = { deleteTarget = entry }) {
                                     Text(t("Delete permanently", "永久删除"))
@@ -113,7 +111,7 @@ fun TrashScreen(onBack: () -> Unit) {
 }
 
 private fun formatTrashDate(epochMs: Long): String = if (epochMs <= 0L) "—" else
-    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(epochMs))
+    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, PhoneLanguage.locale).format(Date(epochMs))
 
 private fun formatTrashBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> String.format(Locale.US, "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))

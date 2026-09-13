@@ -31,6 +31,19 @@ enum class SoundPhase {
     Error,
 }
 
+enum class SoundCompletionAction {
+    CONTINUE_CURRENT,
+    START_ANOTHER,
+}
+
+object SoundEditorFlow {
+    fun afterCompletion(action: SoundCompletionAction, hasImportedAudio: Boolean): SoundPhase =
+        when (action) {
+            SoundCompletionAction.CONTINUE_CURRENT -> if (hasImportedAudio) SoundPhase.Ready else SoundPhase.Idle
+            SoundCompletionAction.START_ANOTHER -> SoundPhase.Idle
+        }
+}
+
 data class ImportedSound(
     val name: String,
     val formatLabel: String,
@@ -112,7 +125,7 @@ class SoundEditorController(
                 ensureCacheSpace(16L * 1024 * 1024)
                 val decoded = withContext(Dispatchers.IO) {
                     SoundDecoder.decode(context, uri, cancellation) { p ->
-                        progressText = text("Analyzing ${(p * 100).toInt()}%…", "正在分析 ${(p * 100).toInt()}%…")
+                        progressText = text("Analyzing {0}%…", "正在分析 {0}%…", (p * 100).toInt())
                     }
                 }
                 phase = SoundPhase.Waveform
@@ -133,9 +146,7 @@ class SoundEditorController(
                 edit = EditSettings.defaults(decoded.meta.frameCount)
                 phase = SoundPhase.Ready
                 statusText = text(
-                    "Imported ${decoded.name} (${decoded.formatLabel}, ${formatDuration(decoded.meta.durationMs)})",
-                    "已导入 ${decoded.name}（${decoded.formatLabel}，${formatDuration(decoded.meta.durationMs)}）",
-                )
+                    "Imported {0} ({1}, {2})", "已导入 {0}（{1}，{2}）", decoded.name, decoded.formatLabel, formatDuration(decoded.meta.durationMs))
                 progressText = ""
             } catch (t: SoundCancelledException) {
                 phase = SoundPhase.Idle
@@ -159,6 +170,37 @@ class SoundEditorController(
         edit = EditSettings.defaults(imp.meta.frameCount)
         exportResult = null
         statusText = text("Default settings restored", "已恢复默认设置")
+    }
+
+    fun continueEditing() {
+        stopPlayback()
+        exportResult = null
+        phase = SoundEditorFlow.afterCompletion(
+            SoundCompletionAction.CONTINUE_CURRENT,
+            hasImportedAudio = imported != null,
+        )
+        statusText = if (phase == SoundPhase.Ready) {
+            text("Ready to continue editing", "可以继续编辑")
+        } else {
+            text("Choose an audio file", "请选择音频文件")
+        }
+    }
+
+    fun startAnotherSound() {
+        stopPlayback()
+        cancellation.cancel()
+        job?.cancel()
+        job = null
+        imported?.pcmFile?.delete()
+        imported = null
+        edit = EditSettings()
+        exportResult = null
+        phase = SoundEditorFlow.afterCompletion(
+            SoundCompletionAction.START_ANOTHER,
+            hasImportedAudio = false,
+        )
+        statusText = text("Choose the audio for the next sound", "请选择下一段音效的音频")
+        progressText = ""
     }
 
     fun togglePlayback() {
@@ -216,7 +258,7 @@ class SoundEditorController(
                 savedFile = saved.file,
                 verified = true,
                 backupName = saved.backupName,
-                message = text("Saved to phone: ${saved.file.absolutePath}", "已保存到手机：${saved.file.absolutePath}"),
+                message = text("Saved to phone: {0}", "已保存到手机：{0}", saved.file.absolutePath),
             )
         }
     }
@@ -263,18 +305,16 @@ class SoundEditorController(
             if (!preset.acceptsSize(size)) {
                 throw SoundInputException(
                     text(
-                        "The ${formatBytes(size)} WAV is too large for the Zeekr 7X preset (must be under 1 MB). Shorten the selection or use Mono.",
-                        "导出 WAV 为 ${formatBytes(size)}，超过 Zeekr 7X 预设的限制（必须小于 1 MB）。请缩短选区或使用 Mono。",
-                    ),
+                        "The {0} WAV is too large for the Zeekr 7X preset (must be under 1 MB). Shorten the selection or use Mono.", "导出 WAV 为 {0}，超过 Zeekr 7X 预设的限制（必须小于 1 MB）。请缩短选区或使用 Mono。", formatBytes(size)),
                     "ZEEKR_FILE_TOO_LARGE",
                 )
             }
-            val result = UsbWavSaver.save(
+            val result = UsbWavSaver.saveToDirectories(
                 context = context,
                 treeUri = treeUri,
                 source = converted,
                 requestedName = name,
-                targetDirectoryName = preset.targetDirectoryName,
+                targetDirectoryNames = preset.targetDirectoryNames,
                 maxWavFiles = preset.maxWavFiles,
             )
             if (!result.ok) {
@@ -284,7 +324,10 @@ class SoundEditorController(
                 fileName = result.finalName ?: name,
                 sizeBytes = size,
                 durationMs = durationOf(converted),
-                target = preset.targetDirectoryName?.let { "USB /$it/" } ?: "USB",
+                target = preset.targetDirectoryNames
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(prefix = "USB ", separator = " + ") { "/$it/" }
+                    ?: "USB",
                 savedFile = null,
                 verified = true,
                 backupName = result.backupName,
@@ -293,33 +336,43 @@ class SoundEditorController(
         }
     }
 
-    /** Experimental secondary entry: 1 MiB offer store + LAN broadcast. */
-    fun sendToCar(fileName: String) {
+    /** Durable, authenticated phone -> selected car -> Zeekr USB sound relay. */
+    fun sendToCar(
+        fileName: String,
+        preset: ZeekrSoundPreset,
+        purpose: SoundPurpose,
+        targetCarDeviceId: String,
+        targetCarName: String,
+    ) {
         startExport(fileName) { converted, name ->
             val size = converted.length()
-            if (size > WavValidator.MAX_BYTES) {
+            if (!preset.isZeekrCompatible || size >= 1_000_000L) {
                 throw SoundInputException(
                     text(
-                        "The ${formatBytes(size)} export exceeds the 1 MiB car-lab limit. Save it to the phone instead.",
-                        "导出文件 ${formatBytes(size)} 超过车机实验入口的 1 MiB 限制，请先保存到手机",
-                    ),
+                        "The {0} export is not valid for the Zeekr relay (must be under 1,000,000 bytes).", "导出文件 {0} 不符合极氪中继要求（必须小于 1,000,000 字节）", formatBytes(size)),
                     "TOO_LARGE_FOR_CAR",
                 )
             }
-            val offer = OutboundOfferStore.importStream(name) { converted.inputStream() }
-            val cars = BridgeServer.connectedCars()
-            BridgeServer.sendToCars(WsType.FILE_OFFER, OutboundOfferStore.metadataMap(offer))
+            val offer = OutboundOfferStore.importStream(
+                displayName = name,
+                targetCarDeviceId = targetCarDeviceId,
+                targetCarName = targetCarName,
+                presetId = preset.name,
+                purpose = purpose.name,
+            ) { converted.inputStream() }
+            BridgeServer.sendOfferToCar(offer)
+            val connected = BridgeServer.isCarConnected(targetCarDeviceId)
             ExportResult(
                 fileName = offer.fileName,
                 sizeBytes = offer.sizeBytes,
                 durationMs = durationOf(converted),
-                target = text("Send to car", "发送到车机"),
+                target = text("Vehicle USB · {0}", "车机 USB · {0}", targetCarName),
                 savedFile = null,
                 verified = true,
-                message = if (cars > 0) {
-                    text("Sent to $cars connected vehicle(s) (experimental)", "已广播给 $cars 台车机（实验入口）")
+                message = if (connected) {
+                    text("Queued for {0}. The vehicle is online and will install it to both Zeekr sound folders.", "已加入 {0} 队列；车机在线，将写入极氪中英文双目录。", targetCarName)
                 } else {
-                    text("Queued, but no vehicle is connected (experimental)", "已加入待发送列表，但当前没有已连接车机（实验入口）")
+                    text("Queued for {0}. Start the Companion receiver and connect the vehicle later to continue.", "已为 {0} 持久排队；稍后开启接收服务并连接车机即可继续。", targetCarName)
                 },
             )
         }
@@ -380,9 +433,7 @@ class SoundEditorController(
                     result.message
                 } else {
                     text(
-                        "Completed: ${result.fileName} (${formatBytes(result.sizeBytes)}, ${formatDuration(result.durationMs)})",
-                        "已完成：${result.fileName}（${formatBytes(result.sizeBytes)}，${formatDuration(result.durationMs)}）",
-                    )
+                        "Completed: {0} ({1}, {2})", "已完成：{0}（{1}，{2}）", result.fileName, formatBytes(result.sizeBytes), formatDuration(result.durationMs))
                 }
                 progressText = ""
                 runCatching { converted.delete() }
@@ -417,7 +468,7 @@ class SoundEditorController(
                 cancel = { cancellation.cancelled },
                 progress = { done, total ->
                     progressText = if (total > 0) {
-                        text("Converting ${done * 100 / total}%…", "正在转换 ${done * 100 / total}%…")
+                        text("Converting {0}%…", "正在转换 {0}%…", done * 100 / total)
                     } else {
                         text("Converting…", "正在转换…")
                     }
@@ -456,7 +507,7 @@ class SoundEditorController(
         return SoundErrors.userMessage(code, t.message ?: t.javaClass.simpleName)
     }
 
-    private fun text(en: String, zh: String) = PhoneLanguage.text(en, zh)
+    private fun text(en: String, zh: String, vararg args: Any?) = PhoneLanguage.text(en, zh, *args)
 
     companion object {
         fun formatDuration(ms: Long): String {

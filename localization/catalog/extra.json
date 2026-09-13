@@ -1,0 +1,82 @@
+[
+  [
+    "Record",
+    "录像"
+  ],
+  [
+    "Library",
+    "记录"
+  ],
+  [
+    "Phone / Tools",
+    "手机 / 工具"
+  ],
+  [
+    "Settings",
+    "设置"
+  ],
+  [
+    "Vehicle",
+    "车辆"
+  ],
+  [
+    "Library",
+    "媒体库"
+  ],
+  [
+    "Tools",
+    "工具箱"
+  ],
+  [
+    "Front",
+    "前"
+  ],
+  [
+    "Rear",
+    "后"
+  ],
+  [
+    "Left",
+    "左"
+  ],
+  [
+    "Right",
+    "右"
+  ],
+  [
+    "Recordings",
+    "普通视频"
+  ],
+  [
+    "Time-lapse",
+    "延时视频"
+  ],
+  [
+    "Incidents",
+    "紧急事件"
+  ],
+  [
+    "Sentry",
+    "哨兵模式"
+  ],
+  [
+    "Connect in the Phone tab",
+    "在「手机」页连接"
+  ],
+  [
+    "Developer tools",
+    "开发者工具"
+  ],
+  [
+    "Head-unit and USB storage have separate limits. Automatic cleanup removes only this app's recordings and keeps factory Sentry videos.",
+    "车机与 USB 分别设置存储上限。自动清理只删除本应用的录像，保留原厂哨兵视频。"
+  ],
+  [
+    "Recordings are stored on the head unit or USB. Deletion and cleanup apply only to this app's recordings.",
+    "录像保存在车机或 USB 中；删除与清理只针对本应用的录像。"
+  ],
+  [
+    "Recording diagnostics, USB tools and camera tuning are visible only in developer mode.",
+    "录像诊断、USB 工具与摄像头调试仅在开发者模式下显示。"
+  ]
+]

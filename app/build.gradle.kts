@@ -20,20 +20,28 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "0.3.0-alpha8-safe-lifecycle"
+        versionCode = 57
+        versionName = "4.0.0"
         buildConfigField("String", "GIT_SHA", "\"$buildGitSha\"")
         buildConfigField("boolean", "CAMERA_INTERRUPTION_RECOVERY_ENABLED", "true")
+        // Hardware gates have not been accepted. Production routing stays on RecorderSession.
+        buildConfigField("boolean", "SENTRY_AUTO_ENABLED", "false")
+        buildConfigField("boolean", "SENTRY_CANARY_ENABLED", "false")
+        buildConfigField("boolean", "SENTRY_INTEGRATED_ENABLED", "false")
+        buildConfigField("boolean", "SENTRY_CAPTURE_ENABLED", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
+            ndk { abiFilters += "arm64-v8a" }
             // The product entry points no longer reach the retired capability
             // lab and phone-transfer experiments. R8 keeps those classes out
             // of the public release APK while the private research work stays
             // available in this local workspace.
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -48,10 +56,13 @@ android {
         compose = true
         buildConfig = true
     }
+    testBuildType = "debug"
 }
 
 dependencies {
     implementation(project(":transfer-protocol"))
+    implementation(project(":sound-core"))
+    implementation(project(":localization"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

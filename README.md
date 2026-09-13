@@ -1,421 +1,48 @@
-# AVM Recorder
+# OpenAVM V4
 
-[简体中文](README.zh-CN.md)
+[简体中文](README.zh-CN.md) · [Download V4](https://github.com/Dantenothing/openavm-recorder/releases/tag/v4.0.0) · [User guide](USER_GUIDE.md) · [Release notes](GITHUB_RELEASE_V4.md)
 
-Experimental surround-view recorder for compatible Zeekr App Lab environments.
+Record, browse and transfer video on compatible Zeekr App Lab head units. V4 includes **OpenAVM Recorder** for the vehicle and an **optional OpenAVM Companion** app for Android phones.
 
-> [!WARNING]
-> AVM Recorder is experimental, unofficial software. It is not affiliated with, approved by or endorsed by Zeekr.
->
-> It is not a replacement for an OEM dashcam or any vehicle safety system. Do not interact with the app while driving.
->
-> The fact that the app can access and record a video stream does **not** establish that doing so has zero impact on shared vehicle compute, memory, camera or storage resources.
+## Downloads
 
-> [!CAUTION]
-> **v0.3.0 is an opt-in public test release, not the recommended stable path.** Normal recording inherits the extensively road-tested v0.2 baseline, but time-lapse and the exact v0.3.0 lifecycle changes have not yet completed real-car acceptance testing.
->
-> When using time-lapse, always press **Stop** before leaving or locking the vehicle. Do not rely on automatic vehicle-away termination. Earlier development builds entered a persistent third-party Camera2/vendor-pipeline stall after repeated time-lapse and lock cycles. If AVM preview becomes black, frozen or unusually slow, stop using the app. If it does not recover, uninstall AVM Recorder and restart the head unit before testing again.
->
-> OpenAVM Companion's direct recording download has been tested. Its **Toolbox is work in progress and must not be used in this release**.
+| App | Install on | Version | Download |
+| --- | --- | --- | --- |
+| OpenAVM Recorder | Compatible ARM64 vehicle head unit | 4.0.0 (57) | [Vehicle APK — 2.24 MB](https://github.com/Dantenothing/openavm-recorder/releases/download/v4.0.0/OpenAVM-Recorder-V4-arm64-v8a.apk) |
+| OpenAVM Companion | Android phone, Android 8.0 or later | 4.0.0 (29) | [Optional phone APK — 3.15 MB](https://github.com/Dantenothing/openavm-recorder/releases/download/v4.0.0/OpenAVM-Companion-V4.apk) |
 
-## What it is
+The vehicle app also requires Android 8.0 or later and compatible App Lab camera/storage access; the Android version alone does not establish compatibility. Signed APKs and SHA-256 checksums are attached to the release. Use the vehicle's available App Lab installation flow. Existing installations with the same application ID and signing key can be updated in place.
 
-AVM Recorder records and displays the surround-view video stream exposed to a third-party Android application running in a compatible Zeekr App Lab environment.
+**The phone APK is not required.** The vehicle app and a USB drive cover recording, video viewing/management and lock/unlock sound creation. The phone app adds wireless transfer and phone-side playback, trimming and individual-view export.
 
-The current public-test alpha provides:
+## What V4 includes
 
-- selectable logical sources for 360°, Cabin and IR cameras, with compatibility mapping;
-- a 2×2 360° live view labelled Front, Rear, Left and Right, plus single-view Cabin/IR preview;
-- normal segmented recording to the app's internal storage, grouped into recording Sessions in the gallery;
-- experimental 2×–150× time-lapse recording;
-- protected/saved events that automatic cleanup does not remove;
-- a thumbnail-based recording library;
-- source-aware playback, seeking, Session navigation and single-view zoom;
-- optional display-only fisheye correction; and
-- automatic cleanup controlled by a storage limit and reserved free-space threshold;
-- local hotspot/LAN transfer to OpenAVM Companion; and
-- phone playback and local export of transferred recordings.
+- **Direct USB recording:** video writes straight to the selected writable USB drive, without first recording the video to internal storage. Small settings, metadata and diagnostics still use internal storage; an unavailable USB can cause a bounded internal-storage fallback when recording remains appropriate.
+- **Recording choices:** four-view surround recording, selectable Cabin and IR sources, and time-lapse. The 2×, 5× and 10× settings have received targeted owner testing. Camera availability and declared resolutions depend on the vehicle.
+- **A clearer library:** categories, session grouping of one-minute files, selected-segment transfer, internal-to-USB export and bulk deletion of OpenAVM-owned recordings. Factory Sentry recordings can be viewed and transferred; factory `/SentryMode/` remains read-only.
+- **Optional Android Companion:** local hotspot/LAN pairing, video transfer, immediate playback in the detail page, correct square-video proportions, trimming and individual-camera export. A USB drive can also be connected directly to the phone.
+- **Sound tools on both apps:** import supported music/video, trim audio, make vehicle-compatible WAV files and save to USB. The vehicle toolbox can browse, preview and delete existing USB sound files.
+- **Six language choices:** English, Simplified Chinese, Traditional Chinese, Thai, Vietnamese and Arabic, plus follow system. Both apps use the same icon; advanced vehicle diagnostics are hidden by default.
 
-Phone transfer has been tested for pairing and downloading recordings over a local phone hotspot. Keep the hotspot active and preferably keep OpenAVM Companion in the foreground during a transfer. Automatic reconnection, every background state and every phone vendor have not been fully validated.
+## A few things to know
 
-## How it works
+- On the owner's car, normal recording usually continues for around five minutes after leaving, which can help cover part of the gap before factory Sentry starts. This is **observed vehicle behaviour**, not a fixed timer or guaranteed handover. V4 does not start or control factory Sentry.
+- New lock/unlock sounds may not appear in the vehicle's sound list immediately. In testing, leaving and returning to the car, or reconnecting the USB drive, sometimes refreshed the list. OpenAVM cannot identify which sound the vehicle currently has selected.
+- **Custom parking Sentry and automatic recording on return are not included.** Those experiments are paused because reliable camera access and wake-up across vehicle sleep have not been established. Factory Sentry video browsing remains available. See the [research status](research/sentry/README_V4_ARCHIVE.md).
+- Testing has mainly used the owner's car and Android devices. Other vehicle models, firmware and phones may behave differently. Earlier development builds experienced a persistent third-party camera-feed stall requiring a head-unit restart; the owner reports no recurrence in current V4 testing. This is not proof that it cannot recur.
 
-On the tested vehicle, App Lab allows the application to request one already-processed `1280×5140` composite surround-view stream through Android Camera2.
+OpenAVM is independent, unofficial software and is not affiliated with or endorsed by Zeekr. It is not a replacement for a factory safety system or a guaranteed parking recorder. Operate its controls while parked. See [platform observations and limitations](PLATFORM_NOTES.md) and [security reporting](SECURITY.md).
 
-The stream contains four approximately `1280×1280` views arranged vertically, with separator rows between them.
+## Guides and development
 
-AVM Recorder:
-
-1. requests that single composite stream through standard Android Camera2 APIs;
-2. identifies and maps the four image regions into a 2×2 display;
-3. records the composite stream through Android media APIs; and
-4. applies view layout, zoom and optional lens correction only at the display layer.
-
-The app does **not**:
-
-- require root;
-- unlock the bootloader;
-- modify the Android system image;
-- bypass Android permission checks;
-- escalate application privileges;
-- modify vehicle firmware;
-- use a proprietary Zeekr SDK or extracted Zeekr binaries; or
-- request four separate camera devices or four independent camera streams.
-
-The application operates only with the Android permissions and interfaces available to it in the tested App Lab environment.
-
-## What is known — and what is not
-
-There are important limits to what can currently be concluded from observations made at the Android application layer.
-
-### What has been observed
-
-The application receives a **single processed `1280×5140` composite video stream** rather than opening four individual camera streams.
-
-The four images visible to the application correspond to the vehicle's surround-view / AVM views.
-
-The application performs its own crop, layout and recording operations only after receiving that composite stream.
-
-No root access, privilege escalation, system modification or direct vehicle-firmware modification is required.
-
-### What has not been established
-
-The upstream architecture producing the composite stream has not been independently documented or fully reverse-engineered.
-
-This project has therefore **not established**:
-
-- which ISP, camera controller or vehicle subsystem produces the `1280×5140` stream;
-- whether it is generated specifically for the factory AVM / 360° interface or mirrored from another internal video pipeline;
-- whether its upstream processing shares memory, ISP, camera, compute or other resources with ADAS or other vehicle functions;
-- whether requesting the stream creates additional upstream work or simply attaches another consumer to an already-produced output;
-- how App Lab is internally isolated from other infotainment or vehicle services;
-- whether App Lab uses an additional container, host process or other isolation mechanism beyond ordinary Android application isolation;
-- whether the video encoder is hardware-accelerated on every compatible software version;
-- whether sustained recording affects telemetry logging or other storage users under worst-case conditions; or
-- whether the same behaviour will remain available after future Zeekr OTA updates.
-
-The existence of a processed surround-view stream alone is **not sufficient evidence to claim architectural independence from ADAS or other upstream vehicle systems**.
-
-The project therefore documents what can actually be observed rather than making assumptions about undocumented vehicle architecture.
-
-## Observed App Lab and infotainment behaviour
-
-Some behaviour of the tested vehicle is relevant when interpreting faults or performance changes during AVM Recorder testing.
-
-### Infotainment interruption observed before third-party apps were installed
-
-During ordinary use of the tested vehicle, one complete infotainment interruption was observed **before AVM Recorder or any other third-party App Lab APK had been installed or run**.
-
-During that event:
-
-- the centre display went completely black;
-- the head-up display also became unavailable;
-- the infotainment system remained unavailable for approximately two minutes; and
-- the system subsequently recovered without user intervention.
-
-The driver did not observe any loss of basic driving functions during the event.
-
-This factual observation is included only as testing context. It shows that, on this particular test vehicle, a similar infotainment interruption had occurred in the complete absence of AVM Recorder and other third-party App Lab applications.
-
-It does not establish the cause of that event, and it does **not** show that AVM Recorder could never cause or contribute to a different infotainment, AVM, ADAS or vehicle-system issue. Any future report should be investigated using logs, reproducible steps and comparison with the app stopped or uninstalled.
-
-### App Lab appears to be subject to resource management
-
-The App Lab interface itself warns that:
-
-- applications that are excessively large may fail to start; and
-- applications running through App Lab may be slowed when other head-unit functions are under high load.
-
-This suggests that the platform has some form of resource-management or performance-control policy for App Lab applications and may prioritise factory infotainment workloads when system resources are constrained.
-
-However, the implementation is undocumented and has not been independently verified.
-
-It is currently unknown:
-
-- what CPU, GPU, RAM or storage-I/O limits apply to App Lab applications;
-- whether App Lab applications run at a lower scheduler or service priority;
-- whether any limits are dynamic or fixed;
-- which factory workloads take precedence; or
-- whether these controls provide any isolation from safety-related vehicle systems.
-
-The App Lab warning is evidence that the platform anticipates resource contention and has some mechanism for managing third-party workloads.
-
-It is **not proof that an App Lab application cannot affect other head-unit functions**.
-
-## Road testing to date
-
-As of 12 August 2026, AVM Recorder had accumulated approximately **four hours of real-world driving tests** on the development vehicle.
-
-The typical test condition was:
-
-- AVM Recorder running continuously in the background and recording;
-- Android Auto operating normally at the same time; and
-- normal use of the vehicle and head unit during driving.
-
-During these tests:
-
-- recording continued without an observed failure;
-- no obvious sustained video stuttering or recording dropout was observed;
-- Android Auto continued to operate normally;
-- no abnormal behaviour of the factory 360° camera was observed;
-- no obvious abnormal vehicle behaviour was observed; and
-- no head-unit fault was observed during this test period.
-
-During observed operation, the head unit's system reporting showed approximately **9 GB of available RAM**.
-
-This was an observed system-reported value rather than an independently validated measurement. It suggests that the tested workload did **not produce obvious RAM pressure on this vehicle during the observed test period**.
-
-It does not establish that memory use is harmless under all conditions, because:
-
-- the measurement is from one vehicle;
-- only one known software environment has been tested;
-- memory use may change with other applications or workloads;
-- longer-duration behaviour has not yet been established; and
-- available-memory reporting does not by itself measure memory bandwidth, allocation latency or other shared-resource effects.
-
-The approximately four hours of road testing are therefore useful empirical evidence of current behaviour, but they are **not proof of long-term safety, zero resource impact or universal compatibility**.
-
-## Resource usage and open questions
-
-The largest remaining technical questions concern shared system resources.
-
-Areas still requiring measurement include:
-
-- CPU load;
-- GPU load;
-- RAM consumption over longer periods;
-- memory bandwidth;
-- Camera2 buffer behaviour;
-- hardware video encoder usage;
-- encoder contention;
-- sustained storage I/O;
-- storage latency while vehicle telemetry or other services are active;
-- internal flash write amplification and endurance;
-- thermal impact;
-- dropped frames;
-- gaps between recording segments;
-- long-duration foreground/background behaviour;
-- behaviour during repeated camera acquisition/release cycles;
-- recovery after the camera is reclaimed by a factory vehicle function; and
-- interaction with factory infotainment, AVM and other camera-related services.
-
-The approximately `9 GB` of available RAM reported by the head unit during testing reduces concern about **immediate RAM exhaustion under that specific tested workload**, but it does not answer questions about memory bandwidth, scheduler contention or other shared resources.
-
-The project should therefore not currently be interpreted as demonstrating that recording has **zero performance cost**.
-
-Further testing is intended to measure that cost rather than assume either that it is harmless or that it is unsafe.
-
-## Storage limitation and flash wear
-
-The tested App Lab environment does not currently allow AVM Recorder to write recordings directly to external USB storage.
-
-Recordings are therefore written to the application's internal storage.
-
-Observed recording profile:
-
-- approximately `200 MB/min`;
-- approximately `3–4 MB/s` sustained file writes; and
-- approximately `28 Mbps` encoded video bitrate at `1280×5140`.
-
-Automatic cleanup limits the amount of storage space retained by the application, but it does **not** eliminate cumulative writes to the underlying flash storage.
-
-Deleting an old recording and replacing it with a new recording may keep used storage approximately constant while still generating additional writes to the underlying NAND/UFS/eMMC storage.
-
-For example, at approximately `200 MB/min`, one hour of recording represents roughly `12 GB` of host-level video data written before accounting for filesystem or flash write amplification.
-
-The following are not yet known for the tested head unit:
-
-- exact internal storage device type;
-- manufacturer and model;
-- NAND type;
-- endurance rating;
-- available over-provisioning;
-- wear-leveling behaviour;
-- filesystem write amplification;
-- lifetime write counters; and
-- long-term effect of repeated recording workloads.
-
-For this reason, **internal flash endurance and sustained storage I/O remain unresolved project risks**.
-
-The application should avoid unnecessary temporary files and intermediate disk writes. Where possible, processing should occur in memory and only the final encoded recording should be persisted.
-
-Protected events are excluded from normal automatic cleanup and can continue consuming storage until manually deleted.
-
-## Recording privacy
-
-Recordings may contain identifiable people, faces, licence plates, homes, private property, travel routes and other location or behavioural information.
-
-Users are responsible for complying with the privacy, surveillance, recording and publication laws that apply where the vehicle is used. Do not publish or share identifiable footage without an appropriate legal basis or consent, and consider redacting faces, licence plates and other identifying details first.
-
-Protected recordings are not removed by automatic cleanup. Review and manually delete sensitive recordings when they are no longer required.
-
-The current alpha records video only. It does not request microphone permission or record audio.
-
-## Camera ownership
-
-The factory vehicle software may take ownership of the relevant camera resource for functions such as:
-
-- the factory 360° view;
-- reverse camera;
-- parking camera functions; or
-- other OEM camera interfaces.
-
-AVM Recorder must not interfere with those functions.
-
-If Android reports that the camera is unavailable or already in use:
-
-1. stop recording;
-2. allow the factory vehicle function to retain the camera; and
-3. retry only after the factory function has released it.
-
-Stop using AVM Recorder if any factory camera, reverse-view, parking-view or infotainment behaviour appears abnormal.
-
-AVM Recorder must never be treated as having priority over an OEM vehicle function.
-
-## Installation
-
-Once GitHub Releases can be accessed from the tested head-unit environment:
-
-1. Open this repository's GitHub Releases page.
-2. For the more conservative normal-recording baseline, choose `v0.2.0-alpha9`. Volunteer testers may instead choose the clearly marked v0.3.0 prerelease.
-3. Download the signed OpenAVM Recorder APK. Install OpenAVM Companion separately on an Android phone only if phone transfer is required.
-4. Open the downloaded Recorder APK.
-5. Confirm installation through the available system/App Lab package installation flow.
-6. Launch AVM Recorder.
-7. Grant camera access when requested.
-
-Do not install a file whose name ends in `-unsigned.apk`.
-
-Unsigned files are build-validation artifacts and are not installable release packages.
-
-Installation and App Lab behaviour may differ after vehicle software updates or on other Zeekr models, regions or head-unit configurations.
-
-## Security and inspection
-
-The source code is publicly visible so that users can inspect its behaviour before installation. Public visibility does not make the project open source or grant permission to reuse the code.
-
-Users are encouraged to review:
-
-- [`AndroidManifest.xml`](app/src/main/AndroidManifest.xml);
-- requested permissions;
-- exported components;
-- Gradle dependencies;
-- network-related configuration;
-- Camera2 usage;
-- media encoding behaviour;
-- storage implementation;
-- Zeekr-specific assumptions; and
-- cleanup and protected-recording behaviour.
-
-The current Recorder alpha requests:
-
-- camera permission;
-- Internet and local network/Wi-Fi state permissions for direct phone transfer;
-- notification permission;
-- foreground-service permission; and
-- wake-lock permission.
-
-The network transport is intended for direct local communication with OpenAVM Companion. The public-test release does not require a project-operated cloud service.
-
-Source availability does not by itself prove that the application is safe for every vehicle configuration.
-
-Users and contributors are encouraged to report unexpected resource usage or vehicle-system interaction.
-
-See `SECURITY.md` for reporting:
-
-- security issues;
-- privacy issues;
-- excessive resource consumption;
-- abnormal camera behaviour;
-- unexpected vehicle-system interaction; or
-- other safety-relevant observations.
-
-Third-party component licensing is documented in `THIRD_PARTY_NOTICES.md`.
-
-## Building from source
-
-Requirements:
-
-- Android SDK with API 36;
-- JDK 17; and
-- the included Gradle wrapper.
-
-On Windows:
-
-```powershell
-.\gradlew.bat clean :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
-```
-
-On macOS or Linux:
-
-```bash
-./gradlew clean :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
-```
-
-OpenAVM Companion is a separate Android project under `ZeekrBridgeCompanion`. From that directory, run the corresponding wrapper command:
-
-```powershell
-.\gradlew.bat clean testReleaseUnitTest lintRelease assembleRelease
-```
-
-Without a locally configured private signing key, Gradle produces `app-release-unsigned.apk`.
-
-Signing keys and credentials must never be committed to the repository.
-
-## Known limitations
-
-- Compatibility is currently confirmed only on the tested Australian Zeekr 7X App Lab environment.
-- Road testing as of 12 August 2026 covers approximately four hours on one vehicle.
-- The upstream source and architecture of the `1280×5140` stream have not been independently established.
-- No claim is made that the AVM stream is architecturally independent of ADAS or other shared vehicle resources.
-- The head unit reported approximately `9 GB` of available RAM during the tested workload, but this observation was not independently validated and does not establish long-term RAM or memory-bandwidth behaviour.
-- Recordings use internal storage rather than external USB storage.
-- Long-term internal flash endurance has not been established.
-- Only OpenAVM Companion pairing, direct recording download and core playback/export paths have received practical testing. Keep the phone hotspot active and preferably keep Companion in the foreground while transferring.
-- Companion Toolbox features, including Sentry USB handling and Zeekr lock/unlock sound creation or writing, are work in progress and must not be used in this release.
-- Time-lapse is experimental and has not completed real-car acceptance testing. Always press Stop before leaving or locking the vehicle.
-- Earlier development builds have produced a persistent third-party camera stall after repeated time-lapse/lock cycles. Uninstall AVM Recorder and restart the head unit if camera behaviour does not recover after stopping the app.
-- Automatic vehicle-away termination is not a substitute for manually stopping an experimental time-lapse Session.
-- The special `1280×5140` composite video may not play correctly in every third-party media player.
-- Camera access can become unavailable while a factory camera function owns the relevant resource.
-- The app has not completed long-term thermal, storage-wear or multi-day reliability testing.
-- Hardware encoder use has not yet been verified across all compatible software versions.
-- The app cannot currently establish that vehicle compute, memory, camera or storage bandwidth is unaffected.
-- Compatibility may change after Zeekr OTA updates.
-
-## Warranty, insurance and legal status
-
-This project does not make any claim regarding vehicle warranty coverage, insurance coverage or the legal status of installing third-party applications in a particular jurisdiction.
-
-Those questions may depend on:
-
-- the vehicle;
-- software version;
-- region;
-- manufacturer policy;
-- insurer;
-- circumstances of use; and
-- whether an application or modification can be shown to have caused or contributed to a particular failure or event.
-
-Users are responsible for checking the requirements applicable to their own vehicle and circumstances.
-
-The project does not claim that simply installing AVM Recorder either voids or preserves any warranty or insurance coverage.
-
-## Disclaimer
-
-AVM Recorder is experimental, unofficial software provided for testing.
-
-It is not affiliated with, approved by or endorsed by Zeekr.
-
-Use it at your own risk.
-
-Users are responsible for evaluating whether it is suitable and lawful to install and use on their own vehicle.
-
-Successful operation on one tested vehicle does not establish safety, reliability or compatibility elsewhere.
-
-Stop using the app if any unexpected factory camera, infotainment or vehicle behaviour occurs.
+- [Setup, phone pairing, USB, sound tools and troubleshooting](USER_GUIDE.md)
+- [中文使用说明](USER_GUIDE.zh-CN.md)
+- [V4 release notes](GITHUB_RELEASE_V4.md) and [changelog](CHANGELOG.md)
+- [Build instructions and release verification](DEVELOPMENT.md)
+- [Platform observations](PLATFORM_NOTES.md) and [paused Sentry research](research/sentry/README_V4_ARCHIVE.md)
 
 ## Source availability and licence status
+
 
 Copyright © 2026 Dantenothing. All rights reserved.
 

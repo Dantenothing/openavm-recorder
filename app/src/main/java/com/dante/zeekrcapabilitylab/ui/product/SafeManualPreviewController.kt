@@ -1,5 +1,6 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
+import com.dante.zeekrcapabilitylab.util.Utils
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -14,6 +15,12 @@ import android.os.HandlerThread
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
+import com.dante.zeekrcapabilitylab.BuildConfig
+import com.dante.zeekrcapabilitylab.sentry.CanaryCameraOpenAdapter
+import com.dante.zeekrcapabilitylab.service.recorder.CaptureCleanupRuntime
+import com.dante.zeekrcapabilitylab.service.recorder.CaptureCloseTransaction
+import com.dante.zeekrcapabilitylab.service.recorder.CaptureCloseResources
+import com.dante.zeekrcapabilitylab.service.recorder.HandlerCloseDispatcher
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
@@ -37,7 +44,7 @@ data class ManualPreviewState(
     val fallbackUsed: Boolean = false,
     val sourceRole: RecordingSourceRole? = null,
     val layoutKind: RecordingLayoutKind? = null,
-    val message: String = "预览默认关闭",
+    val message: String = Utils.t("Preview is off by default", "预览默认关闭"),
     val error: String? = null,
 )
 
@@ -72,6 +79,7 @@ class SafeManualPreviewController(context: Context) {
     private var cameraHandler: Handler? = null
 
     // Accessed only on cameraHandler.
+    private var closeTransaction: CaptureCloseTransaction? = null
     private var opening = false
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
@@ -128,7 +136,7 @@ class SafeManualPreviewController(context: Context) {
                     cancelSessionWatchdog()
                     _state.value = current.copy(
                         firstFrame = true,
-                        message = "实时原始视频已显示，四格由显示层重排",
+                        message = Utils.t("Live preview is ready", "实时原始视频已显示，四格由显示层重排"),
                     )
                     EventLogger.logEvent(
                         category = Categories.SYSTEM,
@@ -158,7 +166,7 @@ class SafeManualPreviewController(context: Context) {
         _state.value = ManualPreviewState(
             sourceRole = source.sourceRole,
             layoutKind = source.layoutKind,
-            message = "正在安全打开预览…",
+            message = Utils.t("Opening preview…", "正在安全打开预览…"),
         )
         openIfReady()
     }
@@ -179,19 +187,22 @@ class SafeManualPreviewController(context: Context) {
         }
     }
 
-    suspend fun stopAndAwait() {
+    suspend fun stopAndAwait(): Boolean {
         requested = false
         val token = generation.incrementAndGet()
         val handler = cameraHandler
-        if (handler == null) {
-            _state.value = ManualPreviewState()
-            return
-        }
-        suspendCancellableCoroutine { continuation ->
-            handler.post {
-                closeCameraOnWorker()
-                if (generation.get() == token) _state.value = ManualPreviewState()
-                if (continuation.isActive) continuation.resume(Unit)
+        return suspendCancellableCoroutine { continuation ->
+            if (handler != null && !handler.post { closeCameraOnWorker() }) {
+                if (continuation.isActive) continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
+            // Do not resume on close() return: the admission ledger requires onClosed and output release.
+            CaptureCleanupRuntime.awaitIdle(8_000) { idle ->
+                if (generation.get() == token) {
+                    if (idle) _state.value = ManualPreviewState()
+                    else fail(Utils.t("Camera release is unconfirmed. Recording is blocked; copy diagnostics.", "相机释放尚未确认，暂不能开始录像；请复制诊断"))
+                }
+                if (continuation.isActive) continuation.resume(idle)
             }
         }
     }
@@ -231,7 +242,7 @@ class SafeManualPreviewController(context: Context) {
             },
             sourceRole = requestedSource?.sourceRole,
             layoutKind = requestedSource?.layoutKind,
-            message = "等待录像预览画面…",
+            message = Utils.t("Waiting for recording preview…", "等待录像预览画面…"),
         )
         EventLogger.logEvent(
             category = Categories.SYSTEM,
@@ -257,19 +268,11 @@ class SafeManualPreviewController(context: Context) {
         requestedSource = null
         recorderSurfaceHandedOff = false
         generation.incrementAndGet()
-        val handler = cameraHandler
-        val thread = cameraThread
         textureView = null
-        if (handler != null) {
-            handler.post {
-                closeCameraOnWorker()
-                thread?.quitSafely()
-            }
-        } else {
-            thread?.quitSafely()
+        cameraHandler?.post {
+            closeCameraOnWorker()
+            CaptureCleanupRuntime.awaitIdle { idle -> if (idle) cameraThread?.quitSafely() }
         }
-        cameraHandler = null
-        cameraThread = null
         _state.value = ManualPreviewState()
     }
 
@@ -277,7 +280,7 @@ class SafeManualPreviewController(context: Context) {
         val view = textureView ?: return
         if (!view.isAvailable || !requested || released) return
         if (appContext.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            _state.value = ManualPreviewState(error = "尚未授予摄像头权限", message = "预览未启动")
+            _state.value = ManualPreviewState(error = Utils.t("Camera permission has not been granted", "尚未授予摄像头权限"), message = Utils.t("Preview has not started", "预览未启动"))
             requested = false
             return
         }
@@ -299,26 +302,26 @@ class SafeManualPreviewController(context: Context) {
         if (!view.isAvailable) return
         val texture = view.surfaceTexture ?: return
         val source = requestedSource ?: run {
-            fail("录像源尚未解析")
+            fail(Utils.t("The recording source is not ready", "录像源尚未解析"))
             requested = false
             return
         }
         val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
         if (manager == null) {
-            fail("系统没有 CameraManager")
+            fail(Utils.t("The camera service is unavailable", "系统没有 CameraManager"))
             return
         }
         try {
             val cameraId = source.cameraId
             if (cameraId !in manager.cameraIdList) {
-                fail("映射的摄像头 $cameraId 不可用")
+                fail(Utils.t("The selected camera {0} is unavailable", "映射的摄像头 {0} 不可用", cameraId))
                 requested = false
                 return
             }
             val declaredSizes = declaredSurfaceTextureSizes(manager, cameraId)
             val stableSize = chooseSafePreviewSize(declaredSizes)
             if (stableSize == null) {
-                fail("摄像头没有报告可用的 SurfaceTexture 预览尺寸")
+                fail(Utils.t("The camera did not report a supported preview size", "摄像头没有报告可用的 SurfaceTexture 预览尺寸"))
                 requested = false
                 return
             }
@@ -386,12 +389,12 @@ class SafeManualPreviewController(context: Context) {
                 fallbackUsed = !attemptHighResolution,
                 sourceRole = source.sourceRole,
                 layoutKind = source.layoutKind,
-                message = "正在打开摄像头 $cameraId 的${streamKind}…",
+                message = Utils.t("Opening camera {0}: {1}…", "正在打开摄像头 {0} 的{1}…", cameraId, streamKind),
             )
             val handler = cameraHandler ?: return
             val watchdog = Runnable {
                 if (opening && requested && token == generation.get()) {
-                    fail("摄像头 8 秒内没有打开，已安全取消")
+                    fail(Utils.t("Camera opening timed out after 8 seconds and was cancelled", "摄像头 8 秒内没有打开，已安全取消"))
                     closeCameraOnWorker()
                     requested = false
                 }
@@ -404,12 +407,16 @@ class SafeManualPreviewController(context: Context) {
                 cancelWatchdog()
                 opening = false
                 requested = false
-                fail("摄像头权限已被撤销")
+                fail(Utils.t("Camera permission was revoked", "摄像头权限已被撤销"))
                 return
             }
-            manager.openCamera(
-                cameraId,
-                object : CameraDevice.StateCallback() {
+            val callback = object : CameraDevice.StateCallback() {
+                    override fun onClosed(camera: CameraDevice) {
+                        CaptureCleanupRuntime.deviceClosed(camera)
+                        EventLogger.logEvent(Categories.SYSTEM, "PRODUCT_MANUAL_PREVIEW_DEVICE_CLOSED",
+                            payload = mapOf("cameraId" to cameraId, "generation" to token.toString()))
+                    }
+
                     override fun onOpened(camera: CameraDevice) {
                         if (!requested || released || token != generation.get()) {
                             camera.close()
@@ -433,7 +440,7 @@ class SafeManualPreviewController(context: Context) {
                         camera.close()
                         if (token == generation.get()) {
                             recoverOrFail(
-                                reason = "摄像头已断开",
+                                reason = Utils.t("Camera disconnected", "摄像头已断开"),
                                 cameraId = cameraId,
                                 texture = texture,
                                 stableSize = stableSize,
@@ -447,7 +454,7 @@ class SafeManualPreviewController(context: Context) {
                         camera.close()
                         if (token == generation.get()) {
                             recoverOrFail(
-                                reason = "摄像头打开失败：$error",
+                                reason = Utils.t("Camera opening failed: {0}", "摄像头打开失败：{0}", error),
                                 cameraId = cameraId,
                                 texture = texture,
                                 stableSize = stableSize,
@@ -456,9 +463,8 @@ class SafeManualPreviewController(context: Context) {
                             )
                         }
                     }
-                },
-                handler,
-            )
+                }
+            CanaryCameraOpenAdapter.open(manager, cameraId, callback, handler)
         } catch (e: CameraAccessException) {
             opening = false
             cancelWatchdog()
@@ -511,7 +517,7 @@ class SafeManualPreviewController(context: Context) {
                                 fallbackUsed = !highResolutionAttempt,
                                 sourceRole = requestedSource?.sourceRole,
                                 layoutKind = requestedSource?.layoutKind,
-                                message = "${previewStreamKind(stableSize, forcedSize)}已启动，等待首帧…",
+                                message = Utils.t("{0} started; waiting for the first frame…", "{0}已启动，等待首帧…", previewStreamKind(stableSize, forcedSize)),
                             )
                             EventLogger.logEvent(
                                 category = Categories.SYSTEM,
@@ -528,7 +534,7 @@ class SafeManualPreviewController(context: Context) {
                             )
                         } catch (t: Throwable) {
                             recoverOrFail(
-                                reason = "预览请求失败：${t.message ?: t.javaClass.simpleName}",
+                                reason = Utils.t("Preview request failed: {0}", "预览请求失败：{0}", t.message ?: t.javaClass.simpleName),
                                 cameraId = cameraId,
                                 texture = texture,
                                 stableSize = stableSize,
@@ -541,7 +547,7 @@ class SafeManualPreviewController(context: Context) {
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         session.close()
                         recoverOrFail(
-                            reason = "预览会话配置失败",
+                            reason = Utils.t("Preview configuration failed", "预览会话配置失败"),
                             cameraId = cameraId,
                             texture = texture,
                             stableSize = stableSize,
@@ -554,7 +560,7 @@ class SafeManualPreviewController(context: Context) {
             )
         } catch (t: Throwable) {
             recoverOrFail(
-                reason = "创建预览会话失败：${t.message ?: t.javaClass.simpleName}",
+                reason = Utils.t("Could not create preview: {0}", "创建预览会话失败：{0}", t.message ?: t.javaClass.simpleName),
                 cameraId = cameraId,
                 texture = texture,
                 stableSize = stableSize,
@@ -587,9 +593,9 @@ class SafeManualPreviewController(context: Context) {
 
     private fun previewStreamKind(stableSize: Size, forcedSize: Size?): String =
         if (forcedSize != null) {
-            "高清四路预览（${forcedSize.width}×${forcedSize.height}）"
+            Utils.t("High-resolution preview ({0}×{1})", "高清四路预览（{0}×{1}）", forcedSize.width, forcedSize.height)
         } else {
-            "兼容预览（Surface 提示 ${stableSize.width}×${stableSize.height}）"
+            Utils.t("Compatible preview ({0}×{1})", "兼容预览（Surface 提示 {0}×{1}）", stableSize.width, stableSize.height)
         }
 
     private fun scheduleSessionWatchdog(
@@ -609,7 +615,7 @@ class SafeManualPreviewController(context: Context) {
                 !current.firstFrame
             ) {
                 recoverOrFail(
-                    reason = "预览 8 秒内没有显示首帧",
+                    reason = Utils.t("Preview did not receive a frame within 8 seconds", "预览 8 秒内没有显示首帧"),
                     cameraId = cameraId,
                     texture = texture,
                     stableSize = stableSize,
@@ -656,17 +662,13 @@ class SafeManualPreviewController(context: Context) {
             fallbackUsed = true,
             sourceRole = requestedSource?.sourceRole,
             layoutKind = requestedSource?.layoutKind,
-            message = "高清预览不可用，正在恢复兼容模式…",
+            message = Utils.t("High-resolution preview is unavailable. Restoring compatible preview…", "高清预览不可用，正在恢复兼容模式…"),
         )
-        cameraHandler?.postDelayed(
-            {
-                openCameraOnWorker(
-                    token = fallbackToken,
-                    attemptHighResolution = false,
-                )
-            },
-            250L,
-        )
+        CaptureCleanupRuntime.awaitIdle(8_000) { idle -> cameraHandler?.post {
+            if (idle) openCameraOnWorker(fallbackToken, attemptHighResolution = false)
+            else { requested = false; fail(Utils.t("Previous preview release is unconfirmed. Retries have stopped.", "上一次预览释放未确认，已停止重试")) }
+        } }
+
     }
 
     private fun restoreTextureViewBuffer(texture: SurfaceTexture) {
@@ -679,14 +681,48 @@ class SafeManualPreviewController(context: Context) {
     private fun closeCameraOnWorker() {
         cancelWatchdog()
         cancelSessionWatchdog()
+        if (closeTransaction != null) return
+        val camera = cameraDevice
+        val session = captureSession
+        val surface = previewSurface
         opening = false
-        runCatching { captureSession?.stopRepeating() }
-        runCatching { captureSession?.close() }
-        captureSession = null
-        runCatching { cameraDevice?.close() }
-        cameraDevice = null
-        runCatching { previewSurface?.release() }
-        previewSurface = null
+        if (camera == null && session == null && surface == null) return
+        val hold = Any()
+        val traceId = "preview-" + System.identityHashCode(this) + "-" + generation.get()
+        CaptureCleanupRuntime.initialize(appContext)
+        val tx = CaptureCloseTransaction(
+            control = CaptureCleanupRuntime.control,
+            native = HandlerCloseDispatcher(requireNotNull(cameraHandler)),
+            output = HandlerCloseDispatcher(requireNotNull(cameraHandler)),
+            resources = object : CaptureCloseResources {
+                override fun stopRepeating() { session?.stopRepeating() }
+                override fun abortCaptures() { session?.abortCaptures() }
+                override fun closeSession() { session?.close() }
+                override fun closeDevice() { camera?.close() }
+                override fun stopRecorder() = Unit
+                override fun resetRecorder() = Unit
+                override fun releaseRecorder() = Unit
+                override fun closeOutput(lost: Boolean) { surface?.release() }
+            },
+            hasSession = session != null, hasDevice = camera != null,
+            wasRecording = false, sequences = emptySet(), terminal = true, lost = false,
+            trace = { step, detail -> CaptureCleanupRuntime.trace(traceId, step, detail) },
+            unconfirmed = { requested = false; fail(Utils.t("Camera release is unconfirmed. Retries have stopped; copy diagnostics.", "相机释放未确认，已停止重试；请复制诊断")) },
+            completed = { result -> cameraHandler?.post {
+                if (result.safeToContinue) {
+                    if (cameraDevice === camera) cameraDevice = null
+                    if (captureSession === session) captureSession = null
+                    if (previewSurface === surface) previewSurface = null
+                    closeTransaction = null
+                    CaptureCleanupRuntime.settled(hold, true)
+                    if (released) cameraThread?.quitSafely()
+                }
+            } },
+            preferDeviceClose = true,
+        )
+        closeTransaction = tx
+        CaptureCleanupRuntime.retain(hold, camera?.id ?: _state.value.cameraId ?: "default", camera, tx)
+        tx.begin()
     }
 
     private fun cancelWatchdog() {
@@ -700,7 +736,7 @@ class SafeManualPreviewController(context: Context) {
     }
 
     private fun fail(message: String) {
-        _state.value = _state.value.copy(active = false, error = message, message = "预览未启动")
+        _state.value = _state.value.copy(active = false, error = message, message = Utils.t("Preview has not started", "预览未启动"))
         EventLogger.logEvent(
             category = Categories.SYSTEM,
             eventName = "PRODUCT_MANUAL_PREVIEW_FAILED",
@@ -709,10 +745,10 @@ class SafeManualPreviewController(context: Context) {
     }
 
     private fun cameraError(error: CameraAccessException): String = when (error.reason) {
-        CameraAccessException.CAMERA_IN_USE -> "摄像头正被原厂 360/倒车占用"
-        CameraAccessException.MAX_CAMERAS_IN_USE -> "已达到摄像头使用上限"
-        CameraAccessException.CAMERA_DISABLED -> "系统已禁用摄像头"
-        CameraAccessException.CAMERA_DISCONNECTED -> "摄像头已断开"
-        else -> "Camera2 错误 ${error.reason}"
+        CameraAccessException.CAMERA_IN_USE -> Utils.t("The camera is in use by the vehicle’s 360° or reversing system", "摄像头正被原厂 360/倒车占用")
+        CameraAccessException.MAX_CAMERAS_IN_USE -> Utils.t("The camera usage limit has been reached", "已达到摄像头使用上限")
+        CameraAccessException.CAMERA_DISABLED -> Utils.t("The system disabled the camera", "系统已禁用摄像头")
+        CameraAccessException.CAMERA_DISCONNECTED -> Utils.t("Camera disconnected", "摄像头已断开")
+        else -> Utils.t("Camera2 error {0}", "Camera2 错误 {0}", error.reason)
     }
 }

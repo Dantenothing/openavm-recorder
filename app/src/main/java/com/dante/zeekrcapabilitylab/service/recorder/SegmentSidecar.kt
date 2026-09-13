@@ -55,7 +55,7 @@ data class SegmentLaneInfo(
 
 @Serializable
 data class SegmentSidecar(
-    val schemaVersion: Int = 7,
+    val schemaVersion: Int = 8,
     val file: String,
     val cameraId: String,
     val profile: CameraFormatProfile,
@@ -96,6 +96,8 @@ data class SegmentSidecar(
     val eventRequestedAtEpochMs: Long? = null,
     /** PREVIOUS, CURRENT or NEXT; null for manual/legacy bookmarks. */
     val eventRole: String? = null,
+    /** OpenAVM Sentry warnings, relative to this physical MP4; empty on legacy/normal recordings. */
+    val triggerMarkers: List<VideoTriggerMarker> = emptyList(),
     /**
      * Temporary pin set while a segment is queued for upload. Distinct from
      * [protected] (explicit user Bookmark): eviction treats both as protected,

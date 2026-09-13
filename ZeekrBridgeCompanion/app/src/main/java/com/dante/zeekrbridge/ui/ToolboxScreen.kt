@@ -1,7 +1,5 @@
 package com.dante.zeekrbridge.ui
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,30 +16,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dante.zeekrbridge.core.OutboundOfferStore
-import com.dante.zeekrbridge.core.OutboundOffer
-import com.dante.zeekrbridge.core.WsType
-import com.dante.zeekrbridge.server.BridgeServer
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 fun ToolboxScreen() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var offers by remember { mutableStateOf<List<OutboundOffer>>(emptyList()) }
-    var statusText by remember { mutableStateOf("") }
     var showEditor by remember { mutableStateOf(false) }
     var showUsbSentry by remember { mutableStateOf(false) }
 
@@ -54,41 +38,6 @@ fun ToolboxScreen() {
         SoundEditorScreen(onBack = { showEditor = false })
         return
     }
-
-    fun reloadOffers() {
-        scope.launch {
-            offers = withContext(Dispatchers.IO) { OutboundOfferStore.offers() }
-        }
-    }
-
-    val pickWavLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val result = withContext(Dispatchers.IO) {
-                    runCatching { OutboundOfferStore.importUri(context, uri) }
-                }
-                result.fold(
-                    onSuccess = { offer ->
-                        statusText = t(
-                            "Imported ${offer.fileName} (${offer.sizeBytes} B, ${offer.wav.sampleRate} Hz/${offer.wav.channels}ch)",
-                            "已导入 ${offer.fileName}（${offer.sizeBytes} B，${offer.wav.sampleRate} Hz/${offer.wav.channels}ch）",
-                        )
-                    },
-                    onFailure = { t ->
-                        statusText = com.dante.zeekrbridge.ui.t(
-                            "Import failed: ${t.message ?: t.javaClass.simpleName}",
-                            "导入失败：${t.message ?: t.javaClass.simpleName}",
-                        )
-                    },
-                )
-                reloadOffers()
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) { reloadOffers() }
 
     Column(
         Modifier
@@ -112,8 +61,8 @@ fun ToolboxScreen() {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     t(
-                        "Connect the vehicle USB to this phone to browse and play factory four-lane 360° Sentry recordings. Save the original or export a time range as Front, Rear, Left or Right.",
-                        "将车辆 USB 连接到手机后，可浏览和播放原厂四路 360° 哨兵录像；支持保存原片，或按时间段导出前、后、左、右方向。",
+                        "Connect the vehicle USB to browse and play factory four-view 360° Sentry recordings. Save the original or export individual views; direction names appear only for verified layouts.",
+                        "连接车辆 USB 后可浏览和播放原厂四画面 360° 哨兵录像；支持保存原片或分别导出画面，只有已验证布局才显示方向名称。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -154,84 +103,6 @@ fun ToolboxScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(t("Car Lab transfer (≤1 MiB WAV)", "车机实验入口（≤1 MiB WAV 广播）"), fontWeight = FontWeight.SemiBold)
-                    Text(
-                        t("Experimental", "实验性"),
-                        color = MaterialTheme.colorScheme.tertiary,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    t(
-                        "Choose a WAV (44.1/48 kHz, 16-bit PCM, no larger than 1 MiB), validate it, then offer it to a connected car over the local network.",
-                        "选择 WAV（44.1/48 kHz、16-bit PCM、≤1 MiB），校验后通过局域网发送给已连接车机。",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        pickWavLauncher.launch(arrayOf("audio/wav", "audio/x-wav", "audio/*"))
-                    }) { Text(t("Choose WAV", "选择 WAV 文件")) }
-                    OutlinedButton(onClick = { reloadOffers() }) { Text(t("Refresh", "刷新")) }
-                }
-                if (statusText.isNotBlank()) {
-                    Text(statusText, style = MaterialTheme.typography.bodySmall)
-                }
-                if (offers.isEmpty()) {
-                    Text(
-                        t("No imported sounds", "暂无已导入的声音。"),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                offers.forEach { offer ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(offer.fileName, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "${offer.sizeBytes} B | ${offer.wav.sampleRate} Hz | " +
-                                    "${offer.wav.channels}ch | ${offer.wav.bitsPerSample}-bit | " +
-                                    "SHA ${offer.sha256.take(12)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        OutlinedButton(onClick = {
-                            BridgeServer.sendToCars(
-                                WsType.FILE_OFFER,
-                                OutboundOfferStore.metadataMap(offer),
-                            )
-                            statusText = t(
-                                "Offered ${offer.fileName} to ${BridgeServer.connectedCars()} connected cars",
-                                "已向 ${BridgeServer.connectedCars()} 台车机广播 ${offer.fileName}",
-                            )
-                        }) { Text(t("Send to car", "发送到车机")) }
-                        OutlinedButton(onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) {
-                                    OutboundOfferStore.delete(offer.offerId)
-                                }
-                                reloadOffers()
-                            }
-                        }) { Text(t("Delete", "删除")) }
-                    }
-                }
             }
         }
     }

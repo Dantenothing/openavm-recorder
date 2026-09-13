@@ -16,6 +16,8 @@ data class ManagedSegmentFile(
     val protected: Boolean,
     /** Temporary upload pin; eviction treats it like [protected]. */
     val uploadPinned: Boolean = false,
+    /** Operation-scoped USB export pin; independent from phone upload ownership. */
+    val usbExportPinned: Boolean = false,
     /** Sidecar/health analysis still in flight; never evict while it could be enriched. */
     val analysisInFlight: Boolean = false,
     /** An open playback surface owns this file until the player is dismissed. */
@@ -47,7 +49,8 @@ object StoragePolicy {
         val candidates = files
             .filter {
                 it.isFinalMp4 && it.hasSidecar &&
-                    !it.protected && !it.uploadPinned && !it.analysisInFlight && !it.playing
+                    !it.protected && !it.uploadPinned && !it.usbExportPinned &&
+                    !it.analysisInFlight && !it.playing
             }
             .sortedBy { it.lastModifiedMs }
         val evictions = mutableListOf<String>()

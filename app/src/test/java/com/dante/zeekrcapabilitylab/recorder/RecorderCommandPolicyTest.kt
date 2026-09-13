@@ -51,6 +51,9 @@ class RecorderCommandPolicyTest {
 
     @Test
     fun activeStatusesCoverServiceLifecycle() {
+        assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.AWAKE_IDLE))
+        assertFalse(RecorderCommandPolicy.canStart(RecorderStatus.AWAKE_IDLE, serviceRunning = true))
+        assertTrue(RecorderCommandPolicy.canStop(RecorderStatus.AWAKE_IDLE, serviceRunning = true))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.STARTING))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.RECORDING))
         assertTrue(RecorderCommandPolicy.isActive(RecorderStatus.FINALIZING))

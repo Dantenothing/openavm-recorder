@@ -14,6 +14,8 @@
 *.iml
 
 # Machine-local SDK paths and signing material
+# Full recovery snapshot may contain local test fixtures; share the research index instead.
+/research/sentry/beta9.1-reference/pre-v4-source.zip
 local.properties
 **/local.properties
 *.jks
@@ -54,7 +56,6 @@ logcat*.txt
 
 # Private research projects and internal handoff material. These stay in the
 # local workspace but are not part of the AVM Recorder public source tree.
-/ZeekrBridgeCompanion/
 /ZeekrProbes/
 /docs/
 /tools/
@@ -108,17 +109,61 @@ logcat*.txt
 # Local reports and temporary data
 reports/
 **/reports/
+artifacts/
+release-artifacts/
 tmp/
 **/tmp/
 temp/
 **/temp/
+*.patch
 *.tmp
 *.bak
 *.orig
 *~
+
+# Local engineering roadmaps, field-test handoffs and patch staging. Keep these
+# files on the development machine; public release notes live in CHANGELOG.md.
+/LOCAL_MILESTONE_*.md
+/OPENAVM_*_PLAN.md
+/OPENAVM_*_DECISION_PACKET.md
+/OpenAVM_*_Plan.md
+/OpenAVM_Zeekr_Cloud_*.md
+/OpenAVM_USB_GATE_*_PLAN.md
+/USB_TEST_READINESS.md
+/_*_stage/
+/_*_edit/
+/_apply_patch_probe.txt
+/openavm-personal-server/
+/zeekr-cloud-f1-prototype/
+/zeekr-cloud-foundation/
+
+# OpenAVM personal server local/runtime files
+__pycache__/
+*.py[cod]
+*.egg-info/
+**/*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+/openavm-personal-server/data/
+/openavm-personal-server/secrets/
 
 # OS/editor noise
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
+
+
+# Private development handoffs and capture/model fixtures; public guides live at the root.
+/OPENAVM_*.md
+/FACEBOOK_POST_*.md
+/app/src/androidTest/
+/app/src/sentryIntegrated/
+/research/*
+!/research/sentry/
+/research/sentry/*
+!/research/sentry/README_V4_ARCHIVE.md
+/sentry-offline/

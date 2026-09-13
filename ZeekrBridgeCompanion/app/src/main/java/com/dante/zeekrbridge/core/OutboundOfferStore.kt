@@ -3,6 +3,13 @@ package com.dante.zeekrbridge.core
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import io.github.dantenothing.avmtransfer.protocol.SoundInstallStatusUpdate
+import io.github.dantenothing.avmtransfer.protocol.SoundOfferMetadata
+import io.github.dantenothing.avmtransfer.protocol.SoundOfferStates
+import io.github.dantenothing.avmtransfer.protocol.SoundTransferProtocol
+import io.github.dantenothing.avmtransfer.protocol.SoundWavParameters
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -31,6 +38,18 @@ data class OutboundOffer(
     val sha256: String,
     val wav: WavParams,
     val createdAt: Long,
+    val schemaVersion: Int = SoundTransferProtocol.SCHEMA_VERSION,
+    val targetCarDeviceId: String? = null,
+    val targetCarName: String? = null,
+    val presetId: String = SoundTransferProtocol.PRESET_ZEEKR_7X_AUNZ,
+    val purpose: String = SoundTransferProtocol.PURPOSE_UNLOCK,
+    val state: String = SoundOfferStates.QUEUED,
+    val operationId: String? = null,
+    val targetDescription: String? = null,
+    val targetStorageUuid: String? = null,
+    val errorCode: String? = null,
+    val statusMessage: String? = null,
+    val updatedAt: Long = createdAt,
 )
 
 /**
@@ -47,6 +66,8 @@ object OutboundOfferStore {
     @Volatile
     private var root: File? = null
     private var trashRoot: File? = null
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision
 
     fun init(context: Context) {
         if (root == null) {
@@ -98,11 +119,18 @@ object OutboundOfferStore {
         val open: () -> InputStream = {
             context.contentResolver.openInputStream(uri) ?: throw IOException("cannot open content uri")
         }
-        return importStream(displayName, open)
+        return importStream(displayName, open = open)
     }
 
     /** Copies, validates and hashes a stream into a new offer. Throws on invalid input. */
-    fun importStream(displayName: String?, open: () -> InputStream): OutboundOffer {
+    fun importStream(
+        displayName: String?,
+        targetCarDeviceId: String? = null,
+        targetCarName: String? = null,
+        presetId: String = SoundTransferProtocol.PRESET_ZEEKR_7X_AUNZ,
+        purpose: String = SoundTransferProtocol.PURPOSE_UNLOCK,
+        open: () -> InputStream,
+    ): OutboundOffer {
         val offerId = UUID.randomUUID().toString()
         val dir = File(rootDir(), offerId).apply { mkdirs() }
         val payload = File(dir, PAYLOAD)
@@ -140,8 +168,13 @@ object OutboundOfferStore {
                 sha256 = sha,
                 wav = WavValidator.toParams(info)!!,
                 createdAt = System.currentTimeMillis(),
+                targetCarDeviceId = targetCarDeviceId,
+                targetCarName = targetCarName,
+                presetId = presetId,
+                purpose = purpose,
             )
             writeMetadata(dir, offer)
+            bumpRevision()
             return offer
         } catch (t: Throwable) {
             dir.deleteRecursively()
@@ -156,11 +189,72 @@ object OutboundOfferStore {
         val target = File(trashRoot(), "$id-${System.currentTimeMillis()}")
         return try {
             atomicMove(dir.toPath(), target.toPath())
+            bumpRevision()
             true
         } catch (t: Throwable) {
             dir.deleteRecursively()
             !dir.exists()
         }
+    }
+
+    /** Permanently removes only terminal offers and their app-private payloads. */
+    fun clearFinished(): Int {
+        val finishedIds = offers()
+            .asSequence()
+            .filter { it.state in SoundOfferStates.terminal }
+            .mapNotNull { PathSafety.cleanUploadId(it.offerId) }
+            .toSet()
+        var removed = 0
+        finishedIds.forEach { id ->
+            val dir = File(rootDir(), id)
+            if (dir.isDirectory && dir.deleteRecursively() && !dir.exists()) {
+                removed += 1
+            }
+        }
+        if (removed > 0) bumpRevision()
+        return removed
+    }
+
+    fun target(offerId: String, carDeviceId: String, carName: String?, presetId: String, purpose: String): OutboundOffer? {
+        val current = get(offerId) ?: return null
+        val updated = current.copy(
+            targetCarDeviceId = carDeviceId, targetCarName = carName, presetId = presetId, purpose = purpose,
+            state = SoundOfferStates.QUEUED, operationId = null, targetDescription = null,
+            targetStorageUuid = null, errorCode = null, statusMessage = null, updatedAt = System.currentTimeMillis(),
+        )
+        writeMetadata(File(rootDir(), current.offerId), updated)
+        bumpRevision()
+        return updated
+    }
+
+    fun metadata(offer: OutboundOffer): SoundOfferMetadata? {
+        val target = offer.targetCarDeviceId ?: return null
+        return SoundOfferMetadata(
+            offerId = offer.offerId, targetCarDeviceId = target, targetCarName = offer.targetCarName,
+            fileName = offer.fileName, mimeType = offer.mimeType, sizeBytes = offer.sizeBytes, sha256 = offer.sha256,
+            wav = SoundWavParameters(offer.wav.format, offer.wav.channels, offer.wav.sampleRate, offer.wav.bitsPerSample, offer.wav.dataBytes),
+            presetId = offer.presetId, purpose = offer.purpose, state = offer.state, operationId = offer.operationId,
+            targetDescription = offer.targetDescription, targetStorageUuid = offer.targetStorageUuid,
+            errorCode = offer.errorCode, statusMessage = offer.statusMessage, createdAt = offer.createdAt, updatedAt = offer.updatedAt,
+        )
+    }
+
+    fun pendingForCar(carDeviceId: String): List<SoundOfferMetadata> = offers()
+        .filter { it.targetCarDeviceId == carDeviceId && it.state !in SoundOfferStates.terminal }
+        .mapNotNull(::metadata)
+
+    fun updateStatus(carDeviceId: String, offerId: String, update: SoundInstallStatusUpdate): OutboundOffer? {
+        val current = get(offerId) ?: return null
+        if (current.targetCarDeviceId != carDeviceId) return null
+        val updated = current.copy(
+            state = update.state, operationId = update.operationId ?: current.operationId,
+            targetDescription = update.targetDescription ?: current.targetDescription,
+            targetStorageUuid = update.targetStorageUuid ?: current.targetStorageUuid,
+            errorCode = update.errorCode, statusMessage = update.message, updatedAt = System.currentTimeMillis(),
+        )
+        writeMetadata(File(rootDir(), current.offerId), updated)
+        bumpRevision()
+        return updated
     }
 
     fun metadataMap(offer: OutboundOffer): Map<String, String> = mapOf(
@@ -175,7 +269,13 @@ object OutboundOfferStore {
         "wavBitsPerSample" to offer.wav.bitsPerSample.toString(),
         "wavDataBytes" to offer.wav.dataBytes.toString(),
         "createdAt" to offer.createdAt.toString(),
+        "targetCarDeviceId" to offer.targetCarDeviceId.orEmpty(),
+        "presetId" to offer.presetId,
+        "purpose" to offer.purpose,
+        "state" to offer.state,
     )
+
+    private fun bumpRevision() { _revision.value = System.currentTimeMillis() }
 
     private fun queryDisplayName(context: Context, uri: Uri): String? =
         try {

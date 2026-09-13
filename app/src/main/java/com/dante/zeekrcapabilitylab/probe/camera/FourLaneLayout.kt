@@ -3,7 +3,7 @@ package com.dante.zeekrcapabilitylab.probe.camera
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class CompositeAxis { HORIZONTAL, VERTICAL }
+enum class CompositeAxis { HORIZONTAL, VERTICAL, GRID_2X2 }
 
 /**
  * Pure layout decision for a four-camera composite.

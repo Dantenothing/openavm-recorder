@@ -3,6 +3,7 @@ package com.dante.zeekrbridge.ui
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
@@ -70,20 +73,16 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
                 Text(t("Language", "语言"), style = MaterialTheme.typography.titleMedium)
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    listOf(
-                        PhoneLanguageMode.SYSTEM to t("System", "跟随系统"),
-                        PhoneLanguageMode.SIMPLIFIED_CHINESE to "简体中文",
-                        PhoneLanguageMode.ENGLISH to "English",
-                    ).forEach { (mode, label) ->
-                        OutlinedButton(
-                            onClick = { PhoneLanguage.selectMode(mode) },
-                            enabled = PhoneLanguage.mode != mode,
-                            modifier = Modifier.weight(1f),
-                        ) { Text(label) }
+                var languageMenu by remember { mutableStateOf(false) }
+                Box {
+                    OutlinedButton(onClick = { languageMenu = true }) { Text(PhoneLanguage.label(PhoneLanguage.mode) + " ▾") }
+                    DropdownMenu(expanded = languageMenu, onDismissRequest = { languageMenu = false }) {
+                        PhoneLanguageMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(PhoneLanguage.label(mode) + if (PhoneLanguage.mode == mode) " ✓" else "") },
+                                onClick = { PhoneLanguage.selectMode(mode); languageMenu = false },
+                            )
+                        }
                     }
                 }
             }
@@ -112,9 +111,7 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
                             Text(VehicleIdentityPolicy.displayName(device.name))
                             Text(
                                 t(
-                                    "Paired ${java.text.DateFormat.getDateInstance().format(java.util.Date(device.pairedAt))}",
-                                    "配对于 ${java.text.DateFormat.getDateInstance().format(java.util.Date(device.pairedAt))}",
-                                ),
+                                    "Paired {0}", "配对于 {0}", java.text.DateFormat.getDateInstance(java.text.DateFormat.DEFAULT, PhoneLanguage.locale).format(java.util.Date(device.pairedAt))),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -155,14 +152,12 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
                 val total = receivedVideos.sumOf { it.length() }
                 Text(
                     t(
-                        "${receivedVideos.size} received videos · ${formatBytes(total)}",
-                        "已接收录像 ${receivedVideos.size} 个，共 ${formatBytes(total)}",
-                    ),
+                        "{0} received videos · {1}", "已接收录像 {0} 个，共 {1}", receivedVideos.size, formatBytes(total)),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { showTrash = true }) {
-                        Text(t("View trash (${trashEntries.size})", "查看回收站（${trashEntries.size}）"))
+                        Text(t("View trash ({0})", "查看回收站（{0}）", trashEntries.size))
                     }
                     OutlinedButton(onClick = { clearTrashConfirm = true }, enabled = trashEntries.isNotEmpty()) {
                         Text(t("Empty trash", "清空回收站"))

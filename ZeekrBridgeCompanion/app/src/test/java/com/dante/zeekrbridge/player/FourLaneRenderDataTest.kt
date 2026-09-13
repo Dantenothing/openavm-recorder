@@ -78,6 +78,18 @@ class FourLaneRenderDataTest {
     }
 
     @Test
+    fun square2560CompositeUsesTwoByTwoQuadrants() {
+        val windows = (1..4).map { lane ->
+            FourLaneTextureLayout.windowForLane(2560, 2560, lane)
+        }
+
+        assertEquals(listOf(0f, 1280f, 0f, 1280f), windows.map { it.sourceLeftPx })
+        assertEquals(listOf(0f, 0f, 1280f, 1280f), windows.map { it.sourceTopPx })
+        assertEquals(List(4) { 1280f }, windows.map { it.sourceWidthPx })
+        assertEquals(List(4) { 1280f }, windows.map { it.sourceHeightPx })
+    }
+
+    @Test
     fun squareGridTapSelectsTheExpectedLane() {
         assertEquals(1, laneForGridTap(20f, 20f, 100, 100))
         assertEquals(2, laneForGridTap(80f, 20f, 100, 100))

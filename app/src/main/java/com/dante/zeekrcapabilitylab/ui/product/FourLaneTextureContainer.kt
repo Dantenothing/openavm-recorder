@@ -50,6 +50,9 @@ class FourLaneTextureContainer @JvmOverloads constructor(
 ) : ViewGroup(context, attrs) {
     val textureView = TextureView(context)
 
+    private var compositeWidth: Int = DEFAULT_COMPOSITE_WIDTH
+    private var compositeHeight: Int = DEFAULT_COMPOSITE_HEIGHT
+
     var displayMode: FourLaneDisplayMode = FourLaneDisplayMode.FOUR_GRID
         set(value) {
             if (field == value) return
@@ -85,6 +88,14 @@ class FourLaneTextureContainer @JvmOverloads constructor(
     init {
         setWillNotDraw(false)
         addView(textureView)
+    }
+
+    fun setCompositeSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        if (compositeWidth == width && compositeHeight == height) return
+        compositeWidth = width
+        compositeHeight = height
+        invalidate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -126,8 +137,8 @@ class FourLaneTextureContainer @JvmOverloads constructor(
         val lane = displayMode.singleLane
         val draws = if (lane == null) {
             FourLaneCanvasLayout.plan(
-                videoWidth = COMPOSITE_WIDTH,
-                videoHeight = COMPOSITE_HEIGHT,
+                videoWidth = compositeWidth,
+                videoHeight = compositeHeight,
                 contentLeft = textureView.left.toFloat(),
                 contentTop = textureView.top.toFloat(),
                 contentWidth = textureView.width.toFloat(),
@@ -138,8 +149,8 @@ class FourLaneTextureContainer @JvmOverloads constructor(
         } else {
             listOf(
                 FourLaneCanvasLayout.planSingle(
-                    videoWidth = COMPOSITE_WIDTH,
-                    videoHeight = COMPOSITE_HEIGHT,
+                    videoWidth = compositeWidth,
+                    videoHeight = compositeHeight,
                     contentLeft = textureView.left.toFloat(),
                     contentTop = textureView.top.toFloat(),
                     contentWidth = textureView.width.toFloat(),
@@ -294,8 +305,8 @@ class FourLaneTextureContainer @JvmOverloads constructor(
     private companion object {
         const val STABLE_INPUT_SIZE_FRACTION = 0.62f
         const val RAW_VIEW_ASPECT_RATIO = 2f
-        const val COMPOSITE_WIDTH = 1280
-        const val COMPOSITE_HEIGHT = 5140
+        const val DEFAULT_COMPOSITE_WIDTH = 1280
+        const val DEFAULT_COMPOSITE_HEIGHT = 5140
         const val MIN_ZOOM = 1f
         const val MAX_ZOOM = 3f
         const val GRID_MESH_DIVISIONS = 6
