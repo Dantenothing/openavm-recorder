@@ -11,8 +11,6 @@ data class RecordingPresentation(
 
 /** Resolves playback only from facts stored with the recording, never current settings. */
 object RecordingPresentationPolicy {
-    private const val FOUR_LANE_RATIO = 3.2f
-
     fun resolve(sidecar: SegmentSidecar): RecordingPresentation {
         if (sidecar.schemaVersion >= 4) {
             return RecordingPresentation(sidecar.sourceRole, sidecar.layoutKind)
@@ -38,8 +36,5 @@ object RecordingPresentationPolicy {
     }
 
     private fun isFourLane(width: Int, height: Int): Boolean =
-        width > 0 && height > 0 && (
-            width.toFloat() / height >= FOUR_LANE_RATIO ||
-                height.toFloat() / width >= FOUR_LANE_RATIO
-            )
+        FourLaneTextureLayout.isKnownFourLane(width, height)
 }

@@ -307,7 +307,7 @@ private fun VehicleOverview(
                     Text(t("Media library", "媒体库"), style = MaterialTheme.typography.titleMedium)
                     Text(
                         if (receivedCount == 0) t("Received recordings will appear here.", "接收完成的录像会出现在这里。")
-                        else t("$receivedCount videos · ${formatBytes(receivedBytes)}", "$receivedCount 个视频 · ${formatBytes(receivedBytes)}"),
+                        else t("{0} videos · {1}", "{0} 个视频 · {1}", receivedCount, formatBytes(receivedBytes)),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -348,7 +348,7 @@ private fun VehicleHeroCard(home: VehicleHomeSnapshot, onDetails: () -> Unit, on
                     Text("OpenAVM Recorder", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     home.preferredEndpoint?.let {
                         Spacer(Modifier.height(8.dp))
-                        Text(t("Phone hotspot · $it", "手机热点 · $it"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(t("Phone hotspot · {0}", "手机热点 · {0}", it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Spacer(Modifier.height(12.dp))
                     TextButton(onClick = onDetails, modifier = Modifier.align(Alignment.End)) {
@@ -359,7 +359,7 @@ private fun VehicleHeroCard(home: VehicleHomeSnapshot, onDetails: () -> Unit, on
                 VehicleConnectionStatus.OFFLINE -> {
                     Text("○ ${t("Not connected", "未连接")}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        t("Last connected: ${formatLastSeen(home.vehicle?.lastSeenEpochMs)}", "上次连接：${formatLastSeen(home.vehicle?.lastSeenEpochMs)}"),
+                        t("Last connected: {0}", "上次连接：{0}", formatLastSeen(home.vehicle?.lastSeenEpochMs)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -468,7 +468,7 @@ private fun ConnectionDetails(
                     Text(t("Pairing code", "配对码"), style = MaterialTheme.typography.labelMedium)
                     Text(pairingCode, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
                     Text(
-                        t("Expires in ${((pairingExpiresAt - now) / 1_000).coerceAtLeast(0)} seconds", "${((pairingExpiresAt - now) / 1_000).coerceAtLeast(0)} 秒后失效"),
+                        t("Expires in {0} seconds", "{0} 秒后失效", ((pairingExpiresAt - now) / 1_000).coerceAtLeast(0)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -486,7 +486,7 @@ private fun ConnectionDetails(
                         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(VehicleIdentityPolicy.displayName(device.name))
-                                Text(t("Last connected ${formatLastSeen(device.lastSeen)}", "上次连接 ${formatLastSeen(device.lastSeen)}"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(t("Last connected {0}", "上次连接 {0}", formatLastSeen(device.lastSeen)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             TextButton(onClick = { onRevoke(device.carDeviceId) }) { Text(t("Unpair", "解除")) }
                         }
@@ -543,7 +543,7 @@ private fun StatusLine(label: String, value: String) {
 
 private fun formatLastSeen(epochMs: Long?): String {
     if (epochMs == null || epochMs <= 0L) return t("Never", "从未")
-    return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(epochMs))
+    return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, PhoneLanguage.locale).format(Date(epochMs))
 }
 
 private fun formatBytes(bytes: Long): String = when {

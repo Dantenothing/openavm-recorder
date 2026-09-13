@@ -102,27 +102,25 @@ class TimeLapseCaptureCadencePolicyTest {
     }
 
     @Test
-    fun timeLapseQuiescesOnPreliminaryVehicleAwayEvidenceWithoutChangingNormalMode() {
+    fun timeLapseTerminatesOnFirstBackgroundPowerOffEdgeWithoutChangingNormalMode() {
         assertEquals(
-            TimeLapsePowerGateAction.QUIESCE,
+            TimeLapsePowerGateAction.TERMINATE_SESSION,
             TimeLapsePowerGatePolicy.action(
                 recordingMode = RecordingMode.TIME_LAPSE,
                 recording = true,
                 appForeground = false,
                 interactive = false,
                 mainDisplayOn = true,
-                currentlyQuiesced = false,
             ),
         )
         assertEquals(
-            TimeLapsePowerGateAction.QUIESCE,
+            TimeLapsePowerGateAction.TERMINATE_SESSION,
             TimeLapsePowerGatePolicy.action(
                 recordingMode = RecordingMode.TIME_LAPSE,
                 recording = true,
                 appForeground = false,
                 interactive = true,
                 mainDisplayOn = false,
-                currentlyQuiesced = false,
             ),
         )
         assertEquals(
@@ -133,33 +131,30 @@ class TimeLapseCaptureCadencePolicyTest {
                 appForeground = false,
                 interactive = false,
                 mainDisplayOn = false,
-                currentlyQuiesced = false,
             ),
         )
     }
 
     @Test
-    fun timeLapseResumesFromNowWhenPowerEvidenceIsWithdrawn() {
-        assertEquals(
-            TimeLapsePowerGateAction.RESUME,
-            TimeLapsePowerGatePolicy.action(
-                recordingMode = RecordingMode.TIME_LAPSE,
-                recording = true,
-                appForeground = true,
-                interactive = true,
-                mainDisplayOn = true,
-                currentlyQuiesced = true,
-            ),
-        )
+    fun timeLapseDoesNotTerminateForBackgroundAloneOrAfterRecordingStops() {
         assertEquals(
             TimeLapsePowerGateAction.NONE,
             TimeLapsePowerGatePolicy.action(
                 recordingMode = RecordingMode.TIME_LAPSE,
                 recording = true,
                 appForeground = false,
+                interactive = true,
+                mainDisplayOn = true,
+            ),
+        )
+        assertEquals(
+            TimeLapsePowerGateAction.NONE,
+            TimeLapsePowerGatePolicy.action(
+                recordingMode = RecordingMode.TIME_LAPSE,
+                recording = false,
+                appForeground = false,
                 interactive = false,
                 mainDisplayOn = true,
-                currentlyQuiesced = true,
             ),
         )
     }
@@ -197,7 +192,7 @@ class TimeLapseCaptureCadencePolicyTest {
             TimeLapseTeardownPolicy.onTimeout(TimeLapseTeardownStage.CLOSING_SESSION),
         )
         assertEquals(
-            TimeLapseTeardownStage.READY_TO_STOP_RECORDER,
+            TimeLapseTeardownStage.UNCONFIRMED,
             TimeLapseTeardownPolicy.onTimeout(TimeLapseTeardownStage.CLOSING_DEVICE),
         )
         assertEquals(

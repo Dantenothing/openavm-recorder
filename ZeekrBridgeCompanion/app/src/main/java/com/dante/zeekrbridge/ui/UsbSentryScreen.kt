@@ -37,9 +37,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.MediaExportQueue
 import com.dante.zeekrbridge.core.MediaExportState
+import com.dante.zeekrbridge.core.SavedMediaOrigin
 import com.dante.zeekrbridge.sentry.UsbSentryRepository
 import com.dante.zeekrbridge.sentry.UsbSentryScanResult
 import com.dante.zeekrbridge.sentry.UsbSentryVideo
@@ -83,9 +85,7 @@ fun UsbSentryScreen(onBack: () -> Unit) {
                 if (generation == scanGeneration) {
                     result = scanResult
                     status = t(
-                        "Found ${scanResult.videos.size} video files after checking ${scanResult.scannedDocuments} items.",
-                        "已检查 ${scanResult.scannedDocuments} 项，找到 ${scanResult.videos.size} 个视频文件。",
-                    )
+                        "Found {0} video files after checking {1} items.", "已检查 {1} 项，找到 {0} 个视频文件。", scanResult.videos.size, scanResult.scannedDocuments)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -93,9 +93,7 @@ fun UsbSentryScreen(onBack: () -> Unit) {
                 if (generation == scanGeneration) {
                     result = null
                     status = t(
-                        "USB scan failed: ${error.message ?: error.javaClass.simpleName}",
-                        "USB 扫描失败：${error.message ?: error.javaClass.simpleName}",
-                    )
+                        "USB scan failed: {0}", "USB 扫描失败：{0}", error.message ?: error.javaClass.simpleName)
                 }
             } finally {
                 if (generation == scanGeneration) {
@@ -130,9 +128,7 @@ fun UsbSentryScreen(onBack: () -> Unit) {
         preparing = video
         preparedBytes = 0L
         status = t(
-            "Preparing ${video.displayName} for a reliable export…",
-            "正在准备 ${video.displayName}，完成后即可可靠导出…",
-        )
+            "Preparing {0} for a reliable export…", "正在准备 {0}，完成后即可可靠导出…", video.displayName)
         preparationJob = scope.launch {
             try {
                 val prepared = UsbSentryRepository.materialize(context, video) { copied, _ -> preparedBytes = copied }
@@ -148,9 +144,7 @@ fun UsbSentryScreen(onBack: () -> Unit) {
                 throw cancelled
             } catch (error: Throwable) {
                 status = t(
-                    "Cannot prepare this video: ${error.message ?: error.javaClass.simpleName}",
-                    "无法准备此视频：${error.message ?: error.javaClass.simpleName}",
-                )
+                    "Cannot prepare this video: {0}", "无法准备此视频：{0}", error.message ?: error.javaClass.simpleName)
                 preparing = null
                 preparationJob = null
             }
@@ -219,9 +213,7 @@ fun UsbSentryScreen(onBack: () -> Unit) {
                     if (preparedCopyBytes > 0L) {
                         Text(
                             t(
-                                "Prepared USB copies: ${formatUsbBytes(preparedCopyBytes)}",
-                                "已准备的 USB 副本：${formatUsbBytes(preparedCopyBytes)}",
-                            ),
+                                "Prepared USB copies: {0}", "已准备的 USB 副本：{0}", formatUsbBytes(preparedCopyBytes)),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -232,9 +224,7 @@ fun UsbSentryScreen(onBack: () -> Unit) {
                                     val removed = UsbSentryRepository.clearPreparedCopies(context)
                                     preparedCopyBytes = UsbSentryRepository.preparedCopyBytes(context)
                                     status = t(
-                                        "Cleared ${formatUsbBytes(removed)} of prepared USB copies.",
-                                        "已清理 ${formatUsbBytes(removed)} 的 USB 准备副本。",
-                                    )
+                                        "Cleared {0} of prepared USB copies.", "已清理 {0} 的 USB 准备副本。", formatUsbBytes(removed))
                                 }
                             },
                         ) { Text(t("Clear prepared copies", "清理准备副本")) }
@@ -304,11 +294,9 @@ fun UsbSentryScreen(onBack: () -> Unit) {
                         Button(onClick = {
                             scope.launch {
                                 val resolved = runCatching { UsbSentryRepository.probe(context, video) }.getOrDefault(video)
-                                if (resolved.width != null && resolved.height != null && !resolved.isConfirmedFourLane) {
+                                if (!resolved.isConfirmedFourLane) {
                                     status = t(
-                                        "${video.displayName} is ${resolved.width}×${resolved.height}, not a supported four-lane 360° composite.",
-                                        "${video.displayName} 为 ${resolved.width}×${resolved.height}，不是受支持的四路 360° 合成格式。",
-                                    )
+                                        "{0} has an unreadable or unsupported layout ({1}×{2}).", "{0} 的布局无法读取或暂不支持（{1}×{2}）。", video.displayName, resolved.width ?: "?", resolved.height ?: "?")
                                 } else {
                                     playback = resolved
                                 }
@@ -326,18 +314,37 @@ fun UsbSentryScreen(onBack: () -> Unit) {
     }
 
     playback?.let { video ->
-        UsbSentryPlaybackDialog(
-            uri = video.uri,
-            displayName = video.displayName,
-            durationMs = video.durationMs,
-            originalWidth = video.width ?: 1280,
-            originalHeight = video.height ?: 5140,
-            onDismiss = { playback = null },
-        )
+        video.layoutDescriptor?.let { layout ->
+            val labels = if (layout.kind == IndexedLayoutKind.FOUR_LANE_GRID_2X2) {
+                listOf(
+                    t("Top left", "左上"),
+                    t("Top right", "右上"),
+                    t("Bottom left", "左下"),
+                    t("Bottom right", "右下"),
+                )
+            } else {
+                listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
+            }
+            val laneOrder = layout.lanes.sortedBy { it.displayOrder }.map { it.lane }
+                .takeIf { it.size == 4 && it.toSet() == setOf(1, 2, 3, 4) }
+                ?: listOf(1, 2, 3, 4)
+            UsbSentryPlaybackDialog(
+                uri = video.uri,
+                displayName = video.displayName,
+                durationMs = video.durationMs,
+                layoutKind = layout.kind,
+                laneLabels = labels,
+                laneOrder = laneOrder,
+                originalWidth = video.width,
+                originalHeight = video.height,
+                onDismiss = { playback = null },
+            )
+        }
     }
     exportSegment?.let { segment ->
         MediaExportDialog(
             segments = listOf(segment),
+            savedMediaOrigin = SavedMediaOrigin.SENTRY,
             onDismiss = { exportSegment = null },
         )
     }
@@ -361,6 +368,7 @@ private fun formatUsbBytes(bytes: Long): String = when {
 private fun formatUsbDate(epochMs: Long): String = DateFormat.getDateTimeInstance(
     DateFormat.SHORT,
     DateFormat.SHORT,
+    PhoneLanguage.locale,
 ).format(Date(epochMs))
 
 private const val PREFS = "usb_sentry"

@@ -22,6 +22,9 @@ import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,18 +44,20 @@ import com.dante.zeekrbridge.core.MediaExportPlanner
 import com.dante.zeekrbridge.core.MediaExportQueue
 import com.dante.zeekrbridge.core.MediaExportState
 import com.dante.zeekrbridge.core.MediaExportTarget
+import com.dante.zeekrbridge.core.SavedMediaOrigin
 import java.io.File
 
 @Composable
 internal fun MediaExportDialog(
     segments: List<IndexedMediaSegment>,
+    savedMediaOrigin: SavedMediaOrigin? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val source = segments.firstOrNull()?.sourceRole ?: IndexedSourceRole.UNKNOWN
     val totalMs = MediaExportPlanner.totalDurationMs(segments)
     val totalSeconds = (totalMs / 1_000f).coerceAtLeast(1f)
-    val targets = MediaExportPlanner.supportedTargets(source)
+    val targets = MediaExportPlanner.supportedTargets(segments)
     var selected by remember(segments) { mutableStateOf(setOf(MediaExportTarget.ORIGINAL)) }
     var trimRange by remember(segments) { mutableStateOf(0f..totalSeconds) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -73,17 +78,13 @@ internal fun MediaExportDialog(
             ) {
                 Text(
                     t(
-                        "Available video ${formatExportDuration(totalMs)} · ${segments.size} physical segments",
-                        "可用视频 ${formatExportDuration(totalMs)} · ${segments.size} 个分段文件",
-                    ),
+                        "Available video {0} · {1} physical segments", "可用视频 {0} · {1} 个分段文件", formatExportDuration(totalMs), segments.size),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (isTimeLapse) {
                     Text(
                         t(
-                            "Time-lapse ${first?.timeLapseMultiplier ?: 1}× · captured ${formatExportDuration(realDurationMs)}. The range below uses finished-video time.",
-                            "延时摄影 ${first?.timeLapseMultiplier ?: 1}× · 现实拍摄 ${formatExportDuration(realDurationMs)}。下方裁切范围使用成片时间。",
-                        ),
+                            "Time-lapse {0}× · captured {1}. The range below uses finished-video time.", "延时摄影 {0}× · 现实拍摄 {1}。下方裁切范围使用成片时间。", first?.timeLapseMultiplier ?: 1, formatExportDuration(realDurationMs)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -91,9 +92,7 @@ internal fun MediaExportDialog(
                 if (gapSummary.first > 0) {
                     Text(
                         t(
-                            "${gapSummary.first} interruption gaps (${formatExportDuration(gapSummary.second)}) will be omitted, not filled with black video.",
-                            "检测到 ${gapSummary.first} 处中断（${formatExportDuration(gapSummary.second)}）；导出会跳过缺失部分，不会填充黑色视频。",
-                        ),
+                            "{0} interruption gaps ({1}) will be omitted, not filled with black video.", "检测到 {0} 处中断（{1}）；导出会跳过缺失部分，不会填充黑色视频。", gapSummary.first, formatExportDuration(gapSummary.second)),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -128,11 +127,13 @@ internal fun MediaExportDialog(
                     if (isTimeLapse) t("Finished-video range", "成片时间范围") else t("Time range", "时间范围"),
                     fontWeight = FontWeight.SemiBold,
                 )
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 RangeSlider(
                     value = trimRange,
                     onValueChange = { trimRange = it },
                     valueRange = 0f..totalSeconds,
                 )
+                }
                 Text(
                     "${formatExportDuration((trimRange.start * 1_000).toLong())} – " +
                         formatExportDuration((trimRange.endInclusive * 1_000).toLong()),
@@ -141,8 +142,8 @@ internal fun MediaExportDialog(
                 if (source == IndexedSourceRole.SURROUND && selected.any { it != MediaExportTarget.ORIGINAL }) {
                     Text(
                         t(
-                            "Direction outputs require re-encoding. They run one at a time to limit heat and memory use.",
-                            "方向视频需要重新编码，将逐个处理以控制发热和内存占用。",
+                            "Cropped outputs require re-encoding. They run one at a time to limit heat and memory use.",
+                            "裁切视频需要重新编码，将逐个处理以控制发热和内存占用。",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -166,6 +167,7 @@ internal fun MediaExportDialog(
                             targets = selected,
                             trimStartMs = snappedStart,
                             trimEndMs = snappedEnd,
+                            savedMediaOrigin = savedMediaOrigin,
                         )
                     }.onSuccess { onDismiss() }
                         .onFailure { error = it.message ?: t("Cannot start export", "无法开始导出") }
@@ -237,18 +239,22 @@ private fun exportTargetLabel(target: MediaExportTarget, source: IndexedSourceRo
     MediaExportTarget.REAR -> t("Rear", "后")
     MediaExportTarget.LEFT -> t("Left", "左")
     MediaExportTarget.RIGHT -> t("Right", "右")
+    MediaExportTarget.TOP_LEFT -> t("Top-left view", "左上画面")
+    MediaExportTarget.TOP_RIGHT -> t("Top-right view", "右上画面")
+    MediaExportTarget.BOTTOM_LEFT -> t("Bottom-left view", "左下画面")
+    MediaExportTarget.BOTTOM_RIGHT -> t("Bottom-right view", "右下画面")
 }
 
 private fun exportStateLabel(job: MediaExportJob): String = when (job.state) {
     MediaExportState.QUEUED -> t("Queued", "等待导出")
-    MediaExportState.RUNNING -> t("Exporting ${job.progressPercent}%", "正在导出 ${job.progressPercent}%")
+    MediaExportState.RUNNING -> t("Exporting {0}%", "正在导出 {0}%", job.progressPercent)
     MediaExportState.CANCELLING -> t("Cancelling…", "正在取消…")
     MediaExportState.COMPLETED -> if (job.outputUri != null) {
         t("Saved to Movies/OpenAVM", "已保存到 Movies/OpenAVM")
     } else {
         t("Saved inside OpenAVM", "已保存到 OpenAVM 应用内")
     }
-    MediaExportState.FAILED -> t("Failed: ${job.message.orEmpty()}", "导出失败：${job.message.orEmpty()}")
+    MediaExportState.FAILED -> t("Failed: {0}", "导出失败：{0}", job.message.orEmpty())
     MediaExportState.CANCELLED -> t("Cancelled", "已取消")
 }
 

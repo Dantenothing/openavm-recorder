@@ -13,8 +13,8 @@ android {
         applicationId = "com.dante.zeekrbridge"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "2.5.0-alpha1"
+        versionCode = 29
+        versionName = "4.0.0"
     }
 
     signingConfigs {
@@ -26,7 +26,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -45,6 +48,8 @@ android {
 
 dependencies {
     implementation(project(":transfer-protocol"))
+    implementation(project(":sound-core"))
+    implementation(project(":localization"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

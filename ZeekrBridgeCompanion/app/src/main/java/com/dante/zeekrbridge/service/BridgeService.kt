@@ -2,6 +2,7 @@ package com.dante.zeekrbridge.service
 
 import android.app.Notification
 import android.app.NotificationChannel
+import com.dante.zeekrbridge.ui.t
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -61,7 +62,7 @@ class BridgeService : Service() {
     private fun createChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Zeekr bridge server",
+            t("Vehicle connection", "车辆连接"),
             NotificationManager.IMPORTANCE_LOW,
         )
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
@@ -79,8 +80,7 @@ class BridgeService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(
-                "LAN server on port ${com.dante.zeekrbridge.core.Protocol.PORT} · " +
-                    "keeps network/CPU awake · increases battery use",
+                t("Ready to receive from your vehicle. Keeping the connection active uses battery.", "已准备接收车机文件，保持连接会增加耗电。"),
             )
             .setContentIntent(pendingIntent)
             .setOngoing(true)

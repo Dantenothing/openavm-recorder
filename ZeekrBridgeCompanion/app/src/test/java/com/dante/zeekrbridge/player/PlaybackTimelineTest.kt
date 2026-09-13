@@ -22,6 +22,18 @@ class PlaybackTimelineTest {
     }
 
     @Test
+    fun twoByTwoPlaybackAlsoWaitsForItsCustomSurface() {
+        assertEquals(
+            false,
+            canPreparePlayback(IndexedLayoutKind.FOUR_LANE_GRID_2X2, customSurfaceAttached = false),
+        )
+        assertEquals(
+            true,
+            canPreparePlayback(IndexedLayoutKind.FOUR_LANE_GRID_2X2, customSurfaceAttached = true),
+        )
+    }
+
+    @Test
     fun mapsGlobalPositionAcrossSegmentBoundaries() {
         val timeline = PlaybackTimeline(listOf(60_000L, 30_000L, 90_000L))
 

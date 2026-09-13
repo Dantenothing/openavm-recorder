@@ -18,3 +18,5 @@ rootProject.name = "AVMRecorder"
 include(":app")
 include(":phone")
 include(":transfer-protocol")
+include(":sound-core")
+include(":localization")

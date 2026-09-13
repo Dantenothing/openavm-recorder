@@ -136,7 +136,7 @@ class SelectionPlayer(
                 .build()
         } catch (t: Throwable) {
             playing = false
-            onError?.invoke(text("Cannot create the player: ${t.message ?: t.javaClass.simpleName}", "无法创建播放器：${t.message ?: t.javaClass.simpleName}"))
+            onError?.invoke(text("Cannot create the player: {0}", "无法创建播放器：{0}", t.message ?: t.javaClass.simpleName))
             return
         }
         synchronized(lock) { track = t }
@@ -177,7 +177,7 @@ class SelectionPlayer(
                         val w = try {
                             t.write(bytes, written, read - written)
                         } catch (t2: Throwable) {
-                            if (playing) onError?.invoke(text("Playback interrupted: ${t2.message ?: t2.javaClass.simpleName}", "播放中断：${t2.message ?: t2.javaClass.simpleName}"))
+                            if (playing) onError?.invoke(text("Playback interrupted: {0}", "播放中断：{0}", t2.message ?: t2.javaClass.simpleName))
                             return
                         }
                         if (w <= 0) {
@@ -191,7 +191,7 @@ class SelectionPlayer(
                 }
             }
         } catch (t: Throwable) {
-            if (playing) onError?.invoke(text("Playback failed: ${t.message ?: t.javaClass.simpleName}", "播放失败：${t.message ?: t.javaClass.simpleName}"))
+            if (playing) onError?.invoke(text("Playback failed: {0}", "播放失败：{0}", t.message ?: t.javaClass.simpleName))
         } finally {
             val wasPlaying = playing
             playing = false
@@ -208,5 +208,5 @@ class SelectionPlayer(
         }
     }
 
-    private fun text(en: String, zh: String) = PhoneLanguage.text(en, zh)
+    private fun text(en: String, zh: String, vararg args: Any?) = PhoneLanguage.text(en, zh, *args)
 }

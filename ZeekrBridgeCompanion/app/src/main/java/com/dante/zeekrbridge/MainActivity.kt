@@ -61,11 +61,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import com.dante.zeekrbridge.core.PairingManager
 import com.dante.zeekrbridge.core.FilePreviewRules
-import com.dante.zeekrbridge.core.OutboundOfferStore
-import com.dante.zeekrbridge.core.OutboundOffer
 import com.dante.zeekrbridge.core.ReceivedStore
 import com.dante.zeekrbridge.core.ServerLog
-import com.dante.zeekrbridge.core.WsType
 import com.dante.zeekrbridge.server.BridgeServer
 import com.dante.zeekrbridge.server.BluetoothServer
 import com.dante.zeekrbridge.service.BridgeService
@@ -278,41 +275,6 @@ private fun FilesScreen(context: android.content.Context) {
     var playFile by remember { mutableStateOf<File?>(null) }
     var hashText by remember { mutableStateOf("") }
     var dlText by remember { mutableStateOf("") }
-    var offers by remember { mutableStateOf<List<OutboundOffer>>(emptyList()) }
-    var offerText by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) {
-        offers = withContext(Dispatchers.IO) { OutboundOfferStore.offers() }
-    }
-    val pickWavLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                var message = ""
-                val updated = withContext(Dispatchers.IO) {
-                    runCatching { OutboundOfferStore.importUri(context, uri) }
-                        .fold(
-                            onSuccess = { offer ->
-                                message = "Imported ${offer.fileName} (${offer.sizeBytes} B, ${offer.wav.sampleRate} Hz/${offer.wav.channels}ch)"
-                                OutboundOfferStore.offers()
-                            },
-                            onFailure = { t ->
-                                message = "Rejected: ${t.message ?: t.javaClass.simpleName}"
-                                OutboundOfferStore.offers()
-                            },
-                        )
-                }
-                offers = updated
-                offerText = message
-            }
-        }
-    }
-
-    fun reloadOffers() {
-        scope.launch {
-            offers = withContext(Dispatchers.IO) { OutboundOfferStore.offers() }
-        }
-    }
 
     Column(Modifier.verticalScroll(rememberScrollState())) {
         Text("Received Files", style = MaterialTheme.typography.headlineSmall)
@@ -373,57 +335,12 @@ private fun FilesScreen(context: android.content.Context) {
         }
 
         Spacer(Modifier.height(16.dp))
-        Text("Outbound Sounds", style = MaterialTheme.typography.headlineSmall)
+        Text("Phone sound relay", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "Wi-Fi first version; Bluetooth reverse transfer is not implemented yet. " +
-                "1 MiB / 44.1/48 kHz 16-bit PCM rules are community experience and still need real-car validation.",
+            "The old untargeted broadcast entry has been retired. Return to the product UI, then use " +
+                "Toolbox > Make lock / unlock sound to select one paired vehicle and send a durable offer.",
             style = MaterialTheme.typography.bodySmall,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { pickWavLauncher.launch(arrayOf("audio/wav", "audio/x-wav", "audio/*")) }) {
-                Text("Pick WAV")
-            }
-            OutlinedButton(onClick = { reloadOffers() }) { Text("Refresh offers") }
-        }
-        Text(offerText, style = MaterialTheme.typography.bodySmall)
-        if (offers.isEmpty()) {
-            Text("No outbound sounds yet.")
-        }
-        offers.forEach { offer ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(offer.fileName, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "${offer.sizeBytes} B | ${offer.wav.sampleRate} Hz | ${offer.wav.channels}ch | " +
-                            "${offer.wav.bitsPerSample}-bit | ${offer.sha256.take(12)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    OutlinedButton(onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                BridgeServer.sendToCars(WsType.FILE_OFFER, OutboundOfferStore.metadataMap(offer))
-                            }
-                            offerText = "Broadcast ${offer.fileName} (${BridgeServer.connectedCars()} cars connected)"
-                        }
-                    }) { Text("Broadcast") }
-                    OutlinedButton(onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) { OutboundOfferStore.delete(offer.offerId) }
-                            reloadOffers()
-                        }
-                    }) { Text("Delete") }
-                }
-            }
-        }
     }
 
     val currentView = viewFile

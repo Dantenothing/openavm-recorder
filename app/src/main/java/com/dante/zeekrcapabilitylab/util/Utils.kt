@@ -71,8 +71,8 @@ object Utils {
         return if (v.contains(',') || v.contains('"') || v.contains('\n') || v.contains('\r')) "\"$v\"" else v
     }
 
-    fun t(en: String, zh: String): String =
-        AppLanguage.text(en, zh)
+    fun t(en: String, zh: String, vararg args: Any?): String =
+        AppLanguage.text(en, zh, *args)
 }
 
 inline fun <T> tryOrNull(block: () -> T): T? =

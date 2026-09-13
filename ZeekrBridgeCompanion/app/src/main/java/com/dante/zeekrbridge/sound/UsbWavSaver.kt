@@ -13,6 +13,7 @@ data class UsbSaveResult(
     val ok: Boolean,
     val finalName: String? = null,
     val backupName: String? = null,
+    val writtenDirectories: List<String> = emptyList(),
     val message: String,
     val errorCode: String? = null,
 )
@@ -25,6 +26,85 @@ data class UsbEntryInfo(
     val mimeType: String? = null,
     val lastModifiedMs: Long? = null,
 )
+
+enum class SafSoundTargetAction {
+    USE_SELECTED_TREE,
+    USE_OR_CREATE_TARGET_CHILD,
+    REJECT_AMBIGUOUS,
+}
+
+data class SafSoundTargetResolution(
+    val action: SafSoundTargetAction,
+    val selectedDisplayName: String?,
+    val selectedDocumentId: String?,
+    val targetDirectoryName: String?,
+) {
+    fun destinationLabel(): String {
+        val selected = selectedDisplayName?.takeIf(String::isNotBlank)
+            ?: selectedDocumentId?.takeIf(String::isNotBlank)
+            ?: "selected tree"
+        return when (action) {
+            SafSoundTargetAction.USE_SELECTED_TREE -> selected
+            SafSoundTargetAction.USE_OR_CREATE_TARGET_CHILD -> "$selected/${targetDirectoryName.orEmpty()}"
+            SafSoundTargetAction.REJECT_AMBIGUOUS -> "unresolved"
+        }
+    }
+}
+
+/** Pure selection policy. A Zeekr preset never guesses beneath an arbitrary folder. */
+object SafSoundTargetResolver {
+    fun resolveVolumeRoot(
+        selectedDisplayName: String?,
+        selectedDocumentId: String?,
+    ): SafSoundTargetResolution {
+        val displayName = selectedDisplayName?.trim()?.takeIf(String::isNotEmpty)
+        val documentId = selectedDocumentId?.trim()?.takeIf(String::isNotEmpty)
+        return SafSoundTargetResolution(
+            action = if (isExternalStorageVolumeRoot(documentId)) {
+                SafSoundTargetAction.USE_SELECTED_TREE
+            } else {
+                SafSoundTargetAction.REJECT_AMBIGUOUS
+            },
+            selectedDisplayName = displayName,
+            selectedDocumentId = documentId,
+            targetDirectoryName = null,
+        )
+    }
+
+    fun resolve(
+        targetDirectoryName: String?,
+        selectedDisplayName: String?,
+        selectedDocumentId: String?,
+    ): SafSoundTargetResolution {
+        val target = targetDirectoryName?.trim()?.trim('/')?.takeIf(String::isNotEmpty)
+        val displayName = selectedDisplayName?.trim()?.takeIf(String::isNotEmpty)
+        val documentId = selectedDocumentId?.trim()?.takeIf(String::isNotEmpty)
+        val selectedFolderName = documentId
+            ?.substringAfter(':', documentId)
+            ?.trimEnd('/')
+            ?.substringAfterLast('/')
+            ?.takeIf(String::isNotEmpty)
+
+        val action = when {
+            target == null -> SafSoundTargetAction.USE_SELECTED_TREE
+            isExternalStorageVolumeRoot(documentId) -> SafSoundTargetAction.USE_OR_CREATE_TARGET_CHILD
+            displayName.equals(target, ignoreCase = true) -> SafSoundTargetAction.USE_SELECTED_TREE
+            selectedFolderName.equals(target, ignoreCase = true) -> SafSoundTargetAction.USE_SELECTED_TREE
+            else -> SafSoundTargetAction.REJECT_AMBIGUOUS
+        }
+        return SafSoundTargetResolution(
+            action = action,
+            selectedDisplayName = displayName,
+            selectedDocumentId = documentId,
+            targetDirectoryName = target,
+        )
+    }
+
+    private fun isExternalStorageVolumeRoot(documentId: String?): Boolean {
+        if (documentId == null || !documentId.contains(':')) return false
+        return documentId.substringAfter(':').isEmpty()
+    }
+}
 
 /** Minimal SAF tree listing/querying used by the sound USB writer. */
 object UsbSaf {
@@ -46,6 +126,60 @@ object UsbSaf {
 
     fun documentUri(treeUri: Uri, documentId: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
+
+    fun documentInfo(context: Context, documentUri: Uri): UsbEntryInfo? =
+        try {
+            context.contentResolver.query(documentUri, PROJECTION, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return null
+                val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                val flagsIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+                val modifiedIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                val documentId = if (idIdx >= 0 && !cursor.isNull(idIdx)) cursor.getString(idIdx) else return null
+                UsbEntryInfo(
+                    documentId = documentId,
+                    name = if (nameIdx >= 0 && !cursor.isNull(nameIdx)) cursor.getString(nameIdx) else documentId,
+                    sizeBytes = if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx) else null,
+                    flags = if (flagsIdx >= 0 && !cursor.isNull(flagsIdx)) cursor.getInt(flagsIdx) else 0,
+                    mimeType = if (mimeIdx >= 0 && !cursor.isNull(mimeIdx)) cursor.getString(mimeIdx) else null,
+                    lastModifiedMs = if (modifiedIdx >= 0 && !cursor.isNull(modifiedIdx)) cursor.getLong(modifiedIdx) else null,
+                )
+            }
+        } catch (t: Throwable) {
+            null
+        }
+
+    fun resolveSoundTarget(
+        context: Context,
+        treeUri: Uri,
+        targetDirectoryName: String?,
+    ): SafSoundTargetResolution {
+        val root = rootDocumentUri(treeUri)
+        val info = root?.let { documentInfo(context, it) }
+        val fallbackId = root?.let(::documentId)
+        return SafSoundTargetResolver.resolve(
+            targetDirectoryName = targetDirectoryName,
+            selectedDisplayName = info?.name,
+            selectedDocumentId = info?.documentId ?: fallbackId,
+        )
+    }
+
+    fun resolveSoundTargets(
+        context: Context,
+        treeUri: Uri,
+        targetDirectoryNames: List<String>,
+    ): SafSoundTargetResolution {
+        if (targetDirectoryNames.isEmpty()) return resolveSoundTarget(context, treeUri, null)
+        val root = rootDocumentUri(treeUri)
+        val info = root?.let { documentInfo(context, it) }
+        val fallbackId = root?.let(::documentId)
+        return SafSoundTargetResolver.resolveVolumeRoot(
+            selectedDisplayName = info?.name,
+            selectedDocumentId = info?.documentId ?: fallbackId,
+        )
+    }
 
     fun listChildren(
         context: Context,
@@ -253,6 +387,66 @@ object UsbSaf {
  * Every failure path rolls back without leaving the original overwritten.
  */
 object UsbWavSaver {
+    suspend fun saveToDirectories(
+        context: Context,
+        treeUri: Uri,
+        source: File,
+        requestedName: String,
+        targetDirectoryNames: List<String>,
+        maxWavFiles: Int? = null,
+    ): UsbSaveResult = withContext(Dispatchers.IO) {
+        val directories = targetDirectoryNames.map(String::trim).filter(String::isNotEmpty).distinct()
+        if (directories.isEmpty()) {
+            return@withContext saveBlocking(
+                context,
+                treeUri,
+                source,
+                requestedName,
+                targetDirectoryName = null,
+                maxWavFiles = maxWavFiles,
+            )
+        }
+
+        val rootResolution = UsbSaf.resolveSoundTargets(context, treeUri, directories)
+        if (rootResolution.action == SafSoundTargetAction.REJECT_AMBIGUOUS) {
+            return@withContext UsbSaveResult(
+                ok = false,
+                message = "双目录模式必须选择 U 盘根目录，请重新选择",
+                errorCode = "USB_TARGET_AMBIGUOUS",
+            )
+        }
+
+        val outcomes = directories.associateWith { directory ->
+            saveBlocking(context, treeUri, source, requestedName, directory, maxWavFiles)
+        }
+        val successful = outcomes.filterValues { it.ok }.keys.toList()
+        val failed = outcomes.filterValues { !it.ok }
+        val firstSuccess = outcomes.values.firstOrNull { it.ok }
+        if (failed.isNotEmpty()) {
+            val failureText = failed.entries.joinToString("; ") { (directory, result) ->
+                "/$directory/: ${result.message}"
+            }
+            return@withContext UsbSaveResult(
+                ok = false,
+                finalName = firstSuccess?.finalName,
+                backupName = firstSuccess?.backupName,
+                writtenDirectories = successful,
+                message = PhoneLanguage.text(
+                    "Only {0}/{1} folders were written. {2}", "仅成功写入 {0}/{1} 个目录。{2}", successful.size, directories.size, failureText),
+                errorCode = failed.values.first().errorCode ?: "USB_WRITE_FAILED",
+            )
+        }
+
+        UsbSaveResult(
+            ok = true,
+            finalName = firstSuccess?.finalName ?: requestedName,
+            backupName = outcomes.values.firstNotNullOfOrNull { it.backupName },
+            writtenDirectories = successful,
+            message = PhoneLanguage.text(
+                "Safely written and verified in {0}", "已安全写入并校验：{0}", successful.joinToString { "/$it/" }),
+        )
+    }
+
     suspend fun save(
         context: Context,
         treeUri: Uri,
@@ -275,11 +469,22 @@ object UsbWavSaver {
         if (!source.isFile || source.length() == 0L) {
             return UsbSaveResult(false, message = "待写入文件不存在或为空", errorCode = "SOURCE_MISSING")
         }
-        val rootUri = if (targetDirectoryName.isNullOrBlank()) {
-            UsbSaf.rootDocumentUri(treeUri)
-        } else {
-            UsbSaf.ensureDirectory(context, treeUri, targetDirectoryName)
-        } ?: return UsbSaveResult(false, message = "无法访问或创建目标 USB 目录", errorCode = "USB_UNAVAILABLE")
+        val selectedRootUri = UsbSaf.rootDocumentUri(treeUri)
+            ?: return UsbSaveResult(false, message = "无法访问所选 USB 目录", errorCode = "USB_UNAVAILABLE")
+        val targetResolution = UsbSaf.resolveSoundTarget(context, treeUri, targetDirectoryName)
+        val rootUri = when (targetResolution.action) {
+            SafSoundTargetAction.USE_SELECTED_TREE -> selectedRootUri
+            SafSoundTargetAction.USE_OR_CREATE_TARGET_CHILD -> UsbSaf.ensureDirectory(
+                context,
+                treeUri,
+                targetResolution.targetDirectoryName.orEmpty(),
+            ) ?: return UsbSaveResult(false, message = "无法访问或创建目标 USB 目录", errorCode = "USB_UNAVAILABLE")
+            SafSoundTargetAction.REJECT_AMBIGUOUS -> return UsbSaveResult(
+                false,
+                message = "所选目录不是 U 盘根目录或预设音效目录，请重新选择",
+                errorCode = "USB_TARGET_AMBIGUOUS",
+            )
+        }
 
         val parentId = UsbSaf.documentId(rootUri)
             ?: return UsbSaveResult(false, message = "无法识别目标 USB 目录", errorCode = "USB_UNAVAILABLE")
@@ -340,12 +545,13 @@ object UsbWavSaver {
         try {
             if (existing != null && plan.conflict) {
                 val existingUri = UsbSaf.documentUri(treeUri, existing.documentId)
-                val renamed = UsbSaf.renameDocument(context, existingUri, plan.backupName!!)
+                val backupName = requireNotNull(plan.backupName)
+                val renamed = UsbSaf.renameDocument(context, existingUri, backupName)
                 if (renamed != null) {
                     backupUri = renamed
                 } else {
                     // Copy-based backup: copy existing -> backup doc, verify, then remove original.
-                    val backupDoc = UsbSaf.createDocument(context, rootUri, "application/octet-stream", plan.backupName)
+                    val backupDoc = UsbSaf.createDocument(context, rootUri, "application/octet-stream", backupName)
                         ?: return UsbSaveResult(false, message = "同名文件备份失败，未覆盖原文件", errorCode = "USB_BACKUP_FAILED")
                     backupUri = backupDoc
                     val tmpFile = File.createTempFile("usb-backup-src-", ".bin", context.cacheDir)
@@ -399,9 +605,7 @@ object UsbWavSaver {
                 finalName = plan.finalName,
                 backupName = plan.backupName,
                 message = PhoneLanguage.text(
-                    "Safely written to USB: ${plan.finalName}${if (plan.conflict) " (original backed up)" else ""}",
-                    "已安全写入 USB：${plan.finalName}${if (plan.conflict) "（原文件已备份）" else ""}",
-                ),
+                    "Safely written to USB: {0}{1}", "已安全写入 USB：{0}{2}", plan.finalName, if (plan.conflict) " (original backed up)" else "", if (plan.conflict) "（原文件已备份）" else ""),
             )
         } catch (t: Throwable) {
             cleanup(restore = true)

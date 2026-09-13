@@ -5,6 +5,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import com.dante.zeekrcapabilitylab.product.AppLanguage
 import androidx.compose.ui.graphics.Color
 
 private val LightColors = lightColorScheme(
@@ -28,8 +34,9 @@ fun ZeekrCapabilityLabTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
-        content = content,
-    )
+    val systemLocale = LocalConfiguration.current.locales[0]
+    SideEffect { AppLanguage.updateSystemLocale(systemLocale) }
+    CompositionLocalProvider(LocalLayoutDirection provides if (AppLanguage.language.isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+        MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, content = content)
+    }
 }

@@ -5,63 +5,44 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.view.Surface
 import android.view.SurfaceView
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface as MaterialSurface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
-import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.player.FourLaneGlView
 import com.dante.zeekrbridge.player.FourLaneLensMode
-import com.dante.zeekrbridge.player.PlaybackTimeline
+import com.dante.zeekrbridge.player.VideoDisplayGeometry
 import com.dante.zeekrbridge.player.canPreparePlayback
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
-import kotlinx.coroutines.delay
 
-private data class PlaybackEntry(
+internal data class PlaybackEntry(
     val id: String,
     val uri: Uri,
     val readable: Boolean,
@@ -103,48 +84,25 @@ fun MediaPlaybackDialog(
 }
 
 @Composable
-fun MediaSessionPlaybackDialog(
+internal fun MediaSessionPlayer(
     segments: List<IndexedMediaSegment>,
-    initialIndex: Int,
-    isEvent: Boolean,
-    recordingMode: IndexedRecordingMode = IndexedRecordingMode.NORMAL,
-    timeLapseMultiplier: Int = 1,
-    realDurationMs: Long = 0L,
-    onDismiss: () -> Unit,
+    seekRequest: com.dante.zeekrbridge.player.PlaybackSeekRequest?,
+    obstructed: Boolean,
+    onActiveMediaChanged: (String) -> Unit,
 ) {
     val entries = remember(segments) {
         segments.map { segment ->
             PlaybackEntry(
-                id = segment.id,
-                uri = Uri.fromFile(segment.file),
-                readable = segment.file.isFile,
-                durationMs = segment.durationMs,
-                sourceRole = segment.sourceRole,
-                layoutKind = segment.layoutKind,
-                laneLabels = segment.playbackLabels,
-                laneOrder = segment.playbackLaneOrder,
-                originalWidth = segment.originalWidth,
+                id = segment.id, uri = Uri.fromFile(segment.file), readable = segment.file.isFile,
+                durationMs = segment.durationMs, sourceRole = segment.sourceRole,
+                layoutKind = segment.layoutKind, laneLabels = segment.playbackLabels,
+                laneOrder = segment.playbackLaneOrder, originalWidth = segment.originalWidth,
                 originalHeight = segment.originalHeight,
             )
         }
     }
-    val range = remember(segments) { formatPlaybackRange(segments) }
-    val title = if (isEvent) {
-        "${t("Incident", "事件")} · $range"
-    } else if (recordingMode == IndexedRecordingMode.TIME_LAPSE) {
-        t(
-            "Time-lapse ${timeLapseMultiplier}× · captured ${formatPlayerTime(realDurationMs)}",
-            "延时摄影 ${timeLapseMultiplier}× · 拍摄 ${formatPlayerTime(realDurationMs)}",
-        )
-    } else {
-        range
-    }
-    PlaylistPlaybackDialog(
-        title = title,
-        entries = entries,
-        initialIndex = initialIndex,
-        onDismiss = onDismiss,
-    )
+    InlineMediaPlayer(entries = entries, seekRequest = seekRequest, obstructed = obstructed,
+        onActiveMediaChanged = onActiveMediaChanged)
 }
 
 /** Plays a factory Sentry recording directly from a user-authorized USB tree. */
@@ -153,8 +111,39 @@ fun UsbSentryPlaybackDialog(
     uri: Uri,
     displayName: String,
     durationMs: Long,
+    layoutKind: IndexedLayoutKind,
+    laneLabels: List<String>,
+    laneOrder: List<Int>,
     originalWidth: Int?,
     originalHeight: Int?,
+    onDismiss: () -> Unit,
+) {
+    UriMediaPlaybackDialog(
+        uri = uri,
+        displayName = displayName,
+        durationMs = durationMs,
+        sourceRole = IndexedSourceRole.SURROUND,
+        layoutKind = layoutKind,
+        laneLabels = laneLabels,
+        laneOrder = laneOrder,
+        originalWidth = originalWidth,
+        originalHeight = originalHeight,
+        onDismiss = onDismiss,
+    )
+}
+
+/** Plays an app-owned MediaStore item without relying on the deprecated DATA column. */
+@Composable
+fun UriMediaPlaybackDialog(
+    uri: Uri,
+    displayName: String,
+    durationMs: Long,
+    sourceRole: IndexedSourceRole = IndexedSourceRole.UNKNOWN,
+    layoutKind: IndexedLayoutKind = IndexedLayoutKind.UNKNOWN,
+    laneLabels: List<String> = emptyList(),
+    laneOrder: List<Int> = emptyList(),
+    originalWidth: Int? = null,
+    originalHeight: Int? = null,
     onDismiss: () -> Unit,
 ) {
     PlaylistPlaybackDialog(
@@ -165,10 +154,10 @@ fun UsbSentryPlaybackDialog(
                 uri = uri,
                 readable = true,
                 durationMs = durationMs,
-                sourceRole = IndexedSourceRole.SURROUND,
-                layoutKind = IndexedLayoutKind.FOUR_LANE_V1,
-                laneLabels = listOf("Front", "Rear", "Left", "Right"),
-                laneOrder = listOf(1, 2, 3, 4),
+                sourceRole = sourceRole,
+                layoutKind = layoutKind,
+                laneLabels = laneLabels,
+                laneOrder = laneOrder,
                 originalWidth = originalWidth,
                 originalHeight = originalHeight,
             ),
@@ -185,296 +174,17 @@ private fun PlaylistPlaybackDialog(
     initialIndex: Int,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val playable = entries.filter { it.readable }
-    val missingCount = entries.size - playable.size
-    val first = playable.firstOrNull()
-    val compatible = first != null && playable.all {
-        it.sourceRole == first.sourceRole && it.layoutKind == first.layoutKind
-    }
-    if (!compatible) {
-        SimplePlaybackMessage(
-            title = title,
-            message = if (first == null) {
-                t("The recording files are missing.", "录像文件已缺失。")
-            } else {
-                t(
-                    "This session contains mixed camera layouts and cannot be played continuously.",
-                    "这个录像片段包含不同摄像头布局，无法安全连续播放。",
-                )
-            },
-            onDismiss = onDismiss,
-        )
-        return
-    }
-
-    val player = remember(playable) { ExoPlayer.Builder(context).build() }
-    var isPlaying by remember { mutableStateOf(true) }
-    var currentIndex by remember { mutableIntStateOf(initialIndex.coerceIn(playable.indices)) }
-    var currentGlobalMs by remember { mutableLongStateOf(0L) }
-    var totalDurationMs by remember { mutableLongStateOf(playable.sumOf { it.durationMs.coerceAtLeast(0L) }) }
-    var sliderMs by remember { mutableFloatStateOf(0f) }
-    var dragging by remember { mutableStateOf(false) }
-    var speed by remember { mutableFloatStateOf(1f) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var mode by remember { mutableIntStateOf(FourLaneGlView.MODE_GRID) }
-    var lensMode by remember { mutableStateOf(FourLaneLensMode.FISHEYE) }
-    var surroundFirstFrameRendered by remember(first.id) { mutableStateOf(false) }
-
-    DisposableEffect(player, playable) {
-        val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(value: Boolean) {
-                isPlaying = value
-            }
-
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                currentIndex = player.currentMediaItemIndex.coerceIn(playable.indices)
-            }
-
-            override fun onPlayerError(playbackError: PlaybackException) {
-                error = t(
-                    "Playback failed: ${playbackError.errorCodeName}",
-                    "播放失败：${playbackError.errorCodeName}",
-                )
-            }
-        }
-        player.addListener(listener)
-        player.setMediaItems(
-            playable.map { entry ->
-                MediaItem.Builder().setMediaId(entry.id).setUri(entry.uri).build()
-            },
-            currentIndex,
-            0L,
-        )
-        player.playWhenReady = true
-        if (canPreparePlayback(first.layoutKind, customSurfaceAttached = false)) {
-            player.prepare()
-        }
-        onDispose {
-            player.removeListener(listener)
-            player.clearVideoSurface()
-            player.release()
-        }
-    }
-
-    LaunchedEffect(player, playable, dragging) {
-        while (true) {
-            val playerIndex = player.currentMediaItemIndex.coerceIn(playable.indices)
-            val timeline = PlaybackTimeline(resolvedDurations(playable, player, playerIndex))
-            currentIndex = playerIndex
-            currentGlobalMs = timeline.globalPosition(playerIndex, player.currentPosition.coerceAtLeast(0L))
-            totalDurationMs = timeline.totalDurationMs
-            if (!dragging) sliderMs = currentGlobalMs.toFloat()
-            delay(250L)
-        }
-    }
-
-    fun seekGlobal(targetMs: Long) {
-        val playerIndex = player.currentMediaItemIndex.coerceIn(playable.indices)
-        val timeline = PlaybackTimeline(resolvedDurations(playable, player, playerIndex))
-        val position = timeline.resolve(targetMs)
-        player.seekTo(position.mediaItemIndex, position.positionMs)
-    }
-
-    fun navigateBack() {
-        if (mode != FourLaneGlView.MODE_GRID) mode = FourLaneGlView.MODE_GRID else onDismiss()
-    }
-
-    Dialog(
-        onDismissRequest = { navigateBack() },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        MaterialSurface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surface,
-        ) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { navigateBack() }) { Text(t("Back", "返回")) }
-                    Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    Text("${currentIndex + 1}/${playable.size}", style = MaterialTheme.typography.bodySmall)
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        MaterialSurface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, t("Back", "返回")) }
+                    Text(title, Modifier.weight(1f).padding(end = 12.dp), style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                Spacer(Modifier.height(8.dp))
-                if (missingCount > 0) {
-                    Text(
-                        t(
-                            "$missingCount missing segments were skipped.",
-                            "已跳过 $missingCount 个缺失分段。",
-                        ),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                if (first.layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (lensMode == FourLaneLensMode.FISHEYE) {
-                            Button(onClick = {}) { Text(t("Fisheye", "鱼眼")) }
-                        } else {
-                            OutlinedButton(onClick = {
-                                lensMode = FourLaneLensMode.FISHEYE
-                            }) { Text(t("Fisheye", "鱼眼")) }
-                        }
-                        if (lensMode == FourLaneLensMode.STANDARD) {
-                            Button(onClick = {}) { Text(t("Standard view", "标准视角")) }
-                        } else {
-                            OutlinedButton(onClick = {
-                                lensMode = FourLaneLensMode.STANDARD
-                            }) { Text(t("Standard view", "标准视角")) }
-                        }
-                    }
-
-                    val labels = first.laneLabels.takeIf { it.size == 4 }
-                        ?: listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
-                    Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
-                        FourLaneVideoSurface(
-                            player = player,
-                            entry = first,
-                            mode = mode,
-                            lensMode = lensMode,
-                            onModeChanged = { selectedMode -> mode = selectedMode },
-                            onFirstFrame = { surroundFirstFrameRendered = true },
-                            onRenderError = { message ->
-                                error = t(
-                                    "360° rendering failed: $message",
-                                    "360° 渲染失败：$message",
-                                )
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                        if (mode == FourLaneGlView.MODE_GRID) {
-                            val alignments = listOf(
-                                Alignment.TopStart,
-                                Alignment.TopEnd,
-                                Alignment.BottomStart,
-                                Alignment.BottomEnd,
-                            )
-                            labels.forEachIndexed { index, label ->
-                                MaterialSurface(
-                                    modifier = Modifier.align(alignments[index]).padding(8.dp),
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    shape = MaterialTheme.shapes.small,
-                                ) {
-                                    Text(
-                                        label,
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    )
-                                }
-                            }
-                        } else {
-                            MaterialSurface(
-                                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                                color = Color.Black.copy(alpha = 0.55f),
-                                shape = MaterialTheme.shapes.small,
-                            ) {
-                                val selectedSlot = first.laneOrder.indexOf(mode)
-                                Text(
-                                    labels.getOrNull(selectedSlot) ?: t("View", "视角"),
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                )
-                            }
-                        }
-                        if (!surroundFirstFrameRendered) {
-                            MaterialSurface(
-                                modifier = Modifier.align(Alignment.Center),
-                                color = Color.Black.copy(alpha = 0.60f),
-                                shape = MaterialTheme.shapes.small,
-                            ) {
-                                Text(
-                                    t("Preparing 360° video…", "正在准备 360° 画面…"),
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        if (mode == FourLaneGlView.MODE_GRID) {
-                            t("Tap a view to enlarge", "点击任一画面放大")
-                        } else {
-                            t(
-                                "Tap to return · Pinch to zoom · Drag to move · Double-tap to reset",
-                                "单击返回四宫格 · 双指缩放 · 拖动查看 · 双击复位",
-                            )
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                } else {
-                    PlainVideoSurface(
-                        player = player,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                    )
-                }
-
-                error?.let { Text(it, color = Color(0xFFEF5350), modifier = Modifier.padding(top = 8.dp)) }
-                if (totalDurationMs > 0L) {
-                    Slider(
-                        value = sliderMs.coerceIn(0f, totalDurationMs.toFloat()),
-                        onValueChange = {
-                            dragging = true
-                            sliderMs = it
-                        },
-                        onValueChangeFinished = {
-                            seekGlobal(sliderMs.toLong())
-                            dragging = false
-                        },
-                        valueRange = 0f..totalDurationMs.toFloat(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(Modifier.fillMaxWidth()) {
-                        Text(
-                            formatPlayerTime(if (dragging) sliderMs.toLong() else currentGlobalMs),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(formatPlayerTime(totalDurationMs), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedButton(onClick = {
-                        seekGlobal((currentGlobalMs - 10_000L).coerceAtLeast(0L))
-                    }) { Text("−10s") }
-                    Button(onClick = {
-                        if (player.isPlaying) {
-                            player.pause()
-                        } else {
-                            if (player.playbackState == Player.STATE_ENDED) player.seekTo(0, 0L)
-                            player.play()
-                        }
-                    }) { Text(if (isPlaying) t("Pause", "暂停") else t("Play", "播放")) }
-                    OutlinedButton(onClick = {
-                        seekGlobal((currentGlobalMs + 10_000L).coerceAtMost(totalDurationMs))
-                    }) { Text("+10s") }
-                }
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(t("Speed", "速度"), style = MaterialTheme.typography.bodySmall)
-                    listOf(0.5f, 1f, 1.5f, 2f).forEach { candidate ->
-                        val label = if (candidate % 1f == 0f) "${candidate.toInt()}×" else "${candidate}×"
-                        if (speed == candidate) {
-                            Button(onClick = {}) { Text(label) }
-                        } else {
-                            OutlinedButton(onClick = {
-                                speed = candidate
-                                player.setPlaybackSpeed(candidate)
-                            }) { Text(label) }
-                        }
-                    }
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
+                    InlineMediaPlayer(entries, initialIndex)
                 }
             }
         }
@@ -482,13 +192,14 @@ private fun PlaylistPlaybackDialog(
 }
 
 @Composable
-private fun FourLaneVideoSurface(
+internal fun FourLaneVideoSurface(
     player: ExoPlayer,
     entry: PlaybackEntry,
     mode: Int,
     lensMode: FourLaneLensMode,
     onModeChanged: (Int) -> Unit,
     onFirstFrame: () -> Unit,
+    onSurfaceReady: () -> Unit,
     onRenderError: (String) -> Unit,
     modifier: Modifier,
 ) {
@@ -496,6 +207,7 @@ private fun FourLaneVideoSurface(
     val glView = remember { FourLaneGlView(context) }
     val currentOnModeChanged by rememberUpdatedState(onModeChanged)
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
+    val currentOnSurfaceReady by rememberUpdatedState(onSurfaceReady)
     val currentOnRenderError by rememberUpdatedState(onRenderError)
     LaunchedEffect(mode, lensMode, entry.laneOrder) {
         glView.setMode(mode, entry.laneOrder)
@@ -529,6 +241,7 @@ private fun FourLaneVideoSurface(
             surface = nextSurface
             glView.setSource(created)
             player.setVideoSurface(nextSurface)
+            currentOnSurfaceReady()
             if (
                 canPreparePlayback(entry.layoutKind, customSurfaceAttached = true) &&
                 player.playbackState == Player.STATE_IDLE &&
@@ -552,31 +265,33 @@ private fun FourLaneVideoSurface(
 }
 
 @Composable
-private fun PlainVideoSurface(player: ExoPlayer, modifier: Modifier) {
-    AndroidView(
-        factory = { context ->
-            SurfaceView(context).also(player::setVideoSurfaceView)
-        },
-        modifier = modifier,
-    )
+internal fun PlainVideoSurface(player: ExoPlayer, modifier: Modifier) {
+    val context = LocalContext.current
+    val view = remember { SurfaceView(context) }
+    DisposableEffect(player, view) {
+        player.setVideoSurfaceView(view)
+        onDispose { player.clearVideoSurfaceView(view) }
+    }
+    AndroidView(factory = { view }, modifier = modifier)
 }
 
-@Composable
-private fun SimplePlaybackMessage(title: String, message: String, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
-        MaterialSurface(shape = MaterialTheme.shapes.large) {
-            Column(Modifier.padding(20.dp)) {
-                Text(title, style = MaterialTheme.typography.titleLarge)
-                Text(message, modifier = Modifier.padding(top = 12.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text(t("Close", "关闭"))
-                }
-            }
-        }
+internal fun readDisplayGeometry(context: android.content.Context, entry: PlaybackEntry): VideoDisplayGeometry? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, entry.uri)
+        VideoDisplayGeometry(
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0,
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0,
+            metadataRotationDegrees = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0,
+        )
+    } catch (_: Exception) {
+        VideoDisplayGeometry(entry.originalWidth ?: 0, entry.originalHeight ?: 0)
+    } finally {
+        runCatching { retriever.release() }
     }
 }
 
-private fun resolvedDurations(
+internal fun resolvedDurations(
     entries: List<PlaybackEntry>,
     player: ExoPlayer,
     playerIndex: Int,
@@ -619,17 +334,17 @@ internal fun formatPlaybackRange(segments: List<IndexedMediaSegment>): String {
         segment.stoppedAtEpochMs
             ?: (segment.startedAtEpochMs + segment.durationMs.coerceAtLeast(0L))
     }.coerceAtLeast(start)
-    val dateFormat = DateFormat.getDateInstance(DateFormat.SHORT)
+    val dateFormat = DateFormat.getDateInstance(DateFormat.SHORT, PhoneLanguage.locale)
     val sameDay = dateFormat.format(Date(start)) == dateFormat.format(Date(end))
     val formatter = if (sameDay) {
-        DateFormat.getTimeInstance(DateFormat.SHORT)
+        DateFormat.getTimeInstance(DateFormat.SHORT, PhoneLanguage.locale)
     } else {
-        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, PhoneLanguage.locale)
     }
     return "${formatter.format(Date(start))}–${formatter.format(Date(end))}"
 }
 
-private fun formatPlayerTime(milliseconds: Long): String {
+internal fun formatPlayerTime(milliseconds: Long): String {
     val totalSeconds = milliseconds.coerceAtLeast(0L) / 1_000L
     val hours = totalSeconds / 3_600L
     val minutes = (totalSeconds % 3_600L) / 60L

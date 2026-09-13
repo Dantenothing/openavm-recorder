@@ -32,11 +32,18 @@ class CameraRecordingService : Service() {
 
     private lateinit var session: RecorderSession
     private var foreground = false
+    private var removableStorageMonitor: RemovableStorageMonitor? = null
 
     override fun onCreate() {
         super.onCreate()
         RecorderNotification.ensureChannel(this)
         session = RecorderSession(this, ::publishState, ::onStopped)
+        removableStorageMonitor = RemovableStorageMonitor(this) { action, path ->
+            session.onRemovableStorageUnavailable(
+                action = action,
+                directoryPath = path,
+            )
+        }.also { it.start() }
         instance = this
     }
 
@@ -141,6 +148,8 @@ class CameraRecordingService : Service() {
     }
 
     override fun onDestroy() {
+        removableStorageMonitor?.stop()
+        removableStorageMonitor = null
         instance = null
         session.release()
         _state.value = RecorderState()
@@ -206,6 +215,8 @@ class CameraRecordingService : Service() {
         }
 
         fun isRunning(): Boolean = instance != null
+        internal fun isLegacyRunning(): Boolean = instance != null
+        internal fun publishGuardState(state: RecorderState) { if (instance == null) _state.value = state }
 
         /** Broadcasts/listeners are hints; every report is a fresh atomic Android snapshot. */
         fun refreshVehiclePowerSnapshot(context: Context, source: String) {

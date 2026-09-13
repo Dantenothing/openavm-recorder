@@ -23,6 +23,11 @@ class UsbSentryPolicyTest {
     }
 
     @Test
+    fun recognizesKnown2560SquareAsFourLaneGrid() {
+        assertTrue(UsbSentryPolicy.isFourLaneComposite(2560, 2560))
+    }
+
+    @Test
     fun generatedCacheNamesCannotEscapeManagedDirectory() {
         assertEquals("evil_name.mp4", UsbSentryPolicy.safeFileName("../../evil name.mp4"))
     }

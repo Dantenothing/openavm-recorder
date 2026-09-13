@@ -35,7 +35,7 @@ private data class ProductNavItem(
 private val productNavItems = listOf(
     ProductNavItem("record", Icons.Default.PlayArrow, "Record", "录像"),
     ProductNavItem("events", Icons.Default.List, "Library", "记录"),
-    ProductNavItem("phone", Icons.Default.Phone, "Phone", "手机"),
+    ProductNavItem("phone", Icons.Default.Phone, "Phone / Tools", "手机 / 工具"),
     ProductNavItem("settings", Icons.Default.Settings, "Settings", "设置"),
 )
 
@@ -55,9 +55,10 @@ fun ProductMainScreen() {
         bottomBar = {
             NavigationBar {
                 productNavItems.forEach { item ->
-                    val label = if (AppLanguage.usesChinese(languageMode)) item.labelZh else item.labelEn
+                    val label = AppLanguage.text(item.labelEn, item.labelZh)
                     NavigationBarItem(
-                        selected = currentRoute == item.route,
+                        selected = currentRoute == item.route ||
+                            (item.route == "settings" && currentRoute in setOf("usb_storage", "usb_probe")),
                         onClick = {
                             navController.navigate(item.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
@@ -84,7 +85,18 @@ fun ProductMainScreen() {
             composable("record") { RecordScreen() }
             composable("events") { EventsScreen() }
             composable("phone") { PhoneScreen() }
-            composable("settings") { SettingsScreen() }
+            composable("settings") {
+                SettingsScreen(onOpenUsbManagement = { navController.navigate("usb_storage") })
+            }
+            composable("usb_storage") {
+                UsbManagementScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenDiagnostics = { navController.navigate("usb_probe") },
+                )
+            }
+            composable("usb_probe") {
+                UsbProbeScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }

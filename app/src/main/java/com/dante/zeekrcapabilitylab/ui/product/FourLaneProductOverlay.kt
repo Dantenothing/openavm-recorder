@@ -1,5 +1,8 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -84,7 +87,8 @@ internal fun FourLaneDirectionOverlay(
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+Column(Modifier.fillMaxSize()) {
         repeat(2) { row ->
             Row(Modifier.weight(1f)) {
                 repeat(2) { column ->
@@ -106,6 +110,8 @@ internal fun FourLaneDirectionOverlay(
             }
         }
     }
+    }
+
 }
 
 @Composable

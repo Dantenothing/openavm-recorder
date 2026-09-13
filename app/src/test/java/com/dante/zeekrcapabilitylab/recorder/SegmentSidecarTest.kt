@@ -12,6 +12,7 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.TimeLapseAccuracy
+import com.dante.zeekrcapabilitylab.service.recorder.VideoTriggerMarker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -70,7 +71,7 @@ class SegmentSidecarTest {
         assertEquals(60_003L, decoded?.actualTrack?.durationMs)
         assertEquals(1800L, decoded?.frameStats?.count)
         assertEquals(5, decoded?.frameHealth?.maxHammingDistance)
-        assertEquals(7, decoded?.schemaVersion)
+        assertEquals(8, decoded?.schemaVersion)
         assertEquals("session-1700000000000-a", decoded?.recordingSessionId)
         assertEquals(RecordingSourceRole.SURROUND, decoded?.sourceRole)
         assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded?.layoutKind)
@@ -159,7 +160,7 @@ class SegmentSidecarTest {
             sampleSidecar(tempMp4()),
         )
         val legacy = encoded
-            .replace("\"schemaVersion\": 7", "\"schemaVersion\": 3")
+            .replace("\"schemaVersion\": 8", "\"schemaVersion\": 3")
             .lineSequence()
             .filterNot { line ->
                 line.contains("\"sourceRole\"") ||
@@ -181,7 +182,7 @@ class SegmentSidecarTest {
             sampleSidecar(tempMp4()),
         )
         val legacy = encoded
-            .replace("\"schemaVersion\": 7", "\"schemaVersion\": 4")
+            .replace("\"schemaVersion\": 8", "\"schemaVersion\": 4")
             .lineSequence()
             .filterNot { line -> line.contains("\"recordingSessionId\"") }
             .joinToString("\n")
@@ -246,6 +247,23 @@ class SegmentSidecarTest {
         assertEquals(RecordingMode.NORMAL, decoded.recordingMode)
         assertEquals(1, decoded.timeLapseMultiplier)
         assertEquals(decoded.segmentSeconds, decoded.effectiveSegmentSeconds)
+    }
+
+    @Test
+    fun sentryTriggerMetadataSurvivesExportAndOlderSidecarsRemainReadable() {
+        val mp4 = tempMp4()
+        val markers = listOf(VideoTriggerMarker(17_250, "VISUAL_RISK", 100_000, setOf(2, 4)),
+            VideoTriggerMarker(42_500, "MANUAL", 125_250))
+        val sentry = sampleSidecar(mp4).copy(eventRole = "SENTRY", triggerMarkers = markers)
+        val written = SegmentSidecarIO.writeAtomic(mp4, sentry)
+        assertEquals(markers, SegmentSidecarIO.read(written)?.triggerMarkers)
+
+        val current = SegmentSidecarIO.json.parseToJsonElement(written.readText()).jsonObject
+        val legacy = JsonObject(current.filterKeys { it != "triggerMarkers" } + ("schemaVersion" to JsonPrimitive(7)))
+        val decoded = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), legacy.toString())
+        assertEquals(7, decoded.schemaVersion)
+        assertEquals("SENTRY", decoded.eventRole)
+        assertTrue(decoded.triggerMarkers.isEmpty())
     }
 
     private fun tempMp4(): File {

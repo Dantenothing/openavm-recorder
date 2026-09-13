@@ -5,11 +5,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.util.Locale
+import io.github.dantenothing.openavm.i18n.UiLanguage
+import io.github.dantenothing.openavm.i18n.UiStrings
 
 enum class PhoneLanguageMode(val storedValue: String) {
     SYSTEM("system"),
     SIMPLIFIED_CHINESE("zh-CN"),
-    ENGLISH("en");
+    ENGLISH("en"),
+    TRADITIONAL_CHINESE("zh-TW"),
+    THAI("th"),
+    VIETNAMESE("vi"),
+    ARABIC("ar");
 
     companion object {
         fun fromStored(value: String?): PhoneLanguageMode =
@@ -25,11 +31,18 @@ object PhoneLanguage {
 
     var mode by mutableStateOf(PhoneLanguageMode.SYSTEM)
         private set
+    private var systemLocale by mutableStateOf(Locale.getDefault())
+    val language: UiLanguage get() = UiLanguage.resolve(mode.storedValue, systemLocale)
+    val locale: Locale get() = language.locale
+    fun updateSystemLocale(locale: Locale) { systemLocale = locale }
+    fun label(mode: PhoneLanguageMode): String = if (mode == PhoneLanguageMode.SYSTEM)
+        text("Follow system", "跟随系统") else UiLanguage.resolve(mode.storedValue).nativeName
 
     fun init(context: Context) {
         appContext = context.applicationContext
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         mode = PhoneLanguageMode.fromStored(prefs.getString(KEY_MODE, null))
+        updateSystemLocale(context.resources.configuration.locales[0])
     }
 
     fun selectMode(newMode: PhoneLanguageMode) {
@@ -46,11 +59,12 @@ object PhoneLanguage {
         systemLanguage: String = Locale.getDefault().language,
     ): Boolean = when (selectedMode) {
         PhoneLanguageMode.SIMPLIFIED_CHINESE -> true
-        PhoneLanguageMode.ENGLISH -> false
+        PhoneLanguageMode.TRADITIONAL_CHINESE -> true
         PhoneLanguageMode.SYSTEM -> systemLanguage.equals("zh", ignoreCase = true)
+        else -> false
     }
 
-    fun text(en: String, zh: String): String = if (usesChinese()) zh else en
+    fun text(en: String, zh: String, vararg args: Any?): String = UiStrings.text(language, en, zh, *args)
 }
 
-fun t(en: String, zh: String): String = PhoneLanguage.text(en, zh)
+fun t(en: String, zh: String, vararg args: Any?): String = PhoneLanguage.text(en, zh, *args)

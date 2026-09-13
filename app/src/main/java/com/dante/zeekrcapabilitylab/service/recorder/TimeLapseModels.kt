@@ -27,14 +27,13 @@ enum class CaptureSubmissionMode {
 
 enum class TimeLapsePowerGateAction {
     NONE,
-    QUIESCE,
-    RESUME,
+    TERMINATE_SESSION,
 }
 
 /**
- * A preliminary power-off edge is enough to make paced capture quiet, but it is
- * deliberately not enough to terminate the manual Session. VehicleAway keeps
- * its stricter two-signal confirmation policy.
+ * Time-lapse capture treats the first background power-off edge as terminal.
+ * Normal recording continues to use the stricter VehicleAway confirmation
+ * policy; switching apps alone is not considered a power-off edge.
  */
 object TimeLapsePowerGatePolicy {
     fun action(
@@ -43,16 +42,15 @@ object TimeLapsePowerGatePolicy {
         appForeground: Boolean,
         interactive: Boolean,
         mainDisplayOn: Boolean,
-        currentlyQuiesced: Boolean,
     ): TimeLapsePowerGateAction {
         if (recordingMode != RecordingMode.TIME_LAPSE || !recording) {
             return TimeLapsePowerGateAction.NONE
         }
         val preliminaryAwayEvidence = !appForeground && (!interactive || !mainDisplayOn)
-        return when {
-            preliminaryAwayEvidence && !currentlyQuiesced -> TimeLapsePowerGateAction.QUIESCE
-            !preliminaryAwayEvidence && currentlyQuiesced -> TimeLapsePowerGateAction.RESUME
-            else -> TimeLapsePowerGateAction.NONE
+        return if (preliminaryAwayEvidence) {
+            TimeLapsePowerGateAction.TERMINATE_SESSION
+        } else {
+            TimeLapsePowerGateAction.NONE
         }
     }
 }
@@ -62,6 +60,7 @@ enum class TimeLapseTeardownStage {
     DRAINING,
     CLOSING_SESSION,
     CLOSING_DEVICE,
+    UNCONFIRMED,
     READY_TO_STOP_RECORDER,
 }
 
@@ -98,7 +97,7 @@ object TimeLapseTeardownPolicy {
     fun onTimeout(stage: TimeLapseTeardownStage): TimeLapseTeardownStage = when (stage) {
         TimeLapseTeardownStage.DRAINING -> TimeLapseTeardownStage.CLOSING_SESSION
         TimeLapseTeardownStage.CLOSING_SESSION -> TimeLapseTeardownStage.CLOSING_DEVICE
-        TimeLapseTeardownStage.CLOSING_DEVICE -> TimeLapseTeardownStage.READY_TO_STOP_RECORDER
+        TimeLapseTeardownStage.CLOSING_DEVICE -> TimeLapseTeardownStage.UNCONFIRMED
         else -> stage
     }
 }

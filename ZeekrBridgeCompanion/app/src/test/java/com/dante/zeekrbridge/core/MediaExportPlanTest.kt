@@ -53,6 +53,32 @@ class MediaExportPlanTest {
     }
 
     @Test
+    fun gridCompositeOffersAndCropsNeutralQuadrantsWithoutDirectionClaims() {
+        val grid = segment("grid", 0, 60_000).copy(
+            layoutKind = IndexedLayoutKind.FOUR_LANE_GRID_2X2,
+            lanes = FourLaneLayoutClassifier.classify(2560, 2560)!!.lanes,
+            originalWidth = 2560,
+            originalHeight = 2560,
+        )
+
+        assertEquals(
+            listOf(
+                MediaExportTarget.ORIGINAL,
+                MediaExportTarget.TOP_LEFT,
+                MediaExportTarget.TOP_RIGHT,
+                MediaExportTarget.BOTTOM_LEFT,
+                MediaExportTarget.BOTTOM_RIGHT,
+            ),
+            MediaExportPlanner.supportedTargets(listOf(grid)),
+        )
+        val crop = MediaExportPlanner.cropFor(grid, MediaExportTarget.BOTTOM_RIGHT)!!
+        assertEquals(PixelCrop(2560, 2560, 1280, 2560, 1280, 2560), crop)
+        assertThrows(IllegalArgumentException::class.java) {
+            MediaExportPlanner.cropFor(grid, MediaExportTarget.FRONT)
+        }
+    }
+
+    @Test
     fun topLeftPixelCropIsConvertedToMedia3BottomLeftCoordinates() {
         val normalized = PixelCrop(1280, 5140, 0, 1280, 0, 1280).normalizedForMedia3()
 

@@ -12,7 +12,6 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.UUID
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 /** Decoded PCM metadata and the streamed temp file holding little-endian 16-bit PCM. */
 data class PcmMeta(
@@ -46,6 +45,7 @@ object SoundDecoder {
         context: Context,
         uri: Uri,
         cancellation: SoundCancellation,
+        limits: SoundDecodeLimits = SoundDecodeLimits(),
         onProgress: (Float) -> Unit = {},
     ): DecodedSound {
         val dir = File(context.cacheDir, "sound-decode").apply { mkdirs() }
@@ -80,16 +80,30 @@ object SoundDecoder {
             } else {
                 -1L
             }
+            limits.check(durationUs.coerceAtLeast(0) / 1000, 0)
+            if (dir.usableSpace < limits.keepFreeBytes)
+                throw SoundIoException("车机存储空间不足", "SPACE_LOCAL")
             extractor.selectTrack(trackIndex)
             output = FileOutputStream(pcm)
 
             var frames = 0L
             var rate = -1
             var channels = -1
+            var nextSpaceCheck = 0L
+            fun checkOutputBudget() {
+                val bytes = frames * channels * 2L
+                limits.check(if (rate > 0) frames * 1000 / rate else 0, bytes)
+                if (bytes >= nextSpaceCheck) {
+                    if (dir.usableSpace < limits.keepFreeBytes)
+                        throw SoundIoException("车机存储空间不足", "SPACE_LOCAL")
+                    nextSpaceCheck = bytes + 1024 * 1024
+                }
+            }
 
             if (mime == "audio/raw") {
                 rate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                 channels = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                require(rate in 1..384_000 && channels in 1..2) { "Unsupported audio layout" }
                 val encoding = if (trackFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                     trackFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
                 } else {
@@ -98,6 +112,7 @@ object SoundDecoder {
                 val buffer = ByteBuffer.allocate(64 * 1024)
                 while (true) {
                     cancellation.check()
+                    buffer.clear()
                     val size = extractor.readSampleData(buffer, 0)
                     if (size < 0) break
                     buffer.position(0)
@@ -105,6 +120,7 @@ object SoundDecoder {
                     val bytes = ByteArray(size)
                     buffer.get(bytes)
                     frames += writePcmBytes(output, bytes, size, encoding, channels)
+                    checkOutputBudget()
                     if (durationUs > 0) {
                         onProgress((extractor.sampleTime.toFloat() / durationUs).coerceIn(0f, 1f))
                     }
@@ -121,8 +137,11 @@ object SoundDecoder {
                 val info = MediaCodec.BufferInfo()
                 var inputEos = false
                 var outputEos = false
+                var lastOutputNanos = System.nanoTime()
                 while (!outputEos) {
                     cancellation.check()
+                    if (System.nanoTime() - lastOutputNanos > 30_000_000_000L)
+                        throw SoundInputException("音轨解码没有响应，请换一个文件", "DECODE_TIMEOUT")
                     if (!inputEos) {
                         val inIdx = codec.dequeueInputBuffer(TIMEOUT_US)
                         if (inIdx >= 0) {
@@ -133,6 +152,8 @@ object SoundDecoder {
                                 codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputEos = true
                             } else {
+                                if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_ENCRYPTED != 0)
+                                    throw SoundInputException("该音轨受保护，无法作为本地音效导入", "PROTECTED_AUDIO")
                                 val pts = extractor.sampleTime
                                 codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
                                 extractor.advance()
@@ -156,6 +177,7 @@ object SoundDecoder {
                             break
                         } else if (outIdx >= 0) {
                             progressed = true
+                            lastOutputNanos = System.nanoTime()
                             if (rate < 0) {
                                 val fmt = codec.outputFormat
                                 rate = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else -1
@@ -167,12 +189,12 @@ object SoundDecoder {
                                 AudioFormat.ENCODING_PCM_16BIT
                             }
                             val buffer = codec.getOutputBuffer(outIdx)
-                            if (buffer != null) {
+                            if (buffer != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                                require(rate in 1..384_000 && channels in 1..2) { "Unsupported audio layout" }
                                 val size = info.size
-                                val bytes = ByteArray(size)
-                                buffer.position(0)
-                                buffer.get(bytes)
+                                val bytes = PcmBlockReader.read(buffer, info.offset, size)
                                 frames += writePcmBytes(output, bytes, size, encoding, channels)
+                                checkOutputBudget()
                                 if (durationUs > 0) {
                                     val t = extractor.sampleTime
                                     if (t >= 0) onProgress((t.toFloat() / durationUs).coerceIn(0f, 1f))
@@ -195,7 +217,7 @@ object SoundDecoder {
             }
             output.flush()
             val meta = PcmMeta(rate, channels, frames)
-            val displayName = queryDisplayName(context, uri)
+            val displayName = queryDisplayName(context, uri) ?: uri.takeIf { it.scheme == "file" }?.lastPathSegment
             return DecodedSound(
                 name = displayName ?: "audio",
                 formatLabel = formatLabel(mime),
@@ -226,6 +248,7 @@ object SoundDecoder {
         "audio/mp4", "audio/mp4a-latm", "audio/x-m4a", "audio/aac", "audio/aac-adts" -> "M4A/AAC"
         "audio/flac", "audio/x-flac" -> "FLAC"
         "audio/ogg", "application/ogg", "audio/vorbis" -> "OGG"
+        "audio/opus" -> "Opus"
         "audio/wav", "audio/x-wav", "audio/wave", "audio/raw" -> "WAV"
         else -> mime ?: "未知格式"
     }
@@ -237,30 +260,10 @@ object SoundDecoder {
         encoding: Int,
         channels: Int,
     ): Long {
-        if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
-            val shorts = ByteArray(size / 2)
-            var si = 0
-            var i = 0
-            while (i + 4 <= size) {
-                val bits = (bytes[i].toInt() and 0xff) or
-                    ((bytes[i + 1].toInt() and 0xff) shl 8) or
-                    ((bytes[i + 2].toInt() and 0xff) shl 16) or
-                    ((bytes[i + 3].toInt() and 0xff) shl 24)
-                val f = Float.fromBits(bits)
-                val s = when {
-                    f >= 1f -> 32767
-                    f <= -1f -> -32768
-                    else -> (f * 32767f).roundToInt().coerceIn(-32768, 32767)
-                }
-                shorts[si++] = (s and 0xff).toByte()
-                shorts[si++] = ((s shr 8) and 0xff).toByte()
-                i += 4
-            }
-            output.write(shorts, 0, si)
-            return (si / 2).toLong() / channels
-        }
-        output.write(bytes, 0, size)
-        return (size / 2).toLong() / channels
+        require(size == bytes.size)
+        val pcm = DecodedPcm.to16Bit(bytes, encoding, channels)
+        output.write(pcm)
+        return pcm.size.toLong() / (channels * 2)
     }
 
     private fun queryDisplayName(context: Context, uri: Uri): String? =

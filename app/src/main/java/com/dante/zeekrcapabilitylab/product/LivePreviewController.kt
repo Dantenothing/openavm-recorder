@@ -14,6 +14,8 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.util.Size
 import android.view.Surface
+import com.dante.zeekrcapabilitylab.BuildConfig
+import com.dante.zeekrcapabilitylab.sentry.CanaryCameraOpenAdapter
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -171,9 +173,7 @@ class LivePreviewController(private val context: Context) {
                                 runCatching { s.release() }
                             }
                         }
-                        manager.openCamera(
-                            id,
-                            object : CameraDevice.StateCallback() {
+                        val callback = object : CameraDevice.StateCallback() {
                                 override fun onOpened(camera: CameraDevice) {
                                     supervisorHandler.post {
                                         if (released) {
@@ -206,9 +206,12 @@ class LivePreviewController(private val context: Context) {
                                         closeQuietly(camera)
                                     }
                                 }
-                            },
-                            supervisorHandler,
-                        )
+                            }
+                        if (BuildConfig.SENTRY_CANARY_ENABLED) {
+                            CanaryCameraOpenAdapter.open(manager, id, callback, supervisorHandler)
+                        } else {
+                            manager.openCamera(id, callback, supervisorHandler)
+                        }
                     } catch (t: Throwable) {
                         openedSurface?.let { runCatching { it.release() } }
                         if (surface === openedSurface) surface = null

@@ -1,0 +1,79 @@
+{
+  "release": "v4.0.0",
+  "apks": {
+    "car": {
+      "file": "OpenAVM-Recorder-V4-arm64-v8a.apk",
+      "applicationId": "io.github.dantenothing.openavmrecorder",
+      "versionName": "4.0.0",
+      "versionCode": 57,
+      "bytes": 2244512,
+      "sha256": "b346610f5662bfe9997baed58c9b739a097fbdd3c85d131d0d547c705d87a9e6",
+      "certificateSha256": "529951606101aba4d45f94f7c68260c8268073bf3769b9f939161f0533d5994e"
+    },
+    "phone": {
+      "file": "OpenAVM-Companion-V4.apk",
+      "applicationId": "com.dante.zeekrbridge",
+      "versionName": "4.0.0",
+      "versionCode": 29,
+      "bytes": 3148334,
+      "sha256": "fcbe60eae50a229c3d9541f1fbfd482b89f3d6060efaa44b7e666c392c049937",
+      "certificateSha256": "529951606101aba4d45f94f7c68260c8268073bf3769b9f939161f0533d5994e"
+    }
+  },
+  "publicSourceReleaseTests": {
+    "app": {
+      "tests": 499,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "ZeekrBridgeCompanion/app": {
+      "tests": 197,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "sound-core": {
+      "tests": 44,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "localization": {
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "transfer-protocol": {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "totalTests": 751,
+  "publicSourceReleaseLint": {
+    "car": {
+      "Warning": 118,
+      "Hint": 15
+    },
+    "phone": {
+      "Warning": 61,
+      "Hint": 5
+    }
+  },
+  "releaseBuilds": {
+    "car": "passed",
+    "phone": "passed"
+  },
+  "publicationAudit": {
+    "sourceFiles": 510,
+    "unchangedFrozenFilesCompared": 461,
+    "localMarkdownLinks": "passed",
+    "releaseAssetChecksums": "passed",
+    "privateCaptureAndKeyExclusion": "passed"
+  },
+  "provenance": "Published APKs are the frozen V4 deliverables. Public source was rebuilt separately; the frozen vehicle APK diagnostic Git marker is d01d90f, predating the publication commit.",
+  "deviceAcceptance": "Owner accepted RC2 departure extra-file fix with no recurrence and accepted the phone UI. Final cosmetic changes received local verification; all-vehicle compatibility is not established."
+}

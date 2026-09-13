@@ -56,12 +56,12 @@ object PhonePairingClient {
         val begin = try {
             postJson(beginUrl, beginBody, timeoutMs)
         } catch (t: Throwable) {
-            return@withContext PairingResult(false, text("Cannot connect to the car: ${t.message ?: t.javaClass.simpleName}", "无法连接车机：${t.message ?: t.javaClass.simpleName}"))
+            return@withContext PairingResult(false, text("Cannot connect to the car: {0}", "无法连接车机：{0}", t.message ?: t.javaClass.simpleName))
         }
         val beginCode = begin.first
         val beginBodyText = begin.second
         if (beginCode != 200) {
-            return@withContext PairingResult(false, text("The car rejected pairing ($beginCode)", "车机拒绝配对（$beginCode）"))
+            return@withContext PairingResult(false, text("The car rejected pairing ({0})", "车机拒绝配对（{0}）", beginCode))
         }
         val beginObj = parse(beginBodyText) ?: return@withContext PairingResult(false, text("Invalid response from the car.", "车机响应无效"))
         val carDeviceId = beginObj["carDeviceId"]?.jsonPrimitive?.content ?: return@withContext PairingResult(false, text("The car response has no device ID.", "车机响应缺少 ID"))
@@ -87,17 +87,17 @@ object PhonePairingClient {
         val finalize = try {
             postJson(finalizeUrl, finalizeBody, timeoutMs)
         } catch (t: Throwable) {
-            return@withContext PairingResult(false, text("Pairing confirmation failed: ${t.message ?: t.javaClass.simpleName}", "确认配对失败：${t.message ?: t.javaClass.simpleName}"))
+            return@withContext PairingResult(false, text("Pairing confirmation failed: {0}", "确认配对失败：{0}", t.message ?: t.javaClass.simpleName))
         }
         if (finalize.first != 200) {
-            return@withContext PairingResult(false, text("The car could not confirm pairing (${finalize.first})", "车机确认失败（${finalize.first}）"))
+            return@withContext PairingResult(false, text("The car could not confirm pairing ({0})", "车机确认失败（{0}）", finalize.first))
         }
         // Start the phone bridge server so the car can connect outbound.
         val prefs = context.getSharedPreferences("phone_product_settings", Context.MODE_PRIVATE)
         if (prefs.getBoolean("auto_start_server", true)) {
             BridgeService.start(context)
         }
-        return@withContext PairingResult(true, text("Paired: $carDeviceId", "配对成功：$carDeviceId"), carDeviceId)
+        return@withContext PairingResult(true, text("Paired: {0}", "配对成功：{0}", carDeviceId), carDeviceId)
     }
 
     private fun postJson(url: String, body: String, timeoutMs: Int): Pair<Int, String> {
@@ -135,5 +135,5 @@ object PhonePairingClient {
         ""
     }
 
-    private fun text(en: String, zh: String) = PhoneLanguage.text(en, zh)
+    private fun text(en: String, zh: String, vararg args: Any?) = PhoneLanguage.text(en, zh, *args)
 }

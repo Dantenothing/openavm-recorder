@@ -1,4 +1,5 @@
 package com.dante.zeekrcapabilitylab.transfer
+import com.dante.zeekrcapabilitylab.util.Utils
 
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -20,6 +21,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class TransferService : Service() {
+    private enum class QueueStep { CONTINUE, PAUSE }
+
     companion object {
         private const val CHANNEL = "phone_transfer"
         private const val NOTIFICATION = 2201
@@ -34,12 +37,12 @@ class TransferService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "Phone transfers", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CHANNEL, Utils.t("Phone transfers", "手机传输"), NotificationManager.IMPORTANCE_LOW),
         )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION, notification("Preparing phone transfer"))
+        startForeground(NOTIFICATION, notification(Utils.t("Preparing phone transfer", "正在准备传输到手机")))
         acquireLocks()
         if (workerRunning.compareAndSet(false, true)) executor.execute { runQueue() }
         return START_STICKY
@@ -48,6 +51,7 @@ class TransferService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        removeForegroundNotification()
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
         runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
         wakeLock = null
@@ -69,10 +73,66 @@ class TransferService : Service() {
                     break
                 }
                 try {
-                    if (task.state == TransferTaskState.CANCEL_PENDING) cancelRemote(task, endpoint) else upload(task, endpoint)
+                    val step = if (task.state == TransferTaskState.CANCEL_PENDING) {
+                        cancelRemote(task, endpoint)
+                        QueueStep.CONTINUE
+                    } else {
+                        upload(task, endpoint)
+                    }
                     TransferRepository.markConnected(endpoint, true, "Connected to ${endpoint.phoneName}")
+                    if (step == QueueStep.PAUSE) break
                 } catch (t: Throwable) {
                     val latest = TransferRepository.get(task.id) ?: continue
+                    if (latest.sourceKind == TransferSourceKind.FACTORY_SENTRY_USB) {
+                        when (val source = resolveFactorySentry(latest)) {
+                            is FactorySentrySourceResolution.WaitingForUsb -> {
+                                TransferRepository.update(
+                                    latest.copy(state = TransferTaskState.WAITING_RETRY, reason = source.reason),
+                                )
+                                TransferRepository.markConnected(
+                                    endpoint,
+                                    true,
+                                    "Connected to ${endpoint.phoneName}",
+                                )
+                                break
+                            }
+                            is FactorySentrySourceResolution.Invalid -> {
+                                TransferRepository.finish(latest, TransferTaskState.FAILED, source.reason)
+                                TransferRepository.markConnected(
+                                    endpoint,
+                                    true,
+                                    "Connected to ${endpoint.phoneName}",
+                                )
+                                continue
+                            }
+                            is FactorySentrySourceResolution.Resolved -> Unit
+                        }
+                    }
+                    if (latest.sourceKind == TransferSourceKind.OPENAVM_USB) {
+                        when (val source = resolveOpenAvmUsb(latest)) {
+                            is OpenAvmUsbSourceResolution.WaitingForUsb -> {
+                                TransferRepository.update(
+                                    latest.copy(state = TransferTaskState.WAITING_RETRY, reason = source.reason),
+                                )
+                                TransferRepository.markConnected(
+                                    endpoint,
+                                    true,
+                                    "Connected to ${endpoint.phoneName}",
+                                )
+                                break
+                            }
+                            is OpenAvmUsbSourceResolution.Invalid -> {
+                                TransferRepository.finish(latest, TransferTaskState.FAILED, source.reason)
+                                TransferRepository.markConnected(
+                                    endpoint,
+                                    true,
+                                    "Connected to ${endpoint.phoneName}",
+                                )
+                                continue
+                            }
+                            is OpenAvmUsbSourceResolution.Resolved -> Unit
+                        }
+                    }
                     if (latest.state == TransferTaskState.CANCEL_PENDING) {
                         TransferRepository.update(
                             latest.copy(reason = "Waiting for phone to remove the partial transfer"),
@@ -91,16 +151,51 @@ class TransferService : Service() {
             }
         } finally {
             workerRunning.set(false)
+            removeForegroundNotification()
             stopSelf()
         }
     }
 
-    private fun upload(initial: TransferTask, endpoint: PhoneEndpoint) {
-        var task = TransferRepository.get(initial.id) ?: return
-        val file = File(task.filePath)
-        if (!file.isFile || file.length() != task.sizeBytes) {
-            TransferRepository.finish(task, TransferTaskState.FAILED, "Recording is missing or changed")
-            return
+    private fun upload(initial: TransferTask, endpoint: PhoneEndpoint): QueueStep {
+        var task = TransferRepository.get(initial.id) ?: return QueueStep.CONTINUE
+        if (task.uploadId != null) {
+            val remote = TransferHttp.status(task.id, endpoint, task.uploadId!!)
+            if (remote.status == "COMPLETED") {
+                TransferRepository.finish(task, TransferTaskState.COMPLETED)
+                return QueueStep.CONTINUE
+            }
+        }
+        val file = when (task.sourceKind) {
+            TransferSourceKind.MANAGED_RECORDING -> File(task.filePath).takeIf {
+                it.isFile && it.length() == task.sizeBytes
+            } ?: run {
+                TransferRepository.finish(task, TransferTaskState.FAILED, "Recording is missing or changed")
+                return QueueStep.CONTINUE
+            }
+            TransferSourceKind.FACTORY_SENTRY_USB -> when (val source = resolveFactorySentry(task)) {
+                is FactorySentrySourceResolution.Resolved -> source.file
+                is FactorySentrySourceResolution.WaitingForUsb -> {
+                    TransferRepository.update(
+                        task.copy(state = TransferTaskState.WAITING_RETRY, reason = source.reason),
+                    )
+                    return QueueStep.PAUSE
+                }
+                is FactorySentrySourceResolution.Invalid -> {
+                    TransferRepository.finish(task, TransferTaskState.FAILED, source.reason)
+                    return QueueStep.CONTINUE
+                }
+            }
+            TransferSourceKind.OPENAVM_USB -> when (val source = resolveOpenAvmUsb(task)) {
+                is OpenAvmUsbSourceResolution.Resolved -> source.file
+                is OpenAvmUsbSourceResolution.WaitingForUsb -> {
+                    TransferRepository.update(task.copy(state = TransferTaskState.WAITING_RETRY, reason = source.reason))
+                    return QueueStep.PAUSE
+                }
+                is OpenAvmUsbSourceResolution.Invalid -> {
+                    TransferRepository.finish(task, TransferTaskState.FAILED, source.reason)
+                    return QueueStep.CONTINUE
+                }
+            }
         }
         if (task.sha256 == null) {
             task = task.copy(state = TransferTaskState.PREPARING, reason = null)
@@ -108,7 +203,7 @@ class TransferService : Service() {
             task = task.copy(sha256 = sha256(file))
             TransferRepository.update(task)
         }
-        if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return
+        if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return QueueStep.CONTINUE
         if (task.uploadId == null) {
             val created = TransferHttp.create(task.id, endpoint, UploadCreateRequest(
                 clientTransferId = task.id,
@@ -124,27 +219,41 @@ class TransferService : Service() {
         val status = TransferHttp.status(task.id, endpoint, task.uploadId!!)
         if (status.status == "COMPLETED") {
             TransferRepository.finish(task, TransferTaskState.COMPLETED)
-            return
+            return QueueStep.CONTINUE
         }
         val received = status.receivedChunks.toSet()
         for (index in 0 until task.totalChunks) {
-            if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return
+            if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return QueueStep.CONTINUE
             if (index !in received) {
                 val offset = index.toLong() * task.chunkSize
                 val length = minOf(task.chunkSize.toLong(), task.sizeBytes - offset).toInt()
                 TransferRepository.update(task.copy(state = TransferTaskState.UPLOADING, uploadedChunks = index, reason = null))
                 TransferHttp.chunk(task.id, endpoint, task.uploadId!!, index, file, offset, length)
             }
-            task = TransferRepository.get(task.id)?.copy(uploadedChunks = index + 1) ?: return
+            task = TransferRepository.get(task.id)?.copy(uploadedChunks = index + 1) ?: return QueueStep.CONTINUE
             TransferRepository.update(task)
         }
-        if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return
+        if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return QueueStep.CONTINUE
         task = task.copy(state = TransferTaskState.COMMITTING, reason = null)
         TransferRepository.update(task)
         val completed = TransferHttp.complete(task.id, endpoint, task.uploadId!!, task.sha256!!, task.fileName)
         if (!completed.ok) error("Phone rejected commit")
         TransferRepository.finish(task, TransferTaskState.COMPLETED)
+        return QueueStep.CONTINUE
     }
+
+    private fun resolveFactorySentry(task: TransferTask): FactorySentrySourceResolution =
+        FactorySentryTransferSource.resolve(
+            context = applicationContext,
+            storageUuid = task.sourceStorageUuid,
+            eventId = task.sourceEventId,
+            relativePath = task.sourceRelativePath,
+            expectedBytes = task.sizeBytes,
+            expectedLastModifiedEpochMs = task.sourceLastModifiedEpochMs,
+        )
+
+    private fun resolveOpenAvmUsb(task: TransferTask): OpenAvmUsbSourceResolution =
+        OpenAvmUsbTransferSource.resolve(applicationContext, task)
 
     private fun cancelRemote(task: TransferTask, endpoint: PhoneEndpoint) {
         val uploadId = task.uploadId
@@ -187,6 +296,11 @@ class TransferService : Service() {
     private fun notification(text: String): Notification {
         val pending = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("Sending recordings to phone").setContentText(text).setContentIntent(pending).setOngoing(true).build()
+            .setContentTitle(Utils.t("Sending recordings to phone", "正在发送录像到手机")).setContentText(text).setContentIntent(pending).setOngoing(true).build()
+    }
+
+    private fun removeForegroundNotification() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION)
     }
 }

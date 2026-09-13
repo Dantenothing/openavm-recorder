@@ -20,10 +20,11 @@ data class LaneTextureWindow(
 /**
  * Maps Zeekr's single four-camera texture into four source windows.
  *
- * Both layouts seen in the project are supported:
+ * All layouts confirmed in the project are supported:
  * - 5120x1280: four square lanes laid left-to-right;
  * - 1280x5140: four 1280px square lanes stacked top-to-bottom, separated and
  *   surrounded by five 4px green bands (5120 content rows + 20 band rows).
+ * - 2560x2560 factory SentryMode: four exact 1280px quadrants in a 2x2 grid.
  *
  * The math is normalized, so it also applies when the HAL advertises a small
  * 640x480 Surface hint while internally delivering the same composite content.
@@ -42,6 +43,21 @@ object FourLaneTextureLayout {
         require(lane in 1..4) { "lane must be in 1..4" }
 
         val index = lane - 1
+        if (videoWidth == SENTRY_GRID_SIZE && videoHeight == SENTRY_GRID_SIZE) {
+            val column = index % 2
+            val row = index / 2
+            return LaneTextureWindow(
+                axis = CompositeAxis.GRID_2X2,
+                u = column * 0.5f,
+                v = row * 0.5f,
+                width = 0.5f,
+                height = 0.5f,
+                sourceLeftPx = column * SENTRY_LANE_SIZE.toFloat(),
+                sourceTopPx = row * SENTRY_LANE_SIZE.toFloat(),
+                sourceWidthPx = SENTRY_LANE_SIZE.toFloat(),
+                sourceHeightPx = SENTRY_LANE_SIZE.toFloat(),
+            )
+        }
         val horizontal = videoWidth.toFloat() / videoHeight >= STRONG_FOUR_LANE_RATIO
         return if (horizontal) {
             val segment = segmentAlongAxis(
@@ -103,4 +119,14 @@ object FourLaneTextureLayout {
     }
 
     private data class AxisSegment(val startPx: Float, val sizePx: Float)
+
+    fun isKnownFourLane(videoWidth: Int, videoHeight: Int): Boolean =
+        videoWidth > 0 && videoHeight > 0 && (
+            (videoWidth == SENTRY_GRID_SIZE && videoHeight == SENTRY_GRID_SIZE) ||
+                videoWidth.toFloat() / videoHeight >= STRONG_FOUR_LANE_RATIO ||
+                videoHeight.toFloat() / videoWidth >= STRONG_FOUR_LANE_RATIO
+            )
+
+    private const val SENTRY_GRID_SIZE = 2560
+    private const val SENTRY_LANE_SIZE = 1280
 }

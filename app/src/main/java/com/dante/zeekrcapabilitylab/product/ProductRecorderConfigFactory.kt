@@ -66,8 +66,10 @@ object ProductRecorderConfigFactory {
         return RecorderConfig(
             source = source,
             segmentSeconds = settings.segmentSeconds,
-            storageLimitBytes = settings.storageLimitBytes,
+            storageLimitBytes = settings.internalStorageLimitBytes,
             minFreeBytes = settings.minFreeBytes,
+            storagePreference = settings.recordingStoragePreference,
+            usbQuotaBytes = settings.usbQuotaBytes,
             recordingMode = recordingMode,
             timeLapseMultiplier = if (recordingMode == RecordingMode.NORMAL) 1 else timeLapseMultiplier,
         )

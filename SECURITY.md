@@ -4,7 +4,7 @@ AVM Recorder is experimental vehicle-adjacent software. Reports about security, 
 
 ## Supported versions
 
-Only the latest public alpha release is currently supported. Older test APKs and the retired Capability Lab experiments are not supported.
+The current V4 / 4.0.0 public release is supported. Older public alphas are superseded. Older test APKs and the retired Capability Lab experiments are not supported.
 
 ## What to report
 

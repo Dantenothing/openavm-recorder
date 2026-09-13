@@ -14,7 +14,7 @@ data class WaveformPeaks(
 
 /** One streaming pass over the decoded PCM file, constant memory. */
 object WaveformBuilder {
-    fun build(file: File, meta: PcmMeta, buckets: Int = 900): WaveformPeaks {
+    fun build(file: File, meta: PcmMeta, buckets: Int = 900, cancelled: () -> Boolean = { false }): WaveformPeaks {
         require(buckets in 1..4096) { "buckets out of range" }
         val min = FloatArray(buckets) { 1f }
         val max = FloatArray(buckets) { -1f }
@@ -24,8 +24,10 @@ object WaveformBuilder {
             val buf = FloatArray(chunkFrames * meta.channels)
             var frame = 0L
             while (frame < meta.frameCount) {
+                if (cancelled()) throw SoundCancelledException()
                 val count = min(chunkFrames.toLong(), meta.frameCount - frame).toInt()
                 val read = input.readFrames(frame, count, buf)
+                if (read <= 0) throw SoundInputException("临时音频已截断，请重新导入", "DECODE_FAILED")
                 for (f in 0 until read) {
                     var peak = 0f
                     for (c in 0 until meta.channels) {

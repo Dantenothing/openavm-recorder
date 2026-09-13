@@ -10,8 +10,6 @@ import kotlin.math.roundToInt
 
 /** One-frame product thumbnails for horizontal or vertical four-lane files. */
 object FourLaneThumbs {
-    private const val STRONG_FOUR_LANE_RATIO = 3.2f
-
     fun extract(file: File, laneSizePx: Int = 240): List<Bitmap>? {
         if (!file.isFile || laneSizePx <= 0) return null
         var retriever: MediaMetadataRetriever? = null
@@ -95,8 +93,5 @@ object FourLaneThumbs {
     }
 
     private fun isFourLane(width: Int, height: Int): Boolean =
-        width > 0 && height > 0 && (
-            width.toFloat() / height >= STRONG_FOUR_LANE_RATIO ||
-                height.toFloat() / width >= STRONG_FOUR_LANE_RATIO
-            )
+        FourLaneTextureLayout.isKnownFourLane(width, height)
 }

@@ -1,11 +1,18 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import android.graphics.SurfaceTexture
+import android.graphics.Bitmap
 import android.media.MediaPlayer
 import android.view.Surface
 import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,16 +27,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,7 +59,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -59,6 +73,9 @@ import androidx.compose.ui.window.DialogProperties
 import com.dante.zeekrcapabilitylab.player.PlaybackDiagnostics
 import com.dante.zeekrcapabilitylab.player.PlaybackInspector
 import com.dante.zeekrcapabilitylab.player.PlaybackTrackText
+import com.dante.zeekrcapabilitylab.player.RecordingThumbnailCache
+import com.dante.zeekrcapabilitylab.player.TriggerTimeline
+import com.dante.zeekrcapabilitylab.player.TriggerTimelineSegment
 import com.dante.zeekrcapabilitylab.util.Utils
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.FisheyeCorrectionConfig
@@ -69,7 +86,11 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
+import com.dante.zeekrcapabilitylab.service.recorder.VideoTriggerMarker
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -80,6 +101,10 @@ private data class PlaybackControls(
     val currentPosition: () -> Long,
     val duration: () -> Long,
     val isPlaying: () -> Boolean,
+    val segmentIndex: () -> Int,
+    val seekToSegment: (Int) -> Unit,
+    val segmentDurations: () -> List<Long>,
+    val seekToSegmentPosition: (Int, Long) -> Unit,
 )
 
 private data class PlaybackSurfaceCallbacks(
@@ -88,6 +113,16 @@ private data class PlaybackSurfaceCallbacks(
     val onFirstFrame: () -> Unit,
     val onCompleted: () -> Unit,
     val onError: (String) -> Unit,
+)
+
+private data class PlaybackSegmentItem(
+    val file: File,
+    val segmentNumber: Int,
+    val startedAtEpochMs: Long,
+    val durationMs: Long,
+    val sizeBytes: Long,
+    val protected: Boolean,
+    val triggerMarkers: List<VideoTriggerMarker> = emptyList(),
 )
 
 /**
@@ -99,14 +134,21 @@ private data class PlaybackSurfaceCallbacks(
 fun FourLanePlayerDialog(
     file: File,
     files: List<File> = listOf(file),
+    segmentDurationHintsMs: Map<String, Long> = emptyMap(),
+    triggerMarkersByFile: Map<String, List<VideoTriggerMarker>> = emptyMap(),
     layoutKind: RecordingLayoutKind? = RecordingLayoutKind.FOUR_LANE_V1,
     sourceRole: RecordingSourceRole? = RecordingSourceRole.SURROUND,
     recordingMode: RecordingMode = RecordingMode.NORMAL,
     timeLapseMultiplier: Int = 1,
     realDurationMs: Long? = null,
+    compositeWidth: Int? = null,
+    compositeHeight: Int? = null,
+    laneLabels: List<String>? = null,
+    recordedAtEpochMs: Long? = null,
+    displayTitle: String? = null,
     onPrevious: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
-    onSendToPhone: (() -> Boolean)? = null,
+    onSendToPhone: ((List<File>) -> Boolean)? = null,
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
@@ -114,12 +156,37 @@ fun FourLanePlayerDialog(
     val playlist = remember(file, files) {
         files.ifEmpty { listOf(file) }.distinctBy { it.absolutePath }
     }
+    val segmentItems = remember(playlist, recordedAtEpochMs, segmentDurationHintsMs, triggerMarkersByFile) {
+        playlist.mapIndexed { index, segmentFile ->
+            val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(segmentFile))
+            PlaybackSegmentItem(
+                file = segmentFile,
+                segmentNumber = sidecar?.segmentNumber?.takeIf { it > 0 } ?: (index + 1),
+                startedAtEpochMs = sidecar?.startedAtEpochMs
+                    ?: sidecar?.requestedAtEpochMs
+                    ?: recordedAtEpochMs?.takeIf { playlist.size == 1 }
+                    ?: segmentFile.lastModified(),
+                durationMs = sidecar?.actualTrack?.durationMs
+                    ?: sidecar?.realDurationMs?.let { real ->
+                        if (sidecar.timeLapseMultiplier > 1) real / sidecar.timeLapseMultiplier else real
+                    }
+                    ?: segmentDurationHintsMs[segmentFile.absolutePath]?.takeIf { it > 0L }
+                    ?: 0L,
+                sizeBytes = segmentFile.length(),
+                protected = sidecar?.protected == true,
+                triggerMarkers = triggerMarkersByFile[segmentFile.absolutePath] ?: sidecar?.triggerMarkers.orEmpty(),
+            )
+        }
+    }
+    val thumbnailCache = remember(context) {
+        RecordingThumbnailCache(File(context.cacheDir, "recording-covers"))
+    }
     val settings = remember { SettingsStore.get(context) }
     val languageMode by AppLanguage.mode.collectAsState()
     val diagnostics by produceState<PlaybackDiagnostics?>(initialValue = null, file) {
         value = withContext(Dispatchers.IO) { PlaybackInspector.inspect(file) }
     }
-    val directionLabels = productDirectionLabels()
+    val directionLabels = laneLabels?.takeIf { it.size == 4 } ?: productDirectionLabels()
     val isFourLane = layoutKind != RecordingLayoutKind.SINGLE_V1
 
     var controls by remember(playlist) { mutableStateOf<PlaybackControls?>(null) }
@@ -127,8 +194,18 @@ fun FourLanePlayerDialog(
     var firstFrame by remember(playlist) { mutableStateOf(false) }
     var positionMs by remember(playlist) { mutableStateOf(0L) }
     var durationMs by remember(playlist) { mutableStateOf(0L) }
+    var playableDurations by remember(segmentItems) { mutableStateOf(segmentItems.map { it.durationMs }) }
+    val triggerMarkers = remember(segmentItems, playableDurations) {
+        TriggerTimeline.assemble(segmentItems.mapIndexed { index, item ->
+            TriggerTimelineSegment(playableDurations.getOrElse(index) { item.durationMs }, item.triggerMarkers)
+        })
+    }
     var dragging by remember(playlist) { mutableStateOf(false) }
     var draggedPositionMs by remember(playlist) { mutableStateOf(0L) }
+    var activeSegmentIndex by remember(playlist) { mutableStateOf(0) }
+    var selectedSegmentPaths by remember(playlist) {
+        mutableStateOf(playlist.firstOrNull()?.let { setOf(it.absolutePath) } ?: emptySet())
+    }
     var status by remember(file, languageMode) {
         mutableStateOf(Utils.t("Opening recording…", "正在打开录像…"))
     }
@@ -156,7 +233,9 @@ fun FourLanePlayerDialog(
         while (true) {
             positionMs = runCatching { active.currentPosition() }.getOrDefault(positionMs)
             durationMs = runCatching { active.duration() }.getOrDefault(durationMs)
+            playableDurations = runCatching { active.segmentDurations() }.getOrDefault(playableDurations)
             playing = runCatching { active.isPlaying() }.getOrDefault(false)
+            activeSegmentIndex = runCatching { active.segmentIndex() }.getOrDefault(activeSegmentIndex)
             delay(250L)
         }
     }
@@ -189,7 +268,7 @@ fun FourLanePlayerDialog(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            if (recordingMode == RecordingMode.TIME_LAPSE) {
+                            displayTitle ?: if (recordingMode == RecordingMode.TIME_LAPSE) {
                                 Utils.t("Time-lapse", "延时摄影") +
                                     " · ${playbackSourceLabel(sourceRole)} · ${timeLapseMultiplier}×"
                             } else {
@@ -199,7 +278,7 @@ fun FourLanePlayerDialog(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            Utils.formatEpoch(file.lastModified()),
+                            Utils.formatEpoch(recordedAtEpochMs ?: file.lastModified()),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -212,11 +291,37 @@ fun FourLanePlayerDialog(
                     Modifier
                         .fillMaxWidth()
                         .weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
+                    PlaybackSegmentRail(
+                        items = segmentItems,
+                        activeIndex = activeSegmentIndex,
+                        selectedPaths = selectedSegmentPaths,
+                        layoutKind = layoutKind ?: RecordingLayoutKind.FOUR_LANE_V1,
+                        thumbnailCache = thumbnailCache,
+                        onJump = { index ->
+                            controls?.seekToSegment?.invoke(index)
+                            activeSegmentIndex = index
+                            status = Utils.t(
+                                "Playing {0}", "正在播放 {0}", formatSegmentClock(segmentItems[index].startedAtEpochMs))
+                        },
+                        onToggle = { path ->
+                            selectedSegmentPaths = if (path in selectedSegmentPaths) {
+                                selectedSegmentPaths - path
+                            } else {
+                                selectedSegmentPaths + path
+                            }
+                        },
+                        onSelectAll = { selectedSegmentPaths = playlist.mapTo(mutableSetOf()) { it.absolutePath } },
+                        onClear = { selectedSegmentPaths = emptySet() },
+                        modifier = Modifier
+                            .weight(0.92f)
+                            .fillMaxHeight(),
+                    )
+
                     BoxWithConstraints(
                         modifier = Modifier
-                            .weight(1.75f)
+                            .weight(1.65f)
                             .fillMaxHeight(),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -273,7 +378,10 @@ fun FourLanePlayerDialog(
                                 if (isFourLane) {
                                     FourLanePlaybackSurface(
                                         files = playlist,
+                                        segmentDurationHintsMs = segmentDurationHintsMs,
                                         container = playbackContainer,
+                                        compositeWidth = compositeWidth ?: 1280,
+                                        compositeHeight = compositeHeight ?: 5140,
                                         displayMode = displayMode,
                                         lensMode = lensMode,
                                         correctionConfig = settings.fisheyeCorrection,
@@ -306,6 +414,7 @@ fun FourLanePlayerDialog(
                                 } else {
                                     SinglePlaybackSurface(
                                         files = playlist,
+                                        segmentDurationHintsMs = segmentDurationHintsMs,
                                         textureView = singleTextureView,
                                         callbacks = playbackCallbacks,
                                         modifier = Modifier.fillMaxSize(),
@@ -332,12 +441,7 @@ fun FourLanePlayerDialog(
                         }
                     }
 
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .verticalScroll(rememberScrollState()),
-                    ) {
+                    Column(Modifier.weight(0.93f).fillMaxHeight()) {
                         PlaybackInfoCard(
                             diagnostics = diagnostics,
                             files = playlist,
@@ -345,6 +449,7 @@ fun FourLanePlayerDialog(
                             realDurationMs = realDurationMs,
                             recordingMode = recordingMode,
                             status = status,
+                            recordedAtEpochMs = recordedAtEpochMs,
                         )
                         error?.let {
                             Text(
@@ -354,18 +459,30 @@ fun FourLanePlayerDialog(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
-                        Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.weight(1f))
+                        Spacer(Modifier.height(10.dp))
                         Button(
                             onClick = {
-                                val queued = onSendToPhone?.invoke() == true
-                                if (queued) status = Utils.t("Added to phone transfer queue", "已加入手机传输队列")
+                                val selectedFiles = playlist.filter { it.absolutePath in selectedSegmentPaths }
+                                val queued = onSendToPhone?.invoke(selectedFiles) == true
+                                if (queued) status = Utils.t(
+                                    "Selected segments added to phone transfer queue",
+                                    "选中分段已加入手机传输队列",
+                                )
                             },
-                            enabled = onSendToPhone != null,
+                            enabled = onSendToPhone != null && selectedSegmentPaths.isNotEmpty(),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(56.dp),
                         ) {
-                            Text(Utils.t("Send to phone", "发送到手机"), fontWeight = FontWeight.SemiBold)
+                            val selectedBytes = segmentItems
+                                .filter { it.file.absolutePath in selectedSegmentPaths }
+                                .sumOf { it.sizeBytes }
+                            Text(
+                                Utils.t(
+                                    "Send selected ({0}, {1})", "发送选中（{0} 段，{1}）", selectedSegmentPaths.size, formatPlaybackBytes(selectedBytes)),
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                         Spacer(Modifier.height(8.dp))
                         OutlinedButton(
@@ -383,6 +500,16 @@ fun FourLanePlayerDialog(
                     }
                 }
 
+                SentryTriggerTimeline(
+                    markers = triggerMarkers, durationMs = durationMs,
+                    positionMs = if (dragging) draggedPositionMs else positionMs,
+                    enabled = controls != null,
+                    onSeek = { point ->
+                        controls?.seekToSegmentPosition?.invoke(point.segmentIndex, point.localPositionMs)
+                        positionMs = point.positionMs
+                        dragging = false
+                    },
+                )
                 PlaybackTimeline(
                     positionMs = if (dragging) draggedPositionMs else positionMs,
                     durationMs = durationMs,
@@ -413,6 +540,139 @@ fun FourLanePlayerDialog(
     }
 
 }
+
+@Composable
+private fun PlaybackSegmentRail(
+    items: List<PlaybackSegmentItem>,
+    activeIndex: Int,
+    selectedPaths: Set<String>,
+    layoutKind: RecordingLayoutKind,
+    thumbnailCache: RecordingThumbnailCache,
+    onJump: (Int) -> Unit,
+    onToggle: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(activeIndex, items.size) {
+        if (activeIndex in items.indices) gridState.animateScrollToItem(activeIndex)
+    }
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                Utils.t("One-minute segments", "一分钟分段"),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            TextButton(onClick = onSelectAll, enabled = selectedPaths.size < items.size) {
+                Text(Utils.t("All", "全选"))
+            }
+            TextButton(onClick = onClear, enabled = selectedPaths.isNotEmpty()) {
+                Text(Utils.t("Clear", "清除"))
+            }
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            state = gridState,
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            contentPadding = PaddingValues(bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            itemsIndexed(items, key = { _, item -> item.file.absolutePath }) { index, item ->
+                val thumbnail by produceState<Bitmap?>(
+                    initialValue = null,
+                    item.file.absolutePath,
+                    item.file.lastModified(),
+                    layoutKind,
+                ) {
+                    value = withContext(Dispatchers.IO) {
+                        thumbnailCache.loadOrCreate(item.file, layoutKind, laneSizePx = 88)
+                    }
+                }
+                val active = index == activeIndex
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (active) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        )
+                        .border(
+                            width = if (active) 3.dp else 1.dp,
+                            color = if (active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outlineVariant,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .clickable { onJump(index) }
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .clip(RoundedCornerShape(topStart = 9.dp, topEnd = 9.dp))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (thumbnail != null && thumbnail?.isRecycled == false) {
+                            Image(
+                                bitmap = thumbnail!!.asImageBitmap(),
+                                contentDescription = Utils.t("Segment thumbnail", "分段缩略图"),
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit,
+                            )
+                        } else {
+                            Text(formatSegmentClock(item.startedAtEpochMs), color = Color.LightGray)
+                        }
+                        Checkbox(
+                            checked = item.file.absolutePath in selectedPaths,
+                            onCheckedChange = { onToggle(item.file.absolutePath) },
+                            modifier = Modifier.align(Alignment.TopStart),
+                        )
+                        if (active) {
+                            Text(
+                                Utils.t("Playing", "播放中"),
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(6.dp)
+                                    .background(Color(0xCC000000), RoundedCornerShape(999.dp))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp),
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 7.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            formatSegmentClock(item.startedAtEpochMs),
+                            modifier = Modifier.weight(1f),
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                        )
+                        if (item.protected) {
+                            Text(
+                                Utils.t("Protected", "已保护"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatSegmentClock(epochMs: Long): String =
+    SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(epochMs))
 
 @Composable
 private fun PlaybackSequenceButton(
@@ -451,6 +711,7 @@ private fun PlaybackInfoCard(
     realDurationMs: Long?,
     recordingMode: RecordingMode,
     status: String,
+    recordedAtEpochMs: Long?,
 ) {
     val first = files.first()
     val sidecar = remember(first.absolutePath, first.lastModified()) {
@@ -462,6 +723,10 @@ private fun PlaybackInfoCard(
         ?: diagnostics?.durationMs
         ?: sidecar?.actualTrack?.durationMs
         ?: 0L
+    val recordedAt = recordedAtEpochMs
+        ?: sidecar?.startedAtEpochMs
+        ?: sidecar?.requestedAtEpochMs
+        ?: first.lastModified()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text(
@@ -471,7 +736,7 @@ private fun PlaybackInfoCard(
             )
             Spacer(Modifier.height(10.dp))
             PlaybackInfoRow(Utils.t("Status", "状态"), status)
-            PlaybackInfoRow(Utils.t("Recorded", "录像时间"), Utils.formatEpoch(first.lastModified()))
+            PlaybackInfoRow(Utils.t("Recorded", "录像时间"), Utils.formatEpoch(recordedAt))
             PlaybackInfoRow(Utils.t("Duration", "时长"), formatPlaybackTime(effectiveDurationMs))
             if (recordingMode == RecordingMode.TIME_LAPSE && realDurationMs != null) {
                 PlaybackInfoRow(Utils.t("Captured time", "实拍时长"), formatPlaybackTime(realDurationMs))
@@ -543,6 +808,7 @@ private fun PlaybackTimeline(
     onToggle: () -> Unit,
 ) {
     val safeDuration = durationMs.coerceAtLeast(1L)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -588,12 +854,16 @@ private fun PlaybackTimeline(
             ) { Text(Utils.t("Forward 10s", "前进 10 秒")) }
         }
     }
+    }
 }
 
 @Composable
 private fun FourLanePlaybackSurface(
     files: List<File>,
+    segmentDurationHintsMs: Map<String, Long>,
     container: FourLaneTextureContainer,
+    compositeWidth: Int,
+    compositeHeight: Int,
     displayMode: FourLaneDisplayMode,
     lensMode: FourLaneLensMode,
     correctionConfig: FisheyeCorrectionConfig,
@@ -603,6 +873,7 @@ private fun FourLanePlaybackSurface(
     AndroidView(
         factory = { container },
         update = {
+            it.setCompositeSize(compositeWidth, compositeHeight)
             it.displayMode = displayMode
             it.lensMode = lensMode
             it.correctionConfig = correctionConfig
@@ -610,27 +881,29 @@ private fun FourLanePlaybackSurface(
         modifier = modifier,
     )
 
-    PlaybackMediaBinding(files, container.textureView, callbacks)
+    PlaybackMediaBinding(files, segmentDurationHintsMs, container.textureView, callbacks)
 }
 
 @Composable
 private fun SinglePlaybackSurface(
     files: List<File>,
+    segmentDurationHintsMs: Map<String, Long>,
     textureView: TextureView,
     callbacks: PlaybackSurfaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
     AndroidView(factory = { textureView }, modifier = modifier)
-    PlaybackMediaBinding(files, textureView, callbacks)
+    PlaybackMediaBinding(files, segmentDurationHintsMs, textureView, callbacks)
 }
 
 @Composable
 private fun PlaybackMediaBinding(
     files: List<File>,
+    segmentDurationHintsMs: Map<String, Long>,
     textureView: TextureView,
     callbacks: PlaybackSurfaceCallbacks,
 ) {
-    DisposableEffect(files.map { it.absolutePath }, textureView) {
+    DisposableEffect(files.map { it.absolutePath }, segmentDurationHintsMs, textureView) {
         val playlist = files.filter(File::isFile)
         var player: MediaPlayer? = null
         var outputSurface: Surface? = null
@@ -643,6 +916,7 @@ private fun PlaybackMediaBinding(
                 ?: sidecar?.realDurationMs?.let { real ->
                     if (sidecar.timeLapseMultiplier > 1) real / sidecar.timeLapseMultiplier else real
                 }
+                ?: segmentDurationHintsMs[media.absolutePath]?.takeIf { it > 0L }
                 ?: 0L
         }.toMutableList()
 
@@ -691,7 +965,20 @@ private fun PlaybackMediaBinding(
                             runCatching { player?.currentPosition?.toLong() ?: 0L }.getOrDefault(0L)
                     },
                     duration = ::totalDuration,
+                    segmentDurations = { durations.toList() },
+                    seekToSegmentPosition = { index, local ->
+                        if (index in playlist.indices) {
+                            seekGlobal(durations.take(index).sum() + local.coerceIn(0L, durations[index].coerceAtLeast(0L)))
+                        }
+                    },
                     isPlaying = { runCatching { player?.isPlaying == true }.getOrDefault(false) },
+                    segmentIndex = { currentIndex },
+                    seekToSegment = { index ->
+                        if (index in playlist.indices) {
+                            val wasPlaying = runCatching { player?.isPlaying == true }.getOrDefault(desiredPlaying)
+                            openIndex(index, 0L, wasPlaying)
+                        }
+                    },
                 ),
             )
         }
@@ -844,7 +1131,7 @@ private fun formatPlaybackBytes(bytes: Long): String = when {
 }
 
 private fun playbackSourceLabel(role: RecordingSourceRole?): String = when (role) {
-    RecordingSourceRole.CABIN -> "Cabin"
-    RecordingSourceRole.IR -> "IR"
+    RecordingSourceRole.CABIN -> Utils.t("Cabin", "车内")
+    RecordingSourceRole.IR -> Utils.t("Infrared", "红外")
     else -> "360°"
 }

@@ -93,7 +93,7 @@ fun QrScannerScreen(
                             analysis,
                         )
                     } catch (t: Throwable) {
-                        error = "相机启动失败：${t.message ?: t.javaClass.simpleName}"
+                        error = com.dante.zeekrbridge.ui.t("Camera could not start: {0}", "相机启动失败：{0}", t.message ?: t.javaClass.simpleName)
                     }
                 }, ContextCompat.getMainExecutor(ctx))
                 previewView
@@ -108,12 +108,12 @@ fun QrScannerScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "扫描车机屏幕上的配对二维码",
+                t("Scan the pairing QR code on the vehicle screen", "扫描车机屏幕上的配对二维码"),
                 color = Color.White,
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                "二维码有效期约 5 分钟；若已过期请让车机重新生成。",
+                t("The QR code expires after about 5 minutes. Generate a new code on the vehicle if needed.", "二维码有效期约 5 分钟；若已过期请让车机重新生成。"),
                 color = Color.White.copy(alpha = 0.75f),
                 style = MaterialTheme.typography.bodySmall,
             )

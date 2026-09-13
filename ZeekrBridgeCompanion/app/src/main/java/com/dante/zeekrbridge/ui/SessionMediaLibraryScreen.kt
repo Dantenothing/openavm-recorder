@@ -1,18 +1,34 @@
 package com.dante.zeekrbridge.ui
 
-import android.Manifest
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import com.dante.zeekrbridge.player.PlaybackSeekRequest
+
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -67,9 +83,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -92,6 +110,10 @@ import com.dante.zeekrbridge.core.LibraryBackAction
 import com.dante.zeekrbridge.core.MediaDeletePlan
 import com.dante.zeekrbridge.core.MediaDeletePlanner
 import com.dante.zeekrbridge.core.ReceivedStore
+import com.dante.zeekrbridge.core.ReceivedSentryRegistrar
+import com.dante.zeekrbridge.core.SavedMediaOrigin
+import com.dante.zeekrbridge.core.SavedMediaRecord
+import com.dante.zeekrbridge.core.SavedMediaStore
 import com.dante.zeekrbridge.core.resolveLibraryBackAction
 import com.dante.zeekrbridge.core.ServerLog
 import com.dante.zeekrbridge.core.WsType
@@ -107,9 +129,43 @@ import kotlinx.coroutines.withContext
 
 private enum class LibrarySection(val en: String, val zh: String) {
     ALL("All", "全部"),
-    EVENTS("Events", "事件"),
-    ON_VEHICLE("On vehicle", "车机录像"),
-    PHONE("Phone files", "手机文件"),
+    NORMAL("Recordings", "普通视频"),
+    TIME_LAPSE("Time-lapse", "延时视频"),
+    EVENTS("Incidents", "紧急事件"),
+    SENTRY("Sentry", "哨兵模式"),
+}
+
+private data class UriPlaybackRequest(
+    val uri: Uri,
+    val displayName: String,
+    val durationMs: Long,
+    val sourceRole: IndexedSourceRole = IndexedSourceRole.UNKNOWN,
+    val layoutKind: IndexedLayoutKind = IndexedLayoutKind.UNKNOWN,
+    val laneLabels: List<String> = emptyList(),
+    val laneOrder: List<Int> = emptyList(),
+    val originalWidth: Int? = null,
+    val originalHeight: Int? = null,
+)
+
+private sealed interface LibraryFeedItem {
+    val key: String
+    val timestamp: Long
+
+    data class Session(val value: IndexedRecordingSession) : LibraryFeedItem {
+        override val key: String = "session:${value.id}"
+        override val timestamp: Long = value.startedAtEpochMs
+    }
+
+    data class Event(val value: IndexedRecordingEvent) : LibraryFeedItem {
+        override val key: String = "event:${value.id}"
+        override val timestamp: Long = value.startedAtEpochMs
+    }
+
+    data class Saved(val value: SavedMediaRecord) : LibraryFeedItem {
+        override val key: String = "saved:${value.id}"
+        override val timestamp: Long = value.createdAtEpochMs
+    }
+
 }
 
 private data class MediaDetail(
@@ -127,83 +183,95 @@ private data class MediaDetail(
     val cover: IndexedMediaSegment get() = segments.first()
 }
 
-private data class SessionPlaybackRequest(
-    val detail: MediaDetail,
-    val initialIndex: Int,
-)
-
 private data class BatchDeleteRequest(
     val logicalCount: Int,
     val isEvent: Boolean,
     val plan: MediaDeletePlan,
 )
 
+// Save identifiers rather than entire metadata graphs when the Activity rotates.
+private val MediaDetailStateSaver = listSaver<MediaDetail?, Any>(
+    save = { value -> value?.let { listOf(it.id, it.isEvent) }.orEmpty() },
+    restore = { values ->
+        val id = values.getOrNull(0) as? String
+        if (values.getOrNull(1) == true) MediaIndexStore.snapshot.value.events.firstOrNull { it.id == id }?.toDetail()
+        else MediaIndexStore.snapshot.value.sessions.firstOrNull { it.id == id }?.toDetail()
+    },
+)
+
+private val UriPlaybackStateSaver = listSaver<UriPlaybackRequest?, Any>(
+    save = { value -> value?.let {
+        listOf(it.uri.toString(), it.displayName, it.durationMs, it.sourceRole.name, it.layoutKind.name,
+            ArrayList(it.laneLabels), ArrayList(it.laneOrder), it.originalWidth ?: 0, it.originalHeight ?: 0)
+    }.orEmpty() },
+    restore = { values -> runCatching {
+        UriPlaybackRequest(Uri.parse(values[0] as String), values[1] as String, values[2] as Long,
+            IndexedSourceRole.valueOf(values[3] as String), IndexedLayoutKind.valueOf(values[4] as String),
+            (values[5] as List<*>).filterIsInstance<String>(), (values[6] as List<*>).filterIsInstance<Int>(),
+            (values[7] as Int).takeIf { it > 0 }, (values[8] as Int).takeIf { it > 0 })
+    }.getOrNull() },
+)
+
 @Composable
-fun SessionMediaLibraryScreen() {
+fun SessionMediaLibraryScreen(onDetailVisibilityChanged: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val received by ReceivedStore.files.collectAsState()
     val index by MediaIndexStore.snapshot.collectAsState()
     val scanning by MediaIndexStore.scanning.collectAsState()
-    val catalogOnline by CarCatalogStore.online.collectAsState()
-    val carItems by CarCatalogStore.items.collectAsState()
-    val uploads by CarCatalogStore.uploads.collectAsState()
-    val lastMessage by CarCatalogStore.lastMessage.collectAsState()
+    val savedMedia by SavedMediaStore.records.collectAsState()
+    val sentryMedia = savedMedia.filter { it.origin == SavedMediaOrigin.SENTRY }
+    val normalSessions = index.sessions.filter { it.recordingMode == IndexedRecordingMode.NORMAL }
+    val timeLapseSessions = index.sessions.filter { it.recordingMode == IndexedRecordingMode.TIME_LAPSE }
 
     var sectionName by rememberSaveable { mutableStateOf(LibrarySection.ALL.name) }
-    val requestedSection = runCatching { LibrarySection.valueOf(sectionName) }.getOrDefault(LibrarySection.ALL)
-    val section = if (requestedSection == LibrarySection.ON_VEHICLE) LibrarySection.ALL else requestedSection
-    var detail by remember { mutableStateOf<MediaDetail?>(null) }
+    val section = runCatching { LibrarySection.valueOf(sectionName) }.getOrDefault(LibrarySection.ALL)
+    var detail by rememberSaveable(stateSaver = MediaDetailStateSaver) { mutableStateOf<MediaDetail?>(null) }
     var exportDetail by remember { mutableStateOf<MediaDetail?>(null) }
-    var playSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
-    var sessionPlayback by remember { mutableStateOf<SessionPlaybackRequest?>(null) }
+    var uriPlayback by rememberSaveable(stateSaver = UriPlaybackStateSaver) { mutableStateOf<UriPlaybackRequest?>(null) }
     var deleteSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
     var batchDelete by remember { mutableStateOf<BatchDeleteRequest?>(null) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var noteSegment by remember { mutableStateOf<IndexedMediaSegment?>(null) }
     var noteText by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("") }
+    val allGridState = rememberLazyGridState()
     val sessionGridState = rememberLazyGridState()
+    val timeLapseGridState = rememberLazyGridState()
     val eventGridState = rememberLazyGridState()
+    val sentryGridState = rememberLazyGridState()
 
-    var mediaPermissionGranted by remember {
-        mutableStateOf(
-            if (Build.VERSION.SDK_INT >= 33) {
-                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-            } else {
-                context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-            },
-        )
+    LaunchedEffect(received) {
+        withContext(Dispatchers.IO) { ReceivedSentryRegistrar.reconcile(received) }
+        MediaIndexStore.refresh(received)
     }
-    var phoneVideos by remember { mutableStateOf<List<File>>(emptyList()) }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        mediaPermissionGranted = granted
-        if (granted) scope.launch { phoneVideos = queryPhoneVideos(context) }
-    }
-
-    LaunchedEffect(received) { MediaIndexStore.refresh(received) }
-    LaunchedEffect(catalogOnline) {
-        if (catalogOnline && carItems.isEmpty()) BridgeServer.sendToCars(WsType.LIST_RECORDINGS, emptyMap())
-    }
-    LaunchedEffect(section, mediaPermissionGranted) {
-        if (section == LibrarySection.PHONE && mediaPermissionGranted) phoneVideos = queryPhoneVideos(context)
-    }
+    LaunchedEffect(Unit) { SavedMediaStore.reconcileMissing() }
     LaunchedEffect(section) { selectedIds = emptySet() }
     LaunchedEffect(index, section) {
         val validIds = when (section) {
-            LibrarySection.ALL -> index.sessions.mapTo(hashSetOf()) { it.id }
+            LibrarySection.NORMAL -> normalSessions.mapTo(hashSetOf()) { it.id }
+            LibrarySection.TIME_LAPSE -> timeLapseSessions.mapTo(hashSetOf()) { it.id }
             LibrarySection.EVENTS -> index.events.mapTo(hashSetOf()) { it.id }
             else -> emptySet()
         }
         selectedIds = selectedIds.intersect(validIds)
     }
 
-    val playerOpen = sessionPlayback != null || playSegment != null
+    fun openDetail(value: MediaDetail) {
+        statusText = ""
+        detail = value
+    }
+    val currentVisibilityCallback by rememberUpdatedState(onDetailVisibilityChanged)
+    val detailOpen = detail != null || uriPlayback != null
+    DisposableEffect(detailOpen) {
+        currentVisibilityCallback(detailOpen)
+        onDispose { currentVisibilityCallback(false) }
+    }
+    val playerOpen = uriPlayback != null
     BackHandler(enabled = playerOpen || detail != null || selectedIds.isNotEmpty()) {
         when (resolveLibraryBackAction(playerOpen, detail != null, selectedIds.size)) {
             LibraryBackAction.CLOSE_PLAYER -> {
-                sessionPlayback = null
-                playSegment = null
+                uriPlayback = null
             }
             LibraryBackAction.CLOSE_DETAIL -> detail = null
             LibraryBackAction.CLEAR_SELECTION -> selectedIds = emptySet()
@@ -215,7 +283,8 @@ fun SessionMediaLibraryScreen() {
         MediaDetailScreen(
             detail = selected,
             onBack = { detail = null },
-            onPlay = { index -> sessionPlayback = SessionPlaybackRequest(selected, index) },
+            playbackObstructed = exportDetail != null || deleteSegment != null || noteSegment != null,
+            statusText = statusText,
             onExport = { exportDetail = selected },
             onShare = { shareMediaFile(context, it.file) },
             onSave = { segment ->
@@ -233,20 +302,22 @@ fun SessionMediaLibraryScreen() {
     } ?: Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
         if (selectedIds.isNotEmpty()) {
             val selectableIds = when (section) {
-                LibrarySection.ALL -> index.sessions.map { it.id }
+                LibrarySection.NORMAL -> normalSessions.map { it.id }
+                LibrarySection.TIME_LAPSE -> timeLapseSessions.map { it.id }
                 LibrarySection.EVENTS -> index.events.map { it.id }
                 else -> emptyList()
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    t("${selectedIds.size} selected", "已选择 ${selectedIds.size} 项"),
+                    t("{0} selected", "已选择 {0} 项", selectedIds.size),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = { selectedIds = selectableIds.toSet() }) { Text(t("Select all", "全选")) }
                 TextButton(onClick = {
                     val selectedGroups = when (section) {
-                        LibrarySection.ALL -> index.sessions.filter { it.id in selectedIds }.map { it.segments }
+                        LibrarySection.NORMAL -> normalSessions.filter { it.id in selectedIds }.map { it.segments }
+                        LibrarySection.TIME_LAPSE -> timeLapseSessions.filter { it.id in selectedIds }.map { it.segments }
                         LibrarySection.EVENTS -> index.events.filter { it.id in selectedIds }.map { it.segments }
                         else -> emptyList()
                     }
@@ -264,9 +335,7 @@ fun SessionMediaLibraryScreen() {
                     Text(t("Library", "媒体库"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     Text(
                         t(
-                            "${index.sessions.size} sessions · ${index.events.size} events",
-                            "${index.sessions.size} 次录像 · ${index.events.size} 个事件",
-                        ),
+                            "{0} recordings · {1} time-lapse · {2} incidents · {3} Sentry exports", "{0} 个普通视频 · {1} 个延时视频 · {2} 个紧急事件 · {3} 个哨兵成品", normalSessions.size, timeLapseSessions.size, index.events.size, sentryMedia.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -287,20 +356,44 @@ fun SessionMediaLibraryScreen() {
                 )
             }
         }
-        if (lastMessage.isNotBlank() && section == LibrarySection.ON_VEHICLE) {
-            Text(lastMessage, style = MaterialTheme.typography.bodySmall)
-        }
         if (statusText.isNotBlank()) Text(statusText, style = MaterialTheme.typography.bodySmall)
 
         Box(Modifier.weight(1f)) {
             when (section) {
-                LibrarySection.ALL -> SessionGrid(
+                LibrarySection.ALL -> CombinedMediaGrid(
                     sessions = index.sessions,
+                    events = index.events,
+                    sentry = sentryMedia,
+                    state = allGridState,
+                    onOpenSession = { openDetail(it.toDetail()) },
+                    onOpenEvent = { openDetail(it.toDetail()) },
+                    onOpenSaved = { record ->
+                        record.uri?.let { uri ->
+                            uriPlayback = record.toPlaybackRequest(uri)
+                        }
+                    },
+                )
+                LibrarySection.NORMAL -> SessionGrid(
+                    sessions = normalSessions,
                     state = sessionGridState,
                     emptyText = t("No OpenAVM recordings on this phone", "手机中还没有 OpenAVM 录像"),
                     selectedIds = selectedIds,
                     selectionMode = selectedIds.isNotEmpty(),
-                    onOpen = { detail = it.toDetail() },
+                    onOpen = { openDetail(it.toDetail()) },
+                    onToggle = { id ->
+                        selectedIds = selectedIds.toMutableSet().apply {
+                            if (!add(id)) remove(id)
+                        }
+                    },
+                    onLongPress = { selectedIds = selectedIds + it },
+                )
+                LibrarySection.TIME_LAPSE -> SessionGrid(
+                    sessions = timeLapseSessions,
+                    state = timeLapseGridState,
+                    emptyText = t("No time-lapse recordings", "暂无延时视频"),
+                    selectedIds = selectedIds,
+                    selectionMode = selectedIds.isNotEmpty(),
+                    onOpen = { openDetail(it.toDetail()) },
                     onToggle = { id ->
                         selectedIds = selectedIds.toMutableSet().apply {
                             if (!add(id)) remove(id)
@@ -314,7 +407,7 @@ fun SessionMediaLibraryScreen() {
                     emptyText = t("No saved incidents", "暂无保存的事件录像"),
                     selectedIds = selectedIds,
                     selectionMode = selectedIds.isNotEmpty(),
-                    onOpen = { detail = it.toDetail() },
+                    onOpen = { openDetail(it.toDetail()) },
                     onToggle = { id ->
                         selectedIds = selectedIds.toMutableSet().apply {
                             if (!add(id)) remove(id)
@@ -322,28 +415,11 @@ fun SessionMediaLibraryScreen() {
                     },
                     onLongPress = { selectedIds = selectedIds + it },
                 )
-                LibrarySection.ON_VEHICLE -> OnVehicleList(
-                    online = catalogOnline,
-                    items = carItems,
-                    receivedNames = index.segments.mapTo(hashSetOf()) { it.fileName },
-                    uploads = uploads,
-                    onRefresh = { BridgeServer.sendToCars(WsType.LIST_RECORDINGS, emptyMap()) },
-                    onDownload = { item ->
-                        BridgeServer.sendToCars(WsType.REQUEST_UPLOAD, mapOf("fileName" to item.fileName))
-                        statusText = t("Download requested", "已请求下载")
-                    },
-                )
-                LibrarySection.PHONE -> PhoneFilesList(
-                    permissionGranted = mediaPermissionGranted,
-                    files = phoneVideos,
-                    onRequestPermission = {
-                        permissionLauncher.launch(
-                            if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO
-                            else Manifest.permission.READ_EXTERNAL_STORAGE,
-                        )
-                    },
-                    onPlay = { file ->
-                        playSegment = externalSegment(file)
+                LibrarySection.SENTRY -> SavedMediaGrid(
+                    records = sentryMedia,
+                    state = sentryGridState,
+                    onPlay = { record ->
+                        record.uri?.let { uri -> uriPlayback = record.toPlaybackRequest(uri) }
                     },
                 )
             }
@@ -354,23 +430,18 @@ fun SessionMediaLibraryScreen() {
         MediaExportDialog(segments = selected.segments, onDismiss = { exportDetail = null })
     }
 
-    playSegment?.let { segment ->
-        MediaPlaybackDialog(
-            file = segment.file,
-            laneLabels = playbackLabels(segment),
-            laneOrder = segment.playbackLaneOrder,
-            onDismiss = { playSegment = null },
-        )
-    }
-    sessionPlayback?.let { request ->
-        MediaSessionPlaybackDialog(
-            segments = request.detail.segments,
-            initialIndex = request.initialIndex,
-            isEvent = request.detail.isEvent,
-            recordingMode = request.detail.recordingMode,
-            timeLapseMultiplier = request.detail.timeLapseMultiplier,
-            realDurationMs = request.detail.realDurationMs,
-            onDismiss = { sessionPlayback = null },
+    uriPlayback?.let { request ->
+        UriMediaPlaybackDialog(
+            uri = request.uri,
+            displayName = request.displayName,
+            durationMs = request.durationMs,
+            sourceRole = request.sourceRole,
+            layoutKind = request.layoutKind,
+            laneLabels = request.laneLabels,
+            laneOrder = request.laneOrder,
+            originalWidth = request.originalWidth,
+            originalHeight = request.originalHeight,
+            onDismiss = { uriPlayback = null },
         )
     }
     deleteSegment?.let { segment ->
@@ -397,14 +468,10 @@ fun SessionMediaLibraryScreen() {
                 Text(
                     if (request.isEvent) {
                         t(
-                            "${request.logicalCount} events reference ${request.plan.physicalVideoCount} physical videos. Moving them to trash can also remove those segments from their Sessions.",
-                            "${request.logicalCount} 个事件引用 ${request.plan.physicalVideoCount} 个分段文件。移入回收站后，这些分段也会从对应录像片段中消失。",
-                        )
+                            "{0} events reference {1} physical videos. Moving them to trash can also remove those segments from their Sessions.", "{0} 个事件引用 {1} 个分段文件。移入回收站后，这些分段也会从对应录像片段中消失。", request.logicalCount, request.plan.physicalVideoCount)
                     } else {
                         t(
-                            "${request.logicalCount} Sessions contain ${request.plan.physicalVideoCount} unique physical videos. MP4 files and metadata will move to OpenAVM trash.",
-                            "${request.logicalCount} 个录像片段共包含 ${request.plan.physicalVideoCount} 个分段文件。MP4 和元数据将移入 OpenAVM 回收站。",
-                        )
+                            "{0} Sessions contain {1} unique physical videos. MP4 files and metadata will move to OpenAVM trash.", "{0} 个录像片段共包含 {1} 个分段文件。MP4 和元数据将移入 OpenAVM 回收站。", request.logicalCount, request.plan.physicalVideoCount)
                     },
                 )
             },
@@ -417,9 +484,7 @@ fun SessionMediaLibraryScreen() {
                         selectedIds = emptySet()
                         batchDelete = null
                         statusText = t(
-                            "Moved $moved videos to OpenAVM trash",
-                            "已将 $moved 个视频移入 OpenAVM 回收站",
-                        )
+                            "Moved {0} videos to OpenAVM trash", "已将 {0} 个视频移入 OpenAVM 回收站", moved)
                     }
                 }) { Text(t("Move to trash", "移入回收站")) }
             },
@@ -479,7 +544,7 @@ private fun SessionGrid(
                     cover = session.cover,
                     title = when {
                         session.recordingMode == IndexedRecordingMode.TIME_LAPSE ->
-                            t("Time-lapse · ${session.timeLapseMultiplier}×", "延时摄影 · ${session.timeLapseMultiplier}×")
+                            t("Time-lapse · {0}×", "延时摄影 · {0}×", session.timeLapseMultiplier)
                         session.hasIncident -> t("Recording · incident saved", "普通录像 · 已保存事件")
                         else -> t("Recording", "普通录像")
                     },
@@ -548,6 +613,128 @@ private fun EventGrid(
 }
 
 @Composable
+private fun CombinedMediaGrid(
+    sessions: List<IndexedRecordingSession>,
+    events: List<IndexedRecordingEvent>,
+    sentry: List<SavedMediaRecord>,
+    state: LazyGridState,
+    onOpenSession: (IndexedRecordingSession) -> Unit,
+    onOpenEvent: (IndexedRecordingEvent) -> Unit,
+    onOpenSaved: (SavedMediaRecord) -> Unit,
+) {
+    val feed = remember(sessions, events, sentry) {
+        buildList<LibraryFeedItem> {
+            sessions.forEach { add(LibraryFeedItem.Session(it)) }
+            events.forEach { add(LibraryFeedItem.Event(it)) }
+            sentry.forEach { add(LibraryFeedItem.Saved(it)) }
+        }.sortedByDescending { it.timestamp }
+    }
+    if (feed.isEmpty()) return EmptyLibrary(t("No videos found", "暂无视频"))
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        state = state,
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        gridItems(feed, key = { it.key }) { item ->
+            when (item) {
+                is LibraryFeedItem.Session -> LibraryCard(
+                    cover = item.value.cover,
+                    title = if (item.value.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                        t("Time-lapse · {0}×", "延时摄影 · {0}×", item.value.timeLapseMultiplier)
+                    } else {
+                        t("Recording", "普通视频")
+                    },
+                    startedAt = item.value.startedAtEpochMs,
+                    durationMs = item.value.durationMs,
+                    sizeBytes = item.value.sizeBytes,
+                    segmentCount = item.value.segments.size,
+                    source = item.value.sourceRole,
+                    recordingMode = item.value.recordingMode,
+                    realDurationMs = item.value.realDurationMs,
+                    selected = false,
+                    onClick = { onOpenSession(item.value) },
+                    onLongClick = {},
+                )
+                is LibraryFeedItem.Event -> LibraryCard(
+                    cover = item.value.cover,
+                    title = t("★ Incident", "★ 紧急事件"),
+                    startedAt = item.value.startedAtEpochMs,
+                    durationMs = item.value.durationMs,
+                    sizeBytes = item.value.sizeBytes,
+                    segmentCount = item.value.segments.size,
+                    source = item.value.sourceRole,
+                    recordingMode = IndexedRecordingMode.NORMAL,
+                    realDurationMs = item.value.durationMs,
+                    selected = false,
+                    onClick = { onOpenEvent(item.value) },
+                    onLongClick = {},
+                )
+                is LibraryFeedItem.Saved -> SavedMediaCard(item.value) { onOpenSaved(item.value) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedMediaGrid(
+    records: List<SavedMediaRecord>,
+    state: LazyGridState,
+    onPlay: (SavedMediaRecord) -> Unit,
+) {
+    if (records.isEmpty()) return EmptyLibrary(t("No saved Sentry videos", "暂无已保存的哨兵视频"))
+    val groups = records.sortedByDescending { it.createdAtEpochMs }.groupBy { dayLabel(it.createdAtEpochMs) }
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        state = state,
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        groups.forEach { (day, values) ->
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text(day, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            gridItems(values, key = { it.id }) { record ->
+                SavedMediaCard(record) { onPlay(record) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedMediaCard(record: SavedMediaRecord, onClick: () -> Unit) {
+    val context = LocalContext.current
+    var bitmap by remember(record.id, record.sizeBytes) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(record.id, record.sizeBytes) {
+        bitmap = MediaThumbnailCache.loadOrCreate(context, record)
+    }
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                bitmap?.let {
+                    Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } ?: Icon(Icons.Default.PlayArrow, contentDescription = null)
+            }
+            Column(Modifier.padding(10.dp)) {
+                Text(t("Sentry video", "哨兵视频"), fontWeight = FontWeight.SemiBold)
+                Text(record.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "${formatDuration(record.durationMs)} · ${formatMediaBytes(record.sizeBytes)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun LibraryCard(
     cover: IndexedMediaSegment,
     title: String,
@@ -562,7 +749,7 @@ private fun LibraryCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(18.dp)
     Card(
         modifier = Modifier.fillMaxWidth()
             .then(
@@ -571,10 +758,12 @@ private fun LibraryCard(
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = shape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column {
             Box {
-                MediaCover(cover, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                MediaCover(cover, Modifier.fillMaxWidth().aspectRatio(16f / 9f), durationMs = durationMs)
                 if (selected) {
                     Checkbox(
                         checked = true,
@@ -583,30 +772,24 @@ private fun LibraryCard(
                     )
                 }
             }
-            Column(Modifier.padding(10.dp)) {
-                Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(formatClock(startedAt), style = MaterialTheme.typography.bodySmall)
-                Text(
-                    if (recordingMode == IndexedRecordingMode.TIME_LAPSE) {
-                        t(
-                            "${sourceLabel(source)} · captured ${formatDuration(realDurationMs)} → video ${formatDuration(durationMs)} · $segmentCount safety files",
-                            "${sourceLabel(source)} · 拍摄 ${formatDuration(realDurationMs)} → 成片 ${formatDuration(durationMs)} · $segmentCount 个安全文件",
-                        )
-                    } else {
-                        "${sourceLabel(source)} · ${formatDuration(durationMs)} · ${t("$segmentCount segments", "$segmentCount 个分段")}"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                )
-                Text(formatMediaBytes(sizeBytes), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(formatClock(startedAt), style = MaterialTheme.typography.titleMedium)
+                Text(title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${t("{0} segments", "{0} 个分段", segmentCount)} · ${formatMediaBytes(sizeBytes)}",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                    Text(t("Captured {0} → video {1}", "现实拍摄 {0} → 成片 {1}", formatDuration(realDurationMs), formatDuration(durationMs)),
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MediaCover(segment: IndexedMediaSegment, modifier: Modifier = Modifier) {
+private fun MediaCover(segment: IndexedMediaSegment, modifier: Modifier = Modifier, showBadges: Boolean = true, durationMs: Long = segment.durationMs) {
     val context = LocalContext.current
     var bitmap by remember(segment.id, segment.sizeBytes) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(segment.id, segment.sizeBytes) {
@@ -620,14 +803,21 @@ private fun MediaCover(segment: IndexedMediaSegment, modifier: Modifier = Modifi
         bitmap?.let {
             Image(it.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } ?: Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Surface(
+        if (showBadges) {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.38f)))))
+            Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp), color = Color.Black.copy(alpha = 0.72f), shape = RoundedCornerShape(6.dp)) {
+                Text(formatDuration(durationMs), Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                    color = Color.White, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        if (showBadges) Surface(
             modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
             shape = RoundedCornerShape(8.dp),
             color = Color.Black.copy(alpha = 0.68f),
         ) {
             Text(sourceLabel(segment.sourceRole), color = Color.White, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp))
         }
-        if (segment.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+        if (showBadges && segment.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
             Surface(
                 modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                 shape = RoundedCornerShape(8.dp),
@@ -644,87 +834,105 @@ private fun MediaCover(segment: IndexedMediaSegment, modifier: Modifier = Modifi
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MediaDetailScreen(
     detail: MediaDetail,
     onBack: () -> Unit,
-    onPlay: (Int) -> Unit,
+    playbackObstructed: Boolean,
+    statusText: String,
     onExport: () -> Unit,
     onShare: (IndexedMediaSegment) -> Unit,
     onSave: (IndexedMediaSegment) -> Unit,
     onNote: (IndexedMediaSegment) -> Unit,
     onDelete: (IndexedMediaSegment) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    var activeId by rememberSaveable(detail.id) { mutableStateOf(detail.cover.id) }
+    var seekRequest by remember(detail.id) { mutableStateOf<PlaybackSeekRequest?>(null) }
+    var visibleSegments by rememberSaveable(detail.id) { mutableIntStateOf(3) }
+    val active = detail.segments.firstOrNull { it.id == activeId } ?: detail.cover
+    val activeIndex = detail.segments.indexOf(active)
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, t("Back", "返回")) }
-            Text(
-                if (detail.isEvent) t("Incident", "事件录像") else t("Recording clip", "录像片段"),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
+            Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                Text(
+                    when {
+                        detail.isEvent -> t("Incident", "事件录像")
+                        detail.recordingMode == IndexedRecordingMode.TIME_LAPSE -> t("Time-lapse", "延时视频")
+                        else -> t("Recording clip", "录像片段")
+                    }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                )
+                Text(formatDateTime(detail.startedAtEpochMs), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            SegmentActionsMenu(enabled = active.file.isFile,
+                onSave = { onSave(active) }, onShare = { onShare(active) },
+                onNote = { onNote(active) }, onDelete = { onDelete(active) })
         }
-        MediaCover(detail.cover, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-        Spacer(Modifier.height(12.dp))
-        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-            Column(Modifier.padding(16.dp)) {
-                Text(formatDateTime(detail.startedAtEpochMs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
-                        t(
-                            "${sourceLabel(detail.sourceRole)} · Time-lapse ${detail.timeLapseMultiplier}×",
-                            "${sourceLabel(detail.sourceRole)} · 延时摄影 ${detail.timeLapseMultiplier}×",
-                        )
-                    } else {
-                        "${sourceLabel(detail.sourceRole)} · ${formatDuration(detail.durationMs)}"
-                    },
-                )
-                if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
-                    Text(
-                        t(
-                            "Captured ${formatDuration(detail.realDurationMs)} → video ${formatDuration(detail.durationMs)}",
-                            "现实拍摄 ${formatDuration(detail.realDurationMs)} → 成片 ${formatDuration(detail.durationMs)}",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            MediaSessionPlayer(detail.segments, seekRequest, playbackObstructed, onActiveMediaChanged = { activeId = it })
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                DetailBadge(sourceLabel(detail.sourceRole))
+                DetailBadge(formatDuration(detail.durationMs))
+                DetailBadge(formatMediaBytes(detail.sizeBytes))
+                if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) DetailBadge("${detail.timeLapseMultiplier}×")
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = onExport, enabled = detail.segments.any { it.file.isFile },
+                    modifier = Modifier.weight(1f).heightIn(min = 52.dp), shape = MaterialTheme.shapes.small) {
+                    Icon(MediaIcons.Export, null, Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(t("Export clip", "导出片段"), maxLines = 2)
                 }
-                Text(
-                    t(
-                        "${detail.segments.size} physical segments · ${formatMediaBytes(detail.sizeBytes)}",
-                        "${detail.segments.size} 个分段文件 · ${formatMediaBytes(detail.sizeBytes)}",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Button(onClick = { onPlay(0) }, modifier = Modifier.padding(top = 10.dp)) {
-                    Text(
-                        if (detail.isEvent) t("Play incident continuously", "连续播放事件")
-                        else t(
-                            "Play ${formatPlaybackRange(detail.segments)}",
-                            "播放 ${formatPlaybackRange(detail.segments)}",
-                        ),
-                    )
+                OutlinedButton(onClick = { onShare(active) }, enabled = active.file.isFile,
+                    modifier = Modifier.weight(1f).heightIn(min = 52.dp), shape = MaterialTheme.shapes.small) {
+                    Icon(Icons.Default.Share, null, Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (detail.segments.size > 1) t("Share segment", "分享当前分段") else t("Share", "分享"), maxLines = 2)
                 }
-                OutlinedButton(onClick = onExport, modifier = Modifier.padding(top = 8.dp)) {
-                    Text(t("Export recording clip", "导出录像片段"))
+            }
+            if (statusText.isNotBlank()) {
+                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+                    Text(statusText, Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+            }
+            if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
+                Text(t("Captured {0} → video {1}", "现实拍摄 {0} → 成片 {1}", formatDuration(detail.realDurationMs), formatDuration(detail.durationMs)),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            MediaExportQueueCard()
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(t("Segments", "分段"), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text("${activeIndex + 1} / ${detail.segments.size}", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                detail.segments.take(visibleSegments).forEachIndexed { index, segment ->
+                    key(segment.id) {
+                        SegmentCard(index, segment, active = segment.id == activeId,
+                            onSelect = { seekRequest = PlaybackSeekRequest(segment.id, (seekRequest?.sequence ?: 0) + 1) },
+                            onShare = { onShare(segment) }, onSave = { onSave(segment) },
+                            onNote = { onNote(segment) }, onDelete = { onDelete(segment) })
+                    }
+                }
+                if (detail.segments.size > visibleSegments) {
+                    TextButton(onClick = { visibleSegments += 20 }, modifier = Modifier.fillMaxWidth()) {
+                        Text(t("Show more segments", "显示更多分段"))
+                    }
                 }
             }
         }
-        MediaExportQueueCard(Modifier.padding(top = 10.dp))
-        Spacer(Modifier.height(16.dp))
-        Text(t("Segment files", "分段文件"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        detail.segments.forEachIndexed { index, segment ->
-            SegmentCard(
-                index = index,
-                segment = segment,
-                onPlay = { onPlay(index) },
-                onShare = { onShare(segment) },
-                onSave = { onSave(segment) },
-                onNote = { onNote(segment) },
-                onDelete = { onDelete(segment) },
-            )
-        }
-        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun DetailBadge(label: String) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(8.dp)) {
+        Text(label, Modifier.padding(horizontal = 10.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -732,37 +940,61 @@ private fun MediaDetailScreen(
 private fun SegmentCard(
     index: Int,
     segment: IndexedMediaSegment,
-    onPlay: () -> Unit,
+    active: Boolean,
+    onSelect: () -> Unit,
     onShare: () -> Unit,
     onSave: () -> Unit,
     onNote: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Column(Modifier.padding(12.dp)) {
-            Text(t("Segment ${index + 1}", "分段 ${index + 1}"), fontWeight = FontWeight.SemiBold)
-            Text(
-                if (segment.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
-                    t(
-                        "${formatClock(segment.startedAtEpochMs)} · captured ${formatDuration(segment.realDurationMs ?: 0L)} → video ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}",
-                        "${formatClock(segment.startedAtEpochMs)} · 拍摄 ${formatDuration(segment.realDurationMs ?: 0L)} → 成片 ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}",
-                    )
-                } else {
-                    "${formatClock(segment.startedAtEpochMs)} · ${formatDuration(segment.durationMs)} · ${formatMediaBytes(segment.sizeBytes)}"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(segment.fileName, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 8.dp)) {
-                Button(onClick = onPlay) { Text(t("Play", "播放")) }
-                OutlinedButton(onClick = onSave) { Text(t("Save", "保存")) }
-                OutlinedButton(onClick = onShare) { Text(t("Share", "分享")) }
+    Surface(onClick = onSelect, enabled = segment.file.isFile,
+        modifier = Modifier.fillMaxWidth().semantics { selected = active },
+        shape = MaterialTheme.shapes.small,
+        color = if (active) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f) else MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))) {
+        Row(Modifier.padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.width(64.dp).aspectRatio(4f / 3f).clip(RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                MediaCover(segment, Modifier.fillMaxSize(), showBadges = false)
+                if (active) Surface(color = Color.Black.copy(alpha = 0.70f), shape = RoundedCornerShape(6.dp)) {
+                    Icon(MediaIcons.Play, null, Modifier.padding(4.dp).size(16.dp), tint = Color.White)
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = onNote) { Text(t("Note", "备注")) }
-                TextButton(onClick = onDelete) { Text(t("Delete segment", "删除分段")) }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(t("Segment {0}", "分段 {0}", index + 1), style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold, color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                Text("${formatClock(segment.startedAtEpochMs)} · ${formatDuration(segment.durationMs)}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(segment.fileName, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            SegmentActionsMenu(segment.file.isFile, onSave, onShare, onNote, onDelete)
+        }
+    }
+}
+
+@Composable
+private fun SegmentActionsMenu(
+    enabled: Boolean,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    onNote: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) { Icon(Icons.Default.MoreVert, t("More options", "更多选项")) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text(t("Save to gallery", "保存到相册")) }, enabled = enabled,
+                leadingIcon = { Icon(MediaIcons.Save, null) }, onClick = { expanded = false; onSave() })
+            DropdownMenuItem(text = { Text(t("Share", "分享")) }, enabled = enabled,
+                leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { expanded = false; onShare() })
+            DropdownMenuItem(text = { Text(t("Note", "备注")) },
+                leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { expanded = false; onNote() })
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            DropdownMenuItem(text = { Text(t("Delete segment", "删除分段"), color = MaterialTheme.colorScheme.error) }, enabled = enabled,
+                leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                onClick = { expanded = false; onDelete() })
         }
     }
 }
@@ -812,36 +1044,6 @@ private fun OnVehicleList(
 }
 
 @Composable
-private fun PhoneFilesList(
-    permissionGranted: Boolean,
-    files: List<File>,
-    onRequestPermission: () -> Unit,
-    onPlay: (File) -> Unit,
-) {
-    if (!permissionGranted) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(t("Allow video access to view other phone files.", "允许视频访问后可查看手机中的其他视频。"))
-            Button(onClick = onRequestPermission, modifier = Modifier.padding(top = 10.dp)) { Text(t("Allow access", "授予权限")) }
-        }
-        return
-    }
-    if (files.isEmpty()) return EmptyLibrary(t("No phone videos found", "没有找到手机视频"))
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        listItems(files, key = { it.absolutePath }) { file ->
-            Card(onClick = { onPlay(file) }, modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                        Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(formatMediaBytes(file.length()), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun EmptyLibrary(message: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -874,26 +1076,16 @@ private fun IndexedRecordingEvent.toDetail() = MediaDetail(
     segments = segments,
 )
 
-private fun externalSegment(file: File) = IndexedMediaSegment(
-    id = file.absolutePath,
-    filePath = file.absolutePath,
-    fileName = file.name,
-    sidecarPath = null,
-    sizeBytes = file.length(),
-    startedAtEpochMs = file.lastModified(),
-    stoppedAtEpochMs = null,
-    durationMs = 0,
-    segmentNumber = null,
-    recordingSessionId = null,
-    eventId = null,
-    eventRole = null,
-    protected = false,
-    sourceRole = IndexedSourceRole.UNKNOWN,
-    layoutKind = IndexedLayoutKind.UNKNOWN,
-    cameraId = null,
-    lanes = emptyList(),
-    originalWidth = null,
-    originalHeight = null,
+private fun SavedMediaRecord.toPlaybackRequest(uri: Uri) = UriPlaybackRequest(
+    uri = uri,
+    displayName = displayName,
+    durationMs = durationMs,
+    sourceRole = IndexedSourceRole.SURROUND,
+    layoutKind = indexedLayoutKind,
+    laneLabels = laneLabels,
+    laneOrder = laneOrder,
+    originalWidth = originalWidth,
+    originalHeight = originalHeight,
 )
 
 private fun sourceLabel(role: IndexedSourceRole): String = when (role) {
@@ -913,10 +1105,12 @@ private fun remoteSourceLabel(item: CarRecording): String = when {
 private fun playbackLabels(segment: IndexedMediaSegment): List<String> {
     val frozen = segment.lanes.sortedBy { it.displayOrder }.map { it.label }
     if (frozen.size == 4) return frozen
-    return if (segment.layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
-        listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
-    } else {
-        emptyList()
+    return when (segment.layoutKind) {
+        IndexedLayoutKind.FOUR_LANE_V1 ->
+            listOf(t("Front", "前"), t("Rear", "后"), t("Left", "左"), t("Right", "右"))
+        IndexedLayoutKind.FOUR_LANE_GRID_2X2 ->
+            listOf(t("Top left", "左上"), t("Top right", "右上"), t("Bottom left", "左下"), t("Bottom right", "右下"))
+        else -> emptyList()
     }
 }
 
@@ -927,15 +1121,15 @@ private fun dayLabel(epochMs: Long): String {
     return when (day) {
         today -> t("Today", "今天")
         yesterday -> t("Yesterday", "昨天")
-        else -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(epochMs))
+        else -> DateFormat.getDateInstance(DateFormat.MEDIUM, PhoneLanguage.locale).format(Date(epochMs))
     }
 }
 
 private fun formatClock(epochMs: Long): String =
-    DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(epochMs))
+    DateFormat.getTimeInstance(DateFormat.SHORT, PhoneLanguage.locale).format(Date(epochMs))
 
 private fun formatDateTime(epochMs: Long): String = if (epochMs <= 0L) "—" else
-    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(epochMs))
+    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, PhoneLanguage.locale).format(Date(epochMs))
 
 private fun formatDuration(durationMs: Long): String {
     if (durationMs <= 0L) return "—"
@@ -955,33 +1149,11 @@ private fun formatMediaBytes(bytes: Long): String = when {
 
 private val VISIBLE_LIBRARY_SECTIONS = listOf(
     LibrarySection.ALL,
+    LibrarySection.NORMAL,
+    LibrarySection.TIME_LAPSE,
     LibrarySection.EVENTS,
-    LibrarySection.PHONE,
+    LibrarySection.SENTRY,
 )
-
-private suspend fun queryPhoneVideos(context: Context): List<File> = withContext(Dispatchers.IO) {
-    val results = mutableListOf<File>()
-    val collection = if (Build.VERSION.SDK_INT >= 29) {
-        MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-    } else {
-        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-    }
-    runCatching {
-        context.contentResolver.query(
-            collection,
-            arrayOf(MediaStore.Video.Media.DATA),
-            null,
-            null,
-            "${MediaStore.Video.Media.DATE_ADDED} DESC",
-        )?.use { cursor ->
-            val dataIndex = cursor.getColumnIndex(MediaStore.Video.Media.DATA)
-            while (cursor.moveToNext()) {
-                cursor.getString(dataIndex)?.let(::File)?.takeIf(File::isFile)?.let(results::add)
-            }
-        }
-    }.onFailure { ServerLog.log("MEDIA_QUERY_FAILED ${it.message}") }
-    results.distinctBy { it.absolutePath }.take(200)
-}
 
 private fun shareMediaFile(context: Context, file: File): Boolean = runCatching {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)

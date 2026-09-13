@@ -1,8 +1,12 @@
 package com.dante.zeekrcapabilitylab
 
 import android.app.Application
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Process
+import androidx.core.content.ContextCompat
 import android.os.SystemClock
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -15,7 +19,9 @@ import com.dante.zeekrcapabilitylab.diagnostic.VehicleAwayProbe
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.transfer.PhoneSoundRelay
 import com.dante.zeekrcapabilitylab.transfer.TransferRepository
+import com.dante.zeekrcapabilitylab.usbexport.UsbExportRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +47,9 @@ class ZeekrApp : Application() {
         EventLogger.init(this)
         SettingsStore.init(this)
         TransferRepository.init(this)
+        PhoneSoundRelay.init(this)
+        UsbExportRepository.init(this)
+        registerSoundRelayStorageReceiver()
 
         CrashHandler.install(this)
 
@@ -62,11 +71,14 @@ class ZeekrApp : Application() {
                 _isForeground.value = true
                 VehicleAwayProbe.recordAppState(true)
                 TransferRepository.reconnectInBackground()
+                PhoneSoundRelay.onForeground()
+                UsbExportRepository.resumeQueuedWhenForeground()
             }
 
             override fun onStop(owner: LifecycleOwner) {
                 _isForeground.value = false
                 VehicleAwayProbe.recordAppState(false)
+                PhoneSoundRelay.onBackground()
             }
         })
 
@@ -87,5 +99,25 @@ class ZeekrApp : Application() {
             CrashHandler.clear(this)
         }
 
+    }
+
+    private fun registerSoundRelayStorageReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_MEDIA_MOUNTED)
+            addAction(Intent.ACTION_MEDIA_UNMOUNTED)
+            addAction(Intent.ACTION_MEDIA_EJECT)
+            addAction(Intent.ACTION_MEDIA_REMOVED)
+            addDataScheme("file")
+        }
+        ContextCompat.registerReceiver(
+            this,
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    PhoneSoundRelay.onStorageChanged()
+                }
+            },
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
     }
 }

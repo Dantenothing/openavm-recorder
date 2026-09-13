@@ -13,9 +13,11 @@ import kotlinx.serialization.json.longOrNull
 
 enum class IndexedSourceRole { SURROUND, CABIN, IR, UNKNOWN }
 
-enum class IndexedLayoutKind { FOUR_LANE_V1, SINGLE_V1, UNKNOWN }
+enum class IndexedLayoutKind { FOUR_LANE_V1, FOUR_LANE_GRID_2X2, SINGLE_V1, UNKNOWN }
 
 enum class IndexedRecordingMode { NORMAL, TIME_LAPSE }
+
+enum class IndexedMediaOrigin { OPENAVM_RECORDING, FACTORY_SENTRY_USB }
 
 enum class IndexedTimeLapseAccuracy {
     PASS,
@@ -35,6 +37,46 @@ data class IndexedLane(
     /** One-based position inside the raw composite file. */
     val lane: Int = 0,
 )
+
+data class FourLaneLayoutDescriptor(
+    val kind: IndexedLayoutKind,
+    val lanes: List<IndexedLane>,
+)
+
+/** Recognizes only layouts for which OpenAVM has concrete geometry evidence. */
+object FourLaneLayoutClassifier {
+    fun classify(width: Int?, height: Int?): FourLaneLayoutDescriptor? {
+        if (width == null || height == null || width <= 0 || height <= 0) return null
+        if (width == GRID_SIZE_PX && height == GRID_SIZE_PX) {
+            val half = GRID_SIZE_PX / 2
+            return FourLaneLayoutDescriptor(
+                kind = IndexedLayoutKind.FOUR_LANE_GRID_2X2,
+                lanes = listOf(
+                    IndexedLane("Top left", 0, half, 0, half, displayOrder = 1, lane = 1),
+                    IndexedLane("Top right", half, width, 0, half, displayOrder = 2, lane = 2),
+                    IndexedLane("Bottom left", 0, half, half, height, displayOrder = 3, lane = 3),
+                    IndexedLane("Bottom right", half, width, half, height, displayOrder = 4, lane = 4),
+                ),
+            )
+        }
+
+        val longSide = maxOf(width, height).toDouble()
+        val shortSide = minOf(width, height).toDouble()
+        return if (longSide / shortSide in 3.8..4.2) {
+            // Preserve the existing vertical/horizontal geometry paths until
+            // their divider coordinates can be revalidated independently.
+            FourLaneLayoutDescriptor(IndexedLayoutKind.FOUR_LANE_V1, emptyList())
+        } else {
+            null
+        }
+    }
+
+    private const val GRID_SIZE_PX = 2560
+}
+
+val IndexedLayoutKind.isFourLane: Boolean
+    get() = this == IndexedLayoutKind.FOUR_LANE_V1 ||
+        this == IndexedLayoutKind.FOUR_LANE_GRID_2X2
 
 data class IndexedMediaSegment(
     val id: String,
@@ -62,20 +104,22 @@ data class IndexedMediaSegment(
     val realDurationMs: Long? = null,
     val measuredMultiplier: Double? = null,
     val timeLapseAccuracy: IndexedTimeLapseAccuracy? = null,
+    val mediaOrigin: IndexedMediaOrigin = IndexedMediaOrigin.OPENAVM_RECORDING,
 ) {
     val file: File get() = File(filePath)
     val playbackLabels: List<String>
         get() = lanes.sortedBy { it.displayOrder }.map { it.label }.takeIf { it.size == 4 }
-            ?: if (layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
-                listOf("Front", "Rear", "Left", "Right")
-            } else {
-                emptyList()
+            ?: when (layoutKind) {
+                IndexedLayoutKind.FOUR_LANE_V1 -> listOf("Front", "Rear", "Left", "Right")
+                IndexedLayoutKind.FOUR_LANE_GRID_2X2 ->
+                    listOf("Top left", "Top right", "Bottom left", "Bottom right")
+                else -> emptyList()
             }
     val playbackLaneOrder: List<Int>
         get() = lanes.sortedBy { it.displayOrder }
             .map { it.lane }
             .takeIf { it.size == 4 && it.toSet() == setOf(1, 2, 3, 4) }
-            ?: if (layoutKind == IndexedLayoutKind.FOUR_LANE_V1) {
+            ?: if (layoutKind.isFourLane) {
                 listOf(1, 2, 3, 4)
             } else {
                 emptyList()
@@ -127,6 +171,7 @@ data class IndexedRecordingEvent(
 
 data class MediaIndexSnapshot(
     val segments: List<IndexedMediaSegment> = emptyList(),
+    val sentrySegments: List<IndexedMediaSegment> = emptyList(),
     val sessions: List<IndexedRecordingSession> = emptyList(),
     val events: List<IndexedRecordingEvent> = emptyList(),
 )
@@ -168,6 +213,10 @@ object MediaIndexScanner {
         } else {
             1
         }
+        val mediaOrigin = when (obj.string("mediaOrigin")?.uppercase()) {
+            ReceivedSentryRegistrar.MEDIA_ORIGIN -> IndexedMediaOrigin.FACTORY_SENTRY_USB
+            else -> IndexedMediaOrigin.OPENAVM_RECORDING
+        }
         return IndexedMediaSegment(
             id = file.absoluteFile.path,
             filePath = file.absolutePath,
@@ -198,6 +247,7 @@ object MediaIndexScanner {
             timeLapseAccuracy = runCatching {
                 obj.string("timeLapseAccuracy")?.uppercase()?.let(IndexedTimeLapseAccuracy::valueOf)
             }.getOrNull(),
+            mediaOrigin = mediaOrigin,
         )
     }
 
@@ -223,6 +273,7 @@ object MediaIndexScanner {
     private fun resolveLayout(obj: JsonObject?, source: IndexedSourceRole): IndexedLayoutKind {
         return when (obj.string("layoutKind")?.uppercase()) {
             "FOUR_LANE_V1" -> IndexedLayoutKind.FOUR_LANE_V1
+            "FOUR_LANE_GRID_2X2" -> IndexedLayoutKind.FOUR_LANE_GRID_2X2
             "SINGLE_V1" -> IndexedLayoutKind.SINGLE_V1
             else -> when {
                 obj.obj("laneLayout") != null -> IndexedLayoutKind.FOUR_LANE_V1
@@ -281,10 +332,13 @@ object MediaIndexScanner {
 
 object MediaIndexGrouper {
     fun build(segments: List<IndexedMediaSegment>): MediaIndexSnapshot {
-        val sessions = buildSessions(segments)
-        val events = buildEvents(segments)
+        val sentrySegments = segments.filter { it.mediaOrigin == IndexedMediaOrigin.FACTORY_SENTRY_USB }
+        val recordingSegments = segments.filterNot { it.mediaOrigin == IndexedMediaOrigin.FACTORY_SENTRY_USB }
+        val sessions = buildSessions(recordingSegments)
+        val events = buildEvents(recordingSegments)
         return MediaIndexSnapshot(
-            segments = segments.sortedByDescending { it.startedAtEpochMs },
+            segments = recordingSegments.sortedByDescending { it.startedAtEpochMs },
+            sentrySegments = sentrySegments.sortedByDescending { it.startedAtEpochMs },
             sessions = sessions.sortedByDescending { it.startedAtEpochMs },
             events = events.sortedByDescending { it.startedAtEpochMs },
         )

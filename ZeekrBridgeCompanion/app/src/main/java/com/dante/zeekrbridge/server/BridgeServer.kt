@@ -8,9 +8,14 @@ import com.dante.zeekrbridge.core.HttpRange
 import com.dante.zeekrbridge.core.LanEndpointCandidate
 import com.dante.zeekrbridge.core.LanEndpointPolicy
 import com.dante.zeekrbridge.core.HttpRangeParser
+import com.dante.zeekrbridge.core.OutboundOffer
 import com.dante.zeekrbridge.core.OutboundOfferStore
 import com.dante.zeekrbridge.core.Protocol
 import com.dante.zeekrbridge.core.ReceivedStore
+import io.github.dantenothing.avmtransfer.protocol.SoundInstallStatusUpdate
+import io.github.dantenothing.avmtransfer.protocol.SoundOfferListResponse
+import io.github.dantenothing.avmtransfer.protocol.SoundTransferValidation
+import com.dante.zeekrbridge.core.ReceivedSentryRegistrar
 import com.dante.zeekrbridge.core.ReliableCommitResult
 import com.dante.zeekrbridge.core.ReliableUploadStore
 import com.dante.zeekrbridge.core.SecureCompare
@@ -184,6 +189,19 @@ object BridgeServer {
         wsConnections.forEach { it.sendText(text) }
     }
 
+    fun sendOfferToCar(offer: OutboundOffer) {
+        val carId = offer.targetCarDeviceId ?: return
+        val envelope = com.dante.zeekrbridge.core.WsEnvelope(
+            type = com.dante.zeekrbridge.core.WsType.FILE_OFFER,
+            sequence = System.currentTimeMillis(),
+            payload = JsonObject(mapOf("offerId" to JsonPrimitive(offer.offerId))),
+        )
+        val text = json.encodeToString(com.dante.zeekrbridge.core.WsEnvelope.serializer(), envelope)
+        wsConnections.filter { it.carDeviceId() == carId }.forEach { it.sendText(text) }
+    }
+
+    fun isCarConnected(carDeviceId: String): Boolean = wsConnections.any { it.carDeviceId() == carDeviceId }
+
     fun connectedCars(): Int = wsConnections.size
 
     private fun handleSocket(socket: Socket) {
@@ -305,8 +323,14 @@ object BridgeServer {
                         respond(out, 200, "application/json", """{"status":"OK","service":"${Protocol.SERVICE_NAME}"}""")
                     }
                 }
+                method == "GET" && path == "/api/outbound" -> {
+                    handleOutboundList(out, headers)
+                }
                 method == "GET" && path.startsWith("/api/outbound/") -> {
                     handleOutboundGet(out, path, headers)
+                }
+                method == "POST" && path.startsWith("/api/outbound/") && path.endsWith("/status") -> {
+                    handleOutboundStatus(out, path, headers, body)
                 }
                 method == "POST" && path == "/api/pair" -> {
                     val request = json.decodeFromString(com.dante.zeekrbridge.core.PairRequest.serializer(), String(body, Charsets.UTF_8))
@@ -352,6 +376,35 @@ object BridgeServer {
         }
     }
 
+    private fun handleOutboundList(out: OutputStream, headers: Map<String, String>) {
+        val device = PairingManager.authenticate(headers["authorization"])
+        if (device == null) {
+            respond(out, 401, "application/json", """{"error":"unauthorized"}""")
+            return
+        }
+        val response = SoundOfferListResponse(offers = OutboundOfferStore.pendingForCar(device.carDeviceId))
+        respond(out, 200, "application/json", json.encodeToString(SoundOfferListResponse.serializer(), response))
+    }
+
+    private fun handleOutboundStatus(out: OutputStream, path: String, headers: Map<String, String>, body: ByteArray) {
+        val device = PairingManager.authenticate(headers["authorization"])
+        if (device == null) {
+            respond(out, 401, "application/json", """{"error":"unauthorized"}""")
+            return
+        }
+        val offerId = URLDecoder.decode(path.removePrefix("/api/outbound/").substringBefore('/'), "UTF-8")
+        val update = runCatching {
+            json.decodeFromString(SoundInstallStatusUpdate.serializer(), String(body, Charsets.UTF_8))
+        }.getOrNull()
+        if (update == null || update.state.isBlank()) {
+            respond(out, 400, "application/json", """{"error":"invalid status"}""")
+            return
+        }
+        val offer = OutboundOfferStore.updateStatus(device.carDeviceId, offerId, update)
+        if (offer == null) respond(out, 404, "application/json", """{"error":"unknown offer"}""")
+        else respond(out, 200, "application/json", """{"ok":true}""")
+    }
+
     private fun handleOutboundGet(out: OutputStream, path: String, headers: Map<String, String>) {
         val device = PairingManager.authenticate(headers["authorization"])
         if (device == null) {
@@ -363,6 +416,10 @@ object BridgeServer {
         val file = offer?.let { OutboundOfferStore.fileFor(offerId) }
         if (offer == null || file == null) {
             respond(out, 404, "application/json", """{"error":"unknown offer"}""")
+            return
+        }
+        if (offer.targetCarDeviceId != device.carDeviceId || OutboundOfferStore.metadata(offer)?.let(SoundTransferValidation::validateOffer) != null) {
+            respond(out, 403, "application/json", """{"error":"offer not assigned to this car"}""")
             return
         }
         if (file.length() != offer.sizeBytes) {
@@ -500,6 +557,9 @@ object BridgeServer {
                     }
                     is ReliableCommitResult.Success -> {
                         ReceivedStore.refresh()
+                        ReceivedSentryRegistrar.reconcile(
+                            listOf(File(ReceivedStore.receivedDir(), outcome.response.fileName)),
+                        )
                         ServerLog.log("UPLOAD_COMPLETED file=${outcome.response.fileName} ok=true")
                         _state.value = _state.value.copy(lastUpload = outcome.response.fileName)
                         val responseText = if (legacy) {
@@ -692,6 +752,9 @@ class WsConnection(
                                         return
                                     }
                                     PairingManager.touch(device!!.carDeviceId)
+                                    OutboundOfferStore.pendingForCar(carId).forEach { pending ->
+                                        OutboundOfferStore.get(pending.offerId)?.let(BridgeServer::sendOfferToCar)
+                                    }
                                 }
                                 com.dante.zeekrbridge.core.WsType.HEARTBEAT -> {
                                     // Connection liveness is tracked by socket state.
@@ -725,6 +788,8 @@ class WsConnection(
             ServerLog.log("WEBSOCKET_DISCONNECTED")
         }
     }
+
+    fun carDeviceId(): String? = device?.carDeviceId
 
     fun sendText(text: String) {
         try {

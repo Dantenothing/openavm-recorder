@@ -21,6 +21,17 @@ data class MediaExportJob(
     val message: String? = null,
     val outputUri: String? = null,
     val outputPath: String? = null,
+    val libraryMetadata: MediaExportLibraryMetadata? = null,
+)
+
+data class MediaExportLibraryMetadata(
+    val origin: SavedMediaOrigin,
+    val sourceId: String?,
+    val layoutKind: IndexedLayoutKind,
+    val laneLabels: List<String>,
+    val laneOrder: List<Int>,
+    val originalWidth: Int?,
+    val originalHeight: Int?,
 )
 
 object MediaExportQueue {
@@ -34,16 +45,30 @@ object MediaExportQueue {
         targets: Collection<MediaExportTarget>,
         trimStartMs: Long,
         trimEndMs: Long,
+        savedMediaOrigin: SavedMediaOrigin? = null,
     ): List<String> {
         require(targets.isNotEmpty()) { "Select at least one output" }
         val orderedTargets = MediaExportTarget.entries.filter(targets::contains)
         val startEpochMs = segments.minOf { it.startedAtEpochMs }
+        val first = segments.first()
         val additions = orderedTargets.map { target ->
             val plan = MediaExportPlanner.build(segments, target, trimStartMs, trimEndMs)
             MediaExportJob(
                 id = UUID.randomUUID().toString(),
                 outputName = outputName(startEpochMs, plan),
                 plan = plan,
+                libraryMetadata = savedMediaOrigin?.let { origin ->
+                    val preservesComposite = target == MediaExportTarget.ORIGINAL
+                    MediaExportLibraryMetadata(
+                        origin = origin,
+                        sourceId = first.recordingSessionId ?: first.id,
+                        layoutKind = if (preservesComposite) first.layoutKind else IndexedLayoutKind.UNKNOWN,
+                        laneLabels = if (preservesComposite) first.playbackLabels else emptyList(),
+                        laneOrder = if (preservesComposite) first.playbackLaneOrder else emptyList(),
+                        originalWidth = if (preservesComposite) first.originalWidth else null,
+                        originalHeight = if (preservesComposite) first.originalHeight else null,
+                    )
+                },
             )
         }
         _jobs.value = (_jobs.value + additions).takeLast(MAX_VISIBLE_JOBS)

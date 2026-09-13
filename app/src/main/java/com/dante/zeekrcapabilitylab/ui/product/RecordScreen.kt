@@ -1,6 +1,7 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Size
@@ -55,6 +56,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dante.zeekrcapabilitylab.product.ProductHomeCameraPolicy
 import com.dante.zeekrcapabilitylab.product.SurroundPreviewLifecyclePolicy
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
@@ -72,6 +76,7 @@ import com.dante.zeekrcapabilitylab.service.recorder.SessionSourceSnapshot
 import com.dante.zeekrcapabilitylab.service.recorder.TimeLapsePolicy
 import com.dante.zeekrcapabilitylab.util.Utils
 import com.dante.zeekrcapabilitylab.ZeekrApp
+import com.dante.zeekrcapabilitylab.BuildConfig
 import com.dante.zeekrcapabilitylab.data.Categories
 import com.dante.zeekrcapabilitylab.event.EventLogger
 import java.io.File
@@ -278,9 +283,10 @@ fun RecordScreen() {
                     ProductHomeCameraPolicy.TRIGGER_AUTO_PREVIEW,
                 ) -> {
                 previewController.clearRecorderPreviewHandoff()
-                previewController.stopAndAwait()
-                previewEnabled = true
-                previewController.startPreview(resolvedIdleSource!!)
+                if (previewController.stopAndAwait()) {
+                    previewEnabled = true
+                    previewController.startPreview(resolvedIdleSource!!)
+                } else previewEnabled = false
             }
             !recordingActive -> {
                 previewEnabled = false
@@ -309,7 +315,7 @@ fun RecordScreen() {
         configState !is RecordConfigState.Loading
     val canStop = RecorderCommandPolicy.canStop(recorderState.status, serviceRunning)
     val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning) &&
-        activeRecordingMode == RecordingMode.NORMAL
+        activeRecordingMode == RecordingMode.NORMAL && recorderState.status != RecorderStatus.AWAKE_IDLE
 
     val estimatedBitrateBps = recorderState.profile?.bitrateBps
         ?.takeIf { it > 0 }
@@ -330,15 +336,16 @@ fun RecordScreen() {
     }
     val recordingElapsed = (recorderState.sessionStartedAtEpochMs ?: recorderState.segmentStartedAtEpochMs)
         ?.let { now - it }
-    val recorderStatusText = when (recorderState.status) {
+    val guardStoppedWithError = false
+    val recorderStatusText = if (guardStoppedWithError) Utils.t("Sentry stopped", "哨兵已停止") else when (recorderState.status) {
+        RecorderStatus.AWAKE_IDLE -> Utils.t("Awake · recording paused", "已停录 · 保持运行")
+        RecorderStatus.SENTRY_LISTENING -> Utils.t("Sentry RAM listening", "哨兵 RAM 监听中")
         RecorderStatus.STARTING -> Utils.t("Preparing", "正在准备")
         RecorderStatus.RECORDING -> if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
             Utils.t(
-                "Time-lapse ${activeTimeLapseMultiplier}× · ${Utils.formatDuration(recordingElapsed)}",
-                "延时摄影 ${activeTimeLapseMultiplier}× · ${Utils.formatDuration(recordingElapsed)}",
-            )
+                "Time-lapse {0}× · {1}", "延时摄影 {0}× · {1}", activeTimeLapseMultiplier, Utils.formatDuration(recordingElapsed))
         } else {
-            Utils.t("Recording ${Utils.formatDuration(recordingElapsed)}", "录像中 ${Utils.formatDuration(recordingElapsed)}")
+            Utils.t("Recording {0}", "录像中 {0}", Utils.formatDuration(recordingElapsed))
         }
         RecorderStatus.FINALIZING -> Utils.t("Saving", "正在保存")
         RecorderStatus.WAITING_CAMERA -> Utils.t("Waiting for camera", "正在等待摄像头")
@@ -347,7 +354,7 @@ fun RecordScreen() {
         RecorderStatus.ERROR -> Utils.t("Recording error", "录像异常")
         else -> Utils.t("Standby", "待机")
     }
-    val recorderStatusColor = when (recorderState.status) {
+    val recorderStatusColor = if (guardStoppedWithError) MaterialTheme.colorScheme.error else when (recorderState.status) {
         RecorderStatus.RECORDING -> Color(0xFFFF6E6E)
         RecorderStatus.STARTING,
         RecorderStatus.FINALIZING,
@@ -370,12 +377,9 @@ fun RecordScreen() {
                 val requestedMultiplier = selectedTimeLapseMultiplier
                 configState = RecordConfigState.Loading
                 scope.launch {
-                    if (previewEnabled) {
-                        // Close only the old preview CameraCaptureSession. Keep
-                        // ManualPreviewPanel composed so its proven TextureView
-                        // and SurfaceTexture survive long enough to be handed to
-                        // the recorder's preview + encoder session below.
-                        previewController.stopAndAwait()
+                    if (!previewController.stopAndAwait()) {
+                        configState = RecordConfigState.Failed(Utils.t("Camera release is unconfirmed. A new recording was not started; copy diagnostics.", "相机释放尚未确认，未开始新录像；请复制诊断"))
+                        return@launch
                     }
                     val lookup = withTimeoutOrNull(CONFIG_TIMEOUT_MS) {
                         withContext(Dispatchers.IO) {
@@ -589,6 +593,9 @@ fun RecordScreen() {
             if (recordingActive) {
                 Text(
                     when (recorderState.status) {
+                        RecorderStatus.AWAKE_IDLE -> Utils.t("Camera closed; waiting for your return.", "相机已关闭，正在等待回车。")
+                        RecorderStatus.SENTRY_LISTENING -> Utils.t("Keeping video in RAM; events are saved when triggered.", "正在保留 RAM 预录，触发后保存事件。")
+                        RecorderStatus.STARTING, RecorderStatus.FINALIZING -> recorderState.message ?: recorderStatusText
                         RecorderStatus.WAITING_CAMERA -> Utils.t(
                             "The selected camera is busy. This Session will resume automatically when it is released.",
                             "所选摄像头正被占用，释放后本次 Session 会自动继续。",
@@ -598,9 +605,7 @@ fun RecordScreen() {
                             "正在重新打开同一摄像头并创建新分段…",
                         )
                         else -> Utils.t(
-                            "Writing segment ${recorderState.segmentNumber}",
-                            "正在写入第 ${recorderState.segmentNumber} 段",
-                        )
+                            "Writing segment {0}", "正在写入第 {0} 段", recorderState.segmentNumber)
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -825,8 +830,8 @@ private fun RecordingSourceSelector(
             ) {
                 val label = when (role) {
                     RecordingSourceRole.SURROUND -> "360°"
-                    RecordingSourceRole.CABIN -> "Cabin"
-                    RecordingSourceRole.IR -> "IR"
+                    RecordingSourceRole.CABIN -> Utils.t("Cabin", "车内")
+                    RecordingSourceRole.IR -> Utils.t("Infrared", "红外")
                 }
                 Text(if (role == selected) "$label ✓" else label)
             }
@@ -956,7 +961,7 @@ private fun ProductStatusCard(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(10.dp))
-            ProductInfoRow(Utils.t("Phone transfer", "手机传输"), Utils.t("In development", "开发中"))
+            ProductInfoRow(Utils.t("Phone transfer", "手机传输"), Utils.t("Connect in the Phone tab", "在「手机」页连接"))
             ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
             ProductInfoRow(Utils.t("Estimated recording", "预计可录"), formatEstimatedMinutes(estimatedMinutes))
             ProductInfoRow(
@@ -1105,11 +1110,11 @@ private fun formatBytes(bytes: Long): String = when {
 
 private fun formatEstimatedMinutes(minutes: Long?): String = when {
     minutes == null -> Utils.t("Unknown", "未知")
-    minutes >= 60L -> Utils.t("${minutes / 60} h ${minutes % 60} min", "${minutes / 60} 小时 ${minutes % 60} 分钟")
-    else -> Utils.t("$minutes min", "$minutes 分钟")
+    minutes >= 60L -> Utils.t("{0} h {1} min", "{0} 小时 {1} 分钟", minutes / 60, minutes % 60)
+    else -> Utils.t("{0} min", "{0} 分钟", minutes)
 }
 
 private fun formatSegmentDuration(seconds: Int): String = when {
-    seconds >= 60 && seconds % 60 == 0 -> Utils.t("${seconds / 60} min", "${seconds / 60} 分钟")
-    else -> Utils.t("$seconds sec", "$seconds 秒")
+    seconds >= 60 && seconds % 60 == 0 -> Utils.t("{0} min", "{0} 分钟", seconds / 60)
+    else -> Utils.t("{0} sec", "{0} 秒", seconds)
 }

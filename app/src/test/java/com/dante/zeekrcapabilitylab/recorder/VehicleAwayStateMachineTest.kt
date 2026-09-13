@@ -276,6 +276,80 @@ class VehicleAwayStateMachineTest {
         assertEquals(VehicleAwayPhase.PENDING, displayFirst.snapshot.phase)
     }
 
+    @Test
+    fun usbLossBeforeThirtySecondTimerMustEndSessionInsteadOfOpeningInternalFile() {
+        val machine = pendingMachine()
+        val timer = machine.snapshot.pendingToken
+
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "USB_FALLBACK_DURING_PENDING"),
+            machine.onUsbFallback(generation),
+        )
+        assertEquals(VehicleAwayPhase.CONFIRMED, machine.snapshot.phase)
+        assertEquals(VehicleAwayAction.None, machine.onTimer(generation, timer, 33_000L))
+    }
+
+    @Test
+    fun usbFallbackAfterPowerOnBounceStillEndsTheBackgroundSession() {
+        val machine = pendingMachine()
+        machine.onPowerSnapshot(generation, false, true, true, 5_000L)
+
+        assertEquals(VehicleAwayPhase.ACTIVE, machine.snapshot.phase)
+        assertEquals(
+            VehicleAwayAction.Confirm(generation, "USB_FALLBACK_AFTER_BACKGROUND_POWER_OFF"),
+            machine.onUsbFallback(generation),
+        )
+    }
+
+    @Test
+    fun eitherBackgroundPowerOffSignalPreventsUsbFallback() {
+        listOf(false to true, true to false).forEach { (screenOn, displayOn) ->
+            val machine = activeMachine()
+            machine.onPowerSnapshot(generation, false, screenOn, displayOn, 1_000L)
+            assertTrue(machine.onUsbFallback(generation) is VehicleAwayAction.Confirm)
+        }
+    }
+
+    @Test
+    fun ordinaryUsbFailureInForegroundOrAwakeBackgroundCanStillFallBack() {
+        listOf(true, false).forEach { foreground ->
+            val machine = activeMachine()
+            machine.onPowerSnapshot(generation, foreground, true, true, 1_000L)
+            assertEquals(VehicleAwayAction.None, machine.onUsbFallback(generation))
+            assertEquals(VehicleAwayPhase.ACTIVE, machine.snapshot.phase)
+        }
+    }
+
+    @Test
+    fun foregroundReturnBeforeUsbFailureClearsOldAwayEvidence() {
+        val machine = pendingMachine()
+        machine.onPowerSnapshot(generation, true, true, true, 5_000L)
+        assertEquals(VehicleAwayAction.None, machine.onUsbFallback(generation))
+    }
+
+    @Test
+    fun stoppedOrStaleUsbFailureCannotStopAnotherManualSession() {
+        val machine = pendingMachine()
+        machine.endSession(generation, "MANUAL_STOP")
+        assertEquals(VehicleAwayAction.None, machine.onUsbFallback(generation))
+        machine.beginManualSession(generation + 1L)
+        assertEquals(VehicleAwayAction.None, machine.onUsbFallback(generation))
+        assertEquals(VehicleAwayAction.None, machine.onUsbFallback(generation + 1L))
+    }
+
+    @Test
+    fun powerOffDuringUsbCleanupRevokesFallbackPreviouslyAllowedWhileAwake() {
+        val machine = activeMachine()
+        machine.onPowerSnapshot(generation, false, true, true, 1_000L)
+        assertEquals(VehicleAwayAction.None, machine.onUsbFallback(generation))
+
+        machine.onPowerSnapshot(generation, false, false, true, 2_000L)
+        assertTrue(machine.onUsbFallback(generation) is VehicleAwayAction.Confirm)
+        machine.endSession(generation, "VEHICLE_AWAY_USB_FALLBACK")
+        machine.onPowerSnapshot(generation, true, true, true, 300_000L)
+        assertEquals(VehicleAwayPhase.DISARMED, machine.snapshot.phase)
+    }
+
     private fun activeMachine() = VehicleAwayStateMachine(policy).also {
         it.beginManualSession(generation)
     }

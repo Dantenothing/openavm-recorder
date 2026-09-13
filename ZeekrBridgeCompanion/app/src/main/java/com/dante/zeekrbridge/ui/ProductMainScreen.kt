@@ -2,12 +2,15 @@ package com.dante.zeekrbridge.ui
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -20,6 +23,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import com.dante.zeekrbridge.R
 
 private enum class PhoneTab(
@@ -34,7 +38,7 @@ private enum class PhoneTab(
 }
 
 /**
- * V2 product shell for the phone: four fixed bottom tabs (车辆/媒体库/工具箱/设置).
+ * Four main destinations; video details use the whole content area with one back step.
  * The legacy diagnostic UI lives behind 5 taps on the version number in 设置.
  */
 @Composable
@@ -42,6 +46,7 @@ fun ProductMainScreen() {
     PhoneLanguage.mode
     var tab by rememberSaveable { mutableStateOf(PhoneTab.VEHICLE) }
     var showLab by rememberSaveable { mutableStateOf(false) }
+    var detailOpen by androidx.compose.runtime.remember { mutableStateOf(false) }
 
     if (showLab) {
         LabScreen(onBack = { showLab = false })
@@ -50,7 +55,9 @@ fun ProductMainScreen() {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            if (!detailOpen) Column {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                 PhoneTab.entries.forEach { item ->
                     val label = t(item.en, item.zh)
                     NavigationBarItem(
@@ -67,6 +74,7 @@ fun ProductMainScreen() {
                     )
                 }
             }
+            }
         },
     ) { padding ->
         Box(
@@ -79,7 +87,7 @@ fun ProductMainScreen() {
                     onOpenLibrary = { tab = PhoneTab.LIBRARY },
                     onOpenLab = { showLab = true },
                 )
-                PhoneTab.LIBRARY -> SessionMediaLibraryScreen()
+                PhoneTab.LIBRARY -> SessionMediaLibraryScreen(onDetailVisibilityChanged = { detailOpen = it })
                 PhoneTab.TOOLS -> ToolboxScreen()
                 PhoneTab.SETTINGS -> PhoneSettingsScreen(onOpenLab = { showLab = true })
             }

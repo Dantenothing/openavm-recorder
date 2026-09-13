@@ -5,7 +5,8 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.StatFs
 import android.provider.DocumentsContract
-import com.dante.zeekrbridge.core.IndexedLayoutKind
+import com.dante.zeekrbridge.core.FourLaneLayoutClassifier
+import com.dante.zeekrbridge.core.FourLaneLayoutDescriptor
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.IndexedSourceRole
@@ -28,8 +29,10 @@ data class UsbSentryVideo(
     val width: Int? = null,
     val height: Int? = null,
 ) {
+    val layoutDescriptor: FourLaneLayoutDescriptor?
+        get() = UsbSentryPolicy.layoutDescriptor(width, height)
     val isConfirmedFourLane: Boolean
-        get() = UsbSentryPolicy.isFourLaneComposite(width, height)
+        get() = layoutDescriptor != null
 }
 
 data class UsbSentryScanResult(
@@ -50,12 +53,11 @@ object UsbSentryPolicy {
             name.endsWith(".mov", ignoreCase = true) ||
             name.endsWith(".m4v", ignoreCase = true)
 
-    fun isFourLaneComposite(width: Int?, height: Int?): Boolean {
-        if (width == null || height == null || width <= 0 || height <= 0) return false
-        val longSide = maxOf(width, height).toDouble()
-        val shortSide = minOf(width, height).toDouble()
-        return longSide / shortSide in 3.8..4.2
-    }
+    fun layoutDescriptor(width: Int?, height: Int?): FourLaneLayoutDescriptor? =
+        FourLaneLayoutClassifier.classify(width, height)
+
+    fun isFourLaneComposite(width: Int?, height: Int?): Boolean =
+        layoutDescriptor(width, height) != null
 
     fun safeFileName(name: String): String {
         val base = name.substringBeforeLast('.', name).replace(Regex("[^A-Za-z0-9._-]+"), "_")
@@ -182,9 +184,9 @@ object UsbSentryRepository {
         val localMetadata = readMetadata(context, Uri.fromFile(destination))
         val duration = localMetadata?.durationMs?.takeIf { it > 0L } ?: resolved.durationMs
         require(duration > 0L) { "Cannot read the duration of this USB video" }
-        val width = localMetadata?.width ?: resolved.width ?: 1280
-        val height = localMetadata?.height ?: resolved.height ?: 5140
-        require(UsbSentryPolicy.isFourLaneComposite(width, height)) {
+        val width = localMetadata?.width ?: resolved.width
+        val height = localMetadata?.height ?: resolved.height
+        val layout = requireNotNull(UsbSentryPolicy.layoutDescriptor(width, height)) {
             "This video is not a supported four-lane 360° composite"
         }
         val startedAt = resolved.lastModifiedMs.takeIf { it > 0L }
@@ -206,9 +208,9 @@ object UsbSentryRepository {
             eventRole = null,
             protected = true,
             sourceRole = IndexedSourceRole.SURROUND,
-            layoutKind = IndexedLayoutKind.FOUR_LANE_V1,
+            layoutKind = layout.kind,
             cameraId = null,
-            lanes = emptyList(),
+            lanes = layout.lanes,
             originalWidth = width,
             originalHeight = height,
             recordingMode = IndexedRecordingMode.NORMAL,
