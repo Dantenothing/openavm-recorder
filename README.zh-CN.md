@@ -1,6 +1,6 @@
 # OpenAVM V4
 
-[English](README.md) · [下载 V4](https://github.com/Dantenothing/openavm-recorder/releases/tag/v4.0.0) · [使用说明](USER_GUIDE.zh-CN.md) · [发布说明](GITHUB_RELEASE_V4.md)
+[English](README.md) · [下载 V4](https://github.com/Dantenothing/openavm-recorder/releases/tag/v4.0.0) · **[详细技术说明](PLATFORM_NOTES.zh-CN.md)** · [使用说明](USER_GUIDE.zh-CN.md) · [发布说明](GITHUB_RELEASE_V4.md)
 
 在兼容的极氪 App Lab 车机上录像、查看和传输视频。V4 包含车机端 **OpenAVM Recorder**，以及可选的安卓手机端 **OpenAVM Companion**。
 
@@ -14,6 +14,14 @@
 车机端同样要求 Android 8.0 或以上，并需要兼容的 App Lab 摄像头和存储访问能力，不能只凭安卓版本判断兼容性。发布页附带签名 APK 和 SHA-256 校验文件。通过车辆现有的 App Lab 安装流程安装；应用 ID 和签名相同的旧版本可以覆盖升级。
 
 **安卓手机端不是必装的。** 车机端配合 U 盘即可录像、查看和管理视频、制作解闭锁音效。手机版增加无线传输、手机播放、视频裁剪和单视角导出的便利。
+
+## 录像的工作原理
+
+在已测试车辆的环视录像模式下，OpenAVM 通过 Android Camera2 请求一条经过处理的 `1280×5140` 视频流，其中包含前、后、左、右四个约 `1280×1280` 的画面。应用将它们排成 2×2 预览，并通过 Android 媒体 API 录制这条合成视频流。使用的是 App Lab 提供的摄像头访问能力，无需 root 或修改车辆固件。
+
+上游相机管线的实现，以及它与其他车辆系统共享资源的方式，尚未完全确认。目前未专门测量摄像头温度，也未完成专项热测试。
+
+**[详细技术说明](PLATFORM_NOTES.zh-CN.md)** 包含摄像头访问、CPU/GPU/RAM 与存储问题、实车测试记录、相机资源所有权和已知限制。原先在项目首页展示的技术内容保留在其中，并区分注明日期的历史观察与当前 V4 说明。
 
 ## V4 的主要功能
 
@@ -31,7 +39,7 @@
 - **V4 不提供自研停车哨兵和回车自动录像。** 车辆休眠后的持续取帧与自动唤醒尚未达到可靠程度，相关研究暂停；原车哨兵视频浏览继续保留。详见[研究状态](research/sentry/README_V4_ARCHIVE.md)。
 - 测试主要来自车主的车辆和安卓设备，不代表所有车型、固件和手机均兼容。旧测试版曾出现需要重启车机恢复的底层相机取流停滞；车主报告目前 V4 测试未复现，不等于保证不会再次发生。
 
-这是独立开发的非官方应用，与极氪没有隶属或认可关系，也不能代替原厂安全系统或保证持续停车监控。请在停车时操作。更多背景见[平台观察与限制](PLATFORM_NOTES.zh-CN.md)及[安全问题反馈](SECURITY.md)。
+这是独立开发的非官方应用，与极氪没有隶属或认可关系，也不能代替原厂安全系统或保证持续停车监控。请在停车时操作。更多背景见[详细技术说明与限制](PLATFORM_NOTES.zh-CN.md)及[安全问题反馈](SECURITY.md)。
 
 ## 文档
 
@@ -39,7 +47,8 @@
 - [English user guide](USER_GUIDE.md)
 - [V4 发布说明](GITHUB_RELEASE_V4.md)和[版本记录](CHANGELOG.md)
 - [构建与发布验证](DEVELOPMENT.md)
-- [平台观察记录](PLATFORM_NOTES.zh-CN.md)和[暂停的哨兵研究](research/sentry/README_V4_ARCHIVE.md)
+- [详细技术说明与测试记录](PLATFORM_NOTES.zh-CN.md)
+- [暂停的哨兵研究](research/sentry/README_V4_ARCHIVE.md)
 
 ## 源代码公开与许可状态
 

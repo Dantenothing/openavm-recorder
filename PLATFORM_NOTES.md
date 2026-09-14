@@ -1,8 +1,8 @@
-> These detailed platform/engineering notes preserve development observations. For current downloads and normal use, start with [README.md](README.md) and the user guide. Historical validation scope is not a promise about every V4 device.
+# OpenAVM technical explanation
 
-# OpenAVM platform observations
+[Project home](README.md) · [简体中文](PLATFORM_NOTES.zh-CN.md) · [User guide](USER_GUIDE.md)
 
-[简体中文](README.zh-CN.md)
+These notes preserve the detailed technical explanation and development observations previously shown on the project homepage. They cover camera access, resource usage, road testing and known limitations. For current downloads and normal use, start with the project home and user guide. Historical validation scope is not a promise about every V4 device.
 
 Experimental surround-view recorder for compatible Zeekr App Lab environments.
 

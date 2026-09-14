@@ -1,8 +1,8 @@
-> These detailed platform/engineering notes preserve development observations. For current downloads and normal use, start with [README.zh-CN.md](README.zh-CN.md) and the user guide. Historical validation scope is not a promise about every V4 device.
+# OpenAVM 详细技术说明
 
-# OpenAVM platform observations
+[项目首页](README.zh-CN.md) · [English](PLATFORM_NOTES.md) · [使用说明](USER_GUIDE.zh-CN.md)
 
-[English](README.md)
+本文保留原先在项目首页展示的详细技术说明与开发观察，包括摄像头访问、资源占用、实车测试和已知限制。当前版本的下载和日常使用请参阅项目首页与使用说明；历史测试结论仅适用于注明的测试条件，不能视为对所有 V4 设备的保证。
 
 适用于兼容 Zeekr App Lab 环境的实验性 360° 环视录像工具。
 
