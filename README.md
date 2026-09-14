@@ -1,6 +1,6 @@
 # OpenAVM V4
 
-[简体中文](README.zh-CN.md) · [Download V4](https://github.com/Dantenothing/openavm-recorder/releases/tag/v4.0.0) · [User guide](USER_GUIDE.md) · [Release notes](GITHUB_RELEASE_V4.md)
+[简体中文](README.zh-CN.md) · [Download V4](https://github.com/Dantenothing/openavm-recorder/releases/tag/v4.0.0) · **[Technical explanation](PLATFORM_NOTES.md)** · [User guide](USER_GUIDE.md) · [Release notes](GITHUB_RELEASE_V4.md)
 
 Record, browse and transfer video on compatible Zeekr App Lab head units. V4 includes **OpenAVM Recorder** for the vehicle and an **optional OpenAVM Companion** app for Android phones.
 
@@ -14,6 +14,14 @@ Record, browse and transfer video on compatible Zeekr App Lab head units. V4 inc
 The vehicle app also requires Android 8.0 or later and compatible App Lab camera/storage access; the Android version alone does not establish compatibility. Signed APKs and SHA-256 checksums are attached to the release. Use the vehicle's available App Lab installation flow. Existing installations with the same application ID and signing key can be updated in place.
 
 **The phone APK is not required.** The vehicle app and a USB drive cover recording, video viewing/management and lock/unlock sound creation. The phone app adds wireless transfer and phone-side playback, trimming and individual-view export.
+
+## How recording works
+
+For surround-view recording on the tested vehicle, OpenAVM uses Android Camera2 to request one processed `1280×5140` video stream containing four approximately `1280×1280` front, rear, left and right views. The app arranges these views into a 2×2 preview and records the combined stream through Android media APIs. It uses the camera access exposed by App Lab, without requiring root or modifying vehicle firmware.
+
+The upstream camera pipeline and its resource sharing with other vehicle systems have not been fully established. Camera temperatures have not been specifically measured, and dedicated thermal testing has not been completed.
+
+The **[detailed technical explanation](PLATFORM_NOTES.md)** covers camera access, CPU/GPU/RAM and storage questions, road-test observations, camera ownership, and known limitations. It preserves the technical material previously shown on the project homepage, with dated observations and current V4 notes.
 
 ## What V4 includes
 
@@ -31,7 +39,7 @@ The vehicle app also requires Android 8.0 or later and compatible App Lab camera
 - **Custom parking Sentry and automatic recording on return are not included.** Those experiments are paused because reliable camera access and wake-up across vehicle sleep have not been established. Factory Sentry video browsing remains available. See the [research status](research/sentry/README_V4_ARCHIVE.md).
 - Testing has mainly used the owner's car and Android devices. Other vehicle models, firmware and phones may behave differently. Earlier development builds experienced a persistent third-party camera-feed stall requiring a head-unit restart; the owner reports no recurrence in current V4 testing. This is not proof that it cannot recur.
 
-OpenAVM is independent, unofficial software and is not affiliated with or endorsed by Zeekr. It is not a replacement for a factory safety system or a guaranteed parking recorder. Operate its controls while parked. See [platform observations and limitations](PLATFORM_NOTES.md) and [security reporting](SECURITY.md).
+OpenAVM is independent, unofficial software and is not affiliated with or endorsed by Zeekr. It is not a replacement for a factory safety system or a guaranteed parking recorder. Operate its controls while parked. See [the technical explanation and limitations](PLATFORM_NOTES.md) and [security reporting](SECURITY.md).
 
 ## Guides and development
 
@@ -39,7 +47,8 @@ OpenAVM is independent, unofficial software and is not affiliated with or endors
 - [中文使用说明](USER_GUIDE.zh-CN.md)
 - [V4 release notes](GITHUB_RELEASE_V4.md) and [changelog](CHANGELOG.md)
 - [Build instructions and release verification](DEVELOPMENT.md)
-- [Platform observations](PLATFORM_NOTES.md) and [paused Sentry research](research/sentry/README_V4_ARCHIVE.md)
+- [Detailed technical explanation and test observations](PLATFORM_NOTES.md)
+- [Paused Sentry research](research/sentry/README_V4_ARCHIVE.md)
 
 ## Source availability and licence status
 

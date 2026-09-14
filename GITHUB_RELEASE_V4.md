@@ -1,5 +1,7 @@
 # OpenAVM V4 — 4.0.0
 
+[Technical explanation](https://github.com/Dantenothing/openavm-recorder/blob/main/PLATFORM_NOTES.md) · [详细技术说明](https://github.com/Dantenothing/openavm-recorder/blob/main/PLATFORM_NOTES.zh-CN.md)
+
 V4 brings direct USB recording, an optional Android companion and sound tools together in the current stable release channel. It replaces the previous public alpha as the recommended download, with compatibility still based on targeted owner testing.
 
 ## Download
