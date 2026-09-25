@@ -4,7 +4,7 @@ This is the current Android phone application: vehicle status and controls, prec
 
 Version: **5.0.0 / 51**. The normal `openavm` variant uses `com.dante.zeekrbridge`, preserving the original OpenAVM phone upgrade identity. The separate `assistantUpgrade` variant is only for the early standalone assistant and is not a normal public download.
 
-[User setup](../docs/v5/GETTING_STARTED.md) · [中文使用指南](../docs/v5/GETTING_STARTED.zh-CN.md) · [Build notes](../docs/v5/BUILD.md)
+[User setup](../docs/v5/GETTING_STARTED.md) · [Build notes](../docs/v5/BUILD.md)
 
 ## Source layout
 
