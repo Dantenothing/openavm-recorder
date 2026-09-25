@@ -1,6 +1,6 @@
 # OpenAVM V5 setup guide
 
-[Project introduction](../../README.md) · [简体中文](GETTING_STARTED.zh-CN.md)
+[Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.0)
 
 For vehicle recording, start at section 1. For phone vehicle controls, start at section 2. Add section 3 only when you want to transfer recordings.
 

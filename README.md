@@ -1,10 +1,10 @@
 # OpenAVM V5
 
-**Record on the vehicle. Manage everyday vehicle tasks on your phone. Bring recordings with you when you need them.**
+**Surround-camera recording and a floating live mirror for compatible ZEEKR head units, with an optional Android companion.**
 
-OpenAVM is an independent, unofficial project for compatible ZEEKR vehicles. The vehicle app provides recording and a floating live mirror. The Android phone app combines vehicle status, preconditioning, factory Sentry automation and recording management.
+OpenAVM is an independent, unofficial project for compatible ZEEKR vehicles. Use Recorder on its own to record, review clips and keep a floating camera view on screen. Add the Android phone app to receive and manage recordings. The phone app also offers vehicle status, preconditioning, factory Sentry automation and widgets for currently supported cloud accounts.
 
-[简体中文](README.zh-CN.md) · [Downloads](https://github.com/Dantenothing/openavm-recorder/releases) · [Setup guide](docs/v5/GETTING_STARTED.md) · [Report an issue](https://github.com/Dantenothing/openavm-recorder/issues)
+[Downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.0) · [Setup guide](docs/v5/GETTING_STARTED.md) · [Report an issue](https://github.com/Dantenothing/openavm-recorder/issues)
 
 **V5 downloads:** [Vehicle APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [Android phone APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Phone-5.0.0.apk) · [Release notes](docs/v5/RELEASE_NOTES.md)
 
@@ -51,9 +51,11 @@ Phone automation controls the vehicle's factory Sentry feature. It is separate f
 | Phone | Android 8.0+; no iOS app in this release |
 | Cloud vehicle controls | Current baseline: Australian ZEEKR 7X / AU 1.6.6 integration; other regions, vehicles and firmware are not generally verified |
 | Account | Existing vehicle authorisation is required; guest accounts retain the permissions granted by the owner |
-| Languages | Vehicle: English, Simplified Chinese, Traditional Chinese, Thai, Vietnamese and Arabic. Phone: Simplified Chinese and English |
+| Languages | Vehicle: English, Simplified Chinese, Traditional Chinese, Thai, Vietnamese and Arabic. Phone: English and Simplified Chinese |
 
-The phone app includes the current Australian connection configuration. Normal setup does not require a protocol JSON file. Sign in, select the vehicle, then configure home, comfort preferences, widgets and automation as needed.
+The Australian baseline applies to phone cloud vehicle controls, not local recording transfer. You can use the phone's recording library without a ZEEKR account.
+
+The phone app includes the current Australian connection configuration. Normal setup does not require a protocol JSON file. For cloud controls, sign in, select the vehicle, then configure home, comfort preferences, widgets and automation as needed.
 
 Use matching V5 apps for recording transfer. Compare the complete fingerprint during initial secure pairing. Connections migrating from V4 need to be paired again once. Received recordings can be played offline.
 
