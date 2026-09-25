@@ -1,6 +1,6 @@
 # OpenAVM V5 安装与使用指南
 
-> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+> 使用车机 **Recorder 5.0.0** 与手机 **Phone 5.0.1**。手机版已恢复下载；本地录像功能不需要极氪账号或配置文件。旧的内置参数手机包 5.0.0 不再提供。
 
 [返回介绍](../../README.zh-CN.md) · [English](GETTING_STARTED.md)
 
@@ -47,10 +47,10 @@
 
 1. 在 Android 手机上安装 V5 的 `OpenAVM-Phone-` APK，已有原 OpenAVM 时直接覆盖安装。
 2. 打开 **OpenAVM**，进入“更多 → 账号与连接”。
-3. 登录有车辆授权的极氪账号，选择车辆。guest 账号需先获得主账号授权。
+3. 导入自行准备且有权使用的六字段连接配置，再登录有车辆授权的极氪账号并选择车辆。guest 账号需先获得主账号授权。
 4. 刷新一次，核对是否为自己的车辆及车况的数据时间。
 
-**完成标准：选中了正确的车辆，并读到车况。** 澳洲版连接适配已内置，不需要导入协议 JSON。当前车控适配基线是澳洲版 7X / AU 1.6.6，其他地区不能直接按已兼容处理。
+**完成标准：选中了正确的车辆，并读到车况。** 5.0.1 不内置或自动下载连接参数。升级旧版需重新导入一次，录像与车机配对保留，自动化需重新开启。当前车控适配基线是澳洲版 7X / AU 1.6.6，其他地区不能直接按已兼容处理。只用录像可跳过云端设置，直接看第 3 节。
 
 登录会话加密留在本机，日常无需反复输入；会话失效、授权变化或换手机时可能需要重新登录。想只看本地录像，可以跳过极氪账号登录。
 

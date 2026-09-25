@@ -6,7 +6,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Version, IV and ciphertext are authenticated. No plaintext fallback. */
 object SealedConfig {
-    enum class Purpose(val context: String) { PROTOCOL("zeekr-check/protocol/1"), SESSION("zeekr-check/session/1"), ASSISTANT("zeekr-assistant/settings/1"), APPEARANCE("zeekr-assistant/appearance/1") }
+    enum class Purpose(val context: String) { PROTOCOL("zeekr-check/protocol/1"), IMPORTED_PROTOCOL("openavm/imported-protocol/1"), SESSION("zeekr-check/session/1"), ASSISTANT("zeekr-assistant/settings/1"), APPEARANCE("zeekr-assistant/appearance/1") }
     const val MAX_BYTES = 65_536
     fun seal(plain: ByteArray, key: SecretKey, purpose: Purpose = Purpose.PROTOCOL): ByteArray {
         require(plain.size in 1..MAX_BYTES)

@@ -27,15 +27,19 @@ class CardActionService : Service() {
         if (!bound()) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY }
         val overview=OverviewStore.get(this)
         if(overview.state.value.vehicleKey!=key) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY }
-        if (action == "guard" && intent.getStringExtra("shownValue") == "开启") AssistantStore.get(this).pauseGuard(key)
-        if (action == "guard" && intent.getStringExtra("shownValue") == "关闭") AssistantStore.get(this).holdHomeGuard(key)
         if (worker?.isActive == true) return START_NOT_STICKY
         val stopping = action=="prepare" && intent.getStringExtra("shownValue")?.startsWith("stop:")==true
         overview.edit { it.copy(actionInFlight=action,actionAt=System.currentTimeMillis(),message=if(stopping) "收到停止操作 · 正在结束备车"
             else if(action=="prepare") "收到备车操作 · 正在准备" else "收到操作 · 正在连接车辆") }
-        val model = ViewModelProvider(application as VehicleApplication, ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java]
         worker = scope.launch {
-            try { withTimeout(95_000) { model.cardAction(action, key, intent.getStringExtra("shownValue"), ::bound) } }
+            try {
+                CloudAccess.loaded(this@CardActionService)
+                if (!CloudAccess.accepts(intent)) { overview.edit { it.copy(message = "请打开 App 设置云端连接；未发送操作") }; return@launch }
+                if (action == "guard" && intent.getStringExtra("shownValue") == "开启") AssistantStore.get(this@CardActionService).pauseGuard(key)
+                if (action == "guard" && intent.getStringExtra("shownValue") == "关闭") AssistantStore.get(this@CardActionService).holdHomeGuard(key)
+                val model = ViewModelProvider(application as VehicleApplication, ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java]
+                withTimeout(95_000) { model.cardAction(action, key, intent.getStringExtra("shownValue"), { bound() && CloudAccess.accepts(intent) }) }
+            }
             finally {
                 if(overview.state.value.vehicleKey==key) overview.edit { it.copy(actionInFlight=null,actionAt=null) }
                 stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
@@ -47,7 +51,7 @@ class CardActionService : Service() {
     companion object {
         fun intent(context: Context, action: String, key: String?, shown: String?, widgetId: Int = 0) =
             Intent(context, CardActionService::class.java).putExtra("cardAction", action).putExtra("vehicleKey", key)
-                .putExtra("shownValue", shown).putExtra("originWidget", widgetId)
+                .putExtra("shownValue", shown).putExtra("originWidget", widgetId).also { CloudAccess.stamp(context, it) }
         fun start(context: Context, action: String, shownPreparation: String? = null) {
             val overview = OverviewStore.get(context).state.value
             val shown = if(action=="prepare") shownPreparation ?: PreparationControl.shown(

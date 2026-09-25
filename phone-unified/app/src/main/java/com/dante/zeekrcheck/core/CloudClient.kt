@@ -67,7 +67,7 @@ object RequestPolicy {
 class ReadOnlyTransport(private val client: OkHttpClient = OkHttpClient.Builder()
     .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
     .connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
-    .callTimeout(25, TimeUnit.SECONDS).build()) {
+    .callTimeout(25, TimeUnit.SECONDS).build(), private val permit: CloudRequestGate.Permit = CloudRequestGate.denied()) {
 
     suspend fun execute(request: Request): JsonElement {
         check(RequestPolicy.allowed(request.method, request.url)) { "Request is outside the capability-check allowlist" }
@@ -90,9 +90,10 @@ class ReadOnlyTransport(private val client: OkHttpClient = OkHttpClient.Builder(
     private suspend fun executeVerified(request: Request): JsonElement {
         return suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
+            continuation.invokeOnCancellation { call.cancel(); permit.finished(call) }
+            permit.enqueue(call, object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    permit.finished(call)
                     val failure=networkFailure(e)
                     NetworkTrace.record(request,failure.outcome.name,failure.networkIssue)
                     if (continuation.isActive) continuation.resumeWithException(failure)
@@ -122,7 +123,7 @@ class ReadOnlyTransport(private val client: OkHttpClient = OkHttpClient.Builder(
                         }
                         NetworkTrace.record(request,safe.outcome.name,safe.networkIssue,safe.httpStatus)
                         if (continuation.isActive) continuation.resumeWithException(safe)
-                    }
+                    } finally { permit.finished(call) }
                 }
             })
         }

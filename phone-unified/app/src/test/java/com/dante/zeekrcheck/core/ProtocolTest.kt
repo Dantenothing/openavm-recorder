@@ -10,6 +10,7 @@ internal object Fixture {
     val vectors: JsonObject = Json.parseToJsonElement(javaClass.getResource("/reference-vectors.json")!!.readText()).jsonObject
     val official166: JsonObject = Json.parseToJsonElement(javaClass.getResource("/reference-166-vectors.json")!!.readText()).jsonObject
     fun config() = ProtocolConfig.parse(vectors.getValue("config").toString())
+    fun transport(client: okhttp3.OkHttpClient) = ReadOnlyTransport(client, CloudRequestGate().apply { open() }.permit())
 }
 
 class ProtocolTest {

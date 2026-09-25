@@ -18,6 +18,7 @@ class IdleReadDiagnosticTest {
     @Test fun idleConnectionReadOnlyDiagnostic() = runBlocking {
         assumeTrue(InstrumentationRegistry.getArguments().getString("liveReadOnly")=="true")
         val context=InstrumentationRegistry.getInstrumentation().targetContext
+        CloudAccess.loaded(context)
         val config=ProtocolConfig.parse(SecureConfigStore(context).load() ?: error("Configuration unavailable"))
         val saved=SecureSessionStore(context).load() ?: error("Saved session unavailable")
         val posts=AtomicInteger(0)
@@ -27,7 +28,7 @@ class IdleReadDiagnosticTest {
                 if(chain.request().method!="GET") { posts.incrementAndGet();throw IOException("Live diagnostic blocks writes") }
                 chain.proceed(chain.request())
             }.build()
-        val client=CloudClient(config,ReadOnlyTransport(http),restoredSession=saved)
+        val client=CloudClient(config,ReadOnlyTransport(http, CloudAccess.permit()),restoredSession=saved)
         val selected=OverviewStore.get(context).state.value.vehicleKey
         val vehicle=client.resumeSession().firstOrNull { VehicleOverview.key(it)==selected } ?: error("Selected vehicle unavailable")
         val observations=mutableListOf<JsonObject>()

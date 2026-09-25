@@ -22,6 +22,7 @@ class ClimateCapabilityReadDiagnosticTest {
     @Test fun inspectClimateFieldsWithoutVehicleWrites() = runBlocking {
         assumeTrue(InstrumentationRegistry.getArguments().getString("climateReadOnly") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        CloudAccess.loaded(context)
         val config = ProtocolConfig.parse(SecureConfigStore(context).load() ?: error("Configuration unavailable"))
         val saved = SecureSessionStore(context).load() ?: error("Saved session unavailable")
         val blocked = AtomicInteger(0)
@@ -39,7 +40,7 @@ class ClimateCapabilityReadDiagnosticTest {
                 chain.proceed(chain.request())
             }.build()
         // No persistence callback: this diagnostic cannot replace or clear the saved login.
-        val client = CloudClient(config, ReadOnlyTransport(http), restoredSession = saved)
+        val client = CloudClient(config, ReadOnlyTransport(http, CloudAccess.permit()), restoredSession = saved)
         val selected = OverviewStore.get(context).state.value.vehicleKey
         val vehicle = client.resumeSession().firstOrNull { VehicleOverview.key(it) == selected }
             ?: error("Selected vehicle unavailable")

@@ -49,7 +49,7 @@ class CloudOnlineRefreshTest {
             override fun getZone(): ZoneId = ZoneOffset.UTC
             override fun withZone(zone: ZoneId): Clock = this
         }
-        return CloudClient(config, ReadOnlyTransport(http), clock, restoredSession = session, presenceStorage = store)
+        return CloudClient(config, Fixture.transport(http), clock, restoredSession = session, presenceStorage = store)
     }
     private fun type(request: Request) = Json.parseToJsonElement(Buffer().also { request.body!!.writeTo(it) }.readUtf8()).jsonObject["hbType"]!!.jsonPrimitive.int
     private fun ordinary(request: Request, source: Long) = """{"success":true,"data":${if (request.url.encodedPath == "/${RequestPolicy.VEHICLES}")

@@ -32,7 +32,7 @@ data class CheckUiState(
     val sessionSaved: Boolean = false,
     val connected: Boolean = false,
     val busy: Boolean = false,
-    val stage: String = "登录极氪账号，连接你的车辆",
+    val stage: String = "极氪云端尚未配置",
     val message: String? = null,
     val vehicles: List<Vehicle> = emptyList(),
     val selected: Int = 0,
@@ -46,7 +46,6 @@ class CheckViewModel(application: Application) : AndroidViewModel(application) {
     private var client: CloudClient? = null
     private var job: Job? = null
     private var generation = 0
-    private val store = SecureConfigStore(application)
     private val sessions = AppSessions.get(application)
     private val overview = OverviewStore.get(application)
     val assistant = AssistantStore.get(application)
@@ -186,12 +185,16 @@ class CheckViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun newClient(configuration: ProtocolConfig, epoch: Int, saved: SavedSession? = null) = CloudClient(
         configuration, phone = PhoneIdentity(Build.BRAND, Build.MODEL, Build.VERSION.RELEASE, Build.VERSION.SDK_INT),
+        transport = ReadOnlyTransport(permit = CloudAccess.permit()),
         restoredSession = saved, deviceId = saved?.deviceId ?: installationId,
         persistentSession = sessions, persistenceEpoch = epoch,
         presenceStorage = OnlinePresenceStore(getApplication()),
         sessionChanged = { value ->
             try {
-                if (sessions.write(epoch, value)) mutable.update { it.copy(sessionSaved = value != null) }
+                if (sessions.write(epoch, value)) {
+                    CloudAccess.sessionChanged(getApplication(), value != null)
+                    mutable.update { it.copy(sessionSaved = value != null) }
+                }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
                 if (sessions.current() == epoch) mutable.update { it.copy(sessionSaved = false,
@@ -200,27 +203,27 @@ class CheckViewModel(application: Application) : AndroidViewModel(application) {
         })
 
     init {
-        assistant.recoverInterrupted()
         job = viewModelScope.launch {
             try {
+                val imported = CloudAccess.loaded(application)
+                if (imported != null) assistant.recoverInterrupted()
                 val text = withContext(Dispatchers.IO) {
                     val identity = application.getSharedPreferences("installation", 0)
                     val storedId = identity.getString("deviceId", null)
                     if (storedId != null && runCatching { UUID.fromString(storedId).toString() == storedId }.getOrDefault(false)) {
                         installationId = storedId
                     } else check(identity.edit().putString("deviceId", installationId).commit())
-                    val debug = (application.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                    val pending = if (debug) PendingProtocol.consume(application.filesDir) else null
-                    if (pending != null) { sessions.write(sessions.advance(), null); store.save(pending); pending } else store.loadOrDefault()
+                    imported?.text
                 }
                 if (text != null) {
                     config = ProtocolConfig.parse(text)
                     mutable.value = CheckUiState(configReady = true, configSaved = true, busy = true, stage = "正在读取本机登录状态")
                     restoreSaved(sessions.current())
-                } else mutable.value = CheckUiState()
+                } else mutable.value = CheckUiState(message = if (CloudAccess.state.value.needsImport)
+                    "请重新导入连接配置并登录；录像和车机配对已保留，云端自动化已暂停。" else null)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                mutable.value = CheckUiState(message = "连接配置未能载入，请重启应用；仍有问题可在高级连接设置中恢复默认配置。")
+                mutable.value = CheckUiState(message = "本机连接配置无法读取，请重新导入")
             }
         }
     }
@@ -276,17 +279,22 @@ class CheckViewModel(application: Application) : AndroidViewModel(application) {
     fun importConfig(text: String) {
         if (mutable.value.busy) return
         try {
-            val parsed = ProtocolConfig.parse(text)
-            overview.clear()
-            discardRuntime()
-            val sessionEpoch = sessions.advance()
-            config = parsed
-            mutable.value = CheckUiState(configReady = true, busy = true, stage = "正在加密保存配置")
+            ProtocolConfig.parse(text)
+            mutable.update { it.copy(busy = true, stage = "正在加密保存配置", message = null) }
             job = viewModelScope.launch {
-                val saved = try { sessions.write(sessionEpoch, null); withContext(Dispatchers.IO) { store.save(text) }; true } catch (_: Exception) { false }
-                mutable.update { it.copy(busy = false, configSaved = saved, stage = "配置格式通过，等待登录",
-                    message = if (saved) "配置已加密保存在本机，重启 App 后自动载入。密码不会保存。"
-                    else "配置可在本次会话使用，但加密保存失败；重启后请重新导入。") }
+                try {
+                    val imported = CloudAccess.import(getApplication(), text)
+                    clearClimate(); controlJob?.cancel(); client?.clearSession(); client = null; ++generation
+                    config = ProtocolConfig.parse(imported.text)
+                    mutable.value = CheckUiState(configReady = true, configSaved = true, stage = "配置格式通过，等待登录",
+                        message = "配置已加密保存在本机。兼容性尚未验证，请登录继续；未发送车辆操作。")
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) {
+                    if (!CloudAccess.ready) { config = null; client?.clearSession(); client = null }
+                    mutable.update { it.copy(busy = false, connected = it.connected && CloudAccess.ready,
+                        configReady = CloudAccess.ready, configSaved = CloudAccess.ready, sessionSaved = CloudAccess.authorized,
+                        message = "配置未能保存，请重新导入；影像功能仍可使用。") }
+                }
             }
         } catch (e: IllegalArgumentException) {
             // Parser messages contain only fixed text and fixed field names, never supplied values.
@@ -297,14 +305,14 @@ class CheckViewModel(application: Application) : AndroidViewModel(application) {
     fun exportResult(success: Boolean) { mutable.update { it.copy(message = if (success) "诊断报告已保存（已去除身份凭据、VIN 和精确位置）。" else "报告未保存，请重新选择保存位置。") } }
 
     fun login(email: String, password: String) {
-        if (mutable.value.busy) return
+        if (mutable.value.busy || !CloudAccess.ready) return
         val currentConfig = config ?: return
         if (!email.contains('@') || email.length > 254 || password.isBlank()) {
             mutable.update { it.copy(message = "请填写 guest 账号的邮箱和密码。") }; return
         }
+        CloudAccess.beginLogin(getApplication())
         val epoch = ++generation
         val sessionEpoch = sessions.advance()
-        overview.clear()
         clearClimate()
         client?.clearSession()
         val activeClient = newClient(currentConfig, sessionEpoch)
@@ -504,35 +512,25 @@ class CheckViewModel(application: Application) : AndroidViewModel(application) {
         client?.clearSession(); client = null
     }
     fun reset() {
-        if (mutable.value.busy) return
-        discardRuntime()
-        overview.clear()
-        val epoch = sessions.advance()
-        mutable.value = CheckUiState(configReady = config != null, configSaved = mutable.value.configSaved, busy = true, stage = "正在退出账号")
-        job = viewModelScope.launch {
-            val cleared = try { sessions.write(epoch, null) } catch (_: Exception) { false }
-            mutable.update { it.copy(busy = false, stage = "已退出本机账号", message = if (cleared)
-                "已删除本机保存的登录状态，连接配置保留。自行导出的文件不会被删除。"
-                else "保存的登录状态未能完整删除，请在系统设置中清除本应用数据。") }
-        }
+        disconnect(removeConfig = false)
     }
     fun forgetConfig() {
+        disconnect(removeConfig = true)
+    }
+    private fun disconnect(removeConfig: Boolean) {
         if (mutable.value.busy) return
         discardRuntime(); config = null
-        overview.clear()
-        val epoch = sessions.advance()
-        mutable.value = CheckUiState(busy = true, stage = "正在恢复默认连接配置")
+        mutable.value = CheckUiState(busy = true, stage = "正在退出云端连接")
         job = viewModelScope.launch {
             try {
-                val bundled = withContext(Dispatchers.IO) { BundledProtocol.load(getApplication()) }
-                sessions.write(epoch, null)
-                withContext(Dispatchers.IO) { store.save(bundled) }
-                config = ProtocolConfig.parse(bundled)
-                mutable.value = CheckUiState(configReady = true, configSaved = true, stage = "连接配置已就绪",
-                    message = "已恢复默认连接配置并退出登录。重新登录即可使用。")
+                CloudAccess.remove(getApplication(), removeConfig)
+                config = CloudAccess.loaded(getApplication())?.text?.let(ProtocolConfig::parse)
+                mutable.value = CheckUiState(configReady = config != null, configSaved = config != null,
+                    stage = if (config != null) "已退出本机账号" else "极氪云端尚未配置",
+                    message = "已退出云端连接并暂停自动化；录像和车机配对已保留。")
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                mutable.value = CheckUiState(message = "默认连接配置未能恢复，请重启或更新应用。")
+                mutable.value = CheckUiState(message = "云端连接已暂停，清理未完成；请重启应用后重试。")
             }
         }
     }

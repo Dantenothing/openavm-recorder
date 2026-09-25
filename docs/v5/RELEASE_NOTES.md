@@ -1,17 +1,21 @@
-# OpenAVM V5 - Recorder
+# OpenAVM V5.0.1 — Phone download restored
 
-> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+**Phone 5.0.1 is the replacement for the withdrawn Phone 5.0.0 APK.** It keeps the complete phone client while removing bundled manufacturer connection parameters. OpenAVM Recorder pairing, recording transfer and playback require no cloud configuration or ZEEKR account.
 
-V5 brings improved recording and floating-mirror controls to the vehicle app, plus an expanded Android companion for recordings, vehicle status and everyday controls. It is available as a **public testing release** for compatible ZEEKR vehicles.
+This is a **public testing release** for compatible ZEEKR vehicles. The vehicle APK is the unchanged Recorder **5.0.0 / 102**; the phone APK is **5.0.1 / 52**. Existing Recorder 5.0.0 users only need to update the phone.
 
 ## Downloads
 
 | File | Install on | Version |
 | --- | --- | --- |
-| [OpenAVM-Recorder-5.0.0-arm64-v8a.apk](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) | Vehicle head unit | 5.0.0 / 102 |
-| [SHA256SUMS.txt](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/SHA256SUMS.txt) | Checksum for the vehicle APK | |
+| [OpenAVM-Recorder-5.0.0-arm64-v8a.apk](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.1/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) | Vehicle head unit | 5.0.0 / 102 |
+| [OpenAVM-Phone-5.0.1.apk](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.1/OpenAVM-Phone-5.0.1.apk) | Android phone | 5.0.1 / 52 |
+| [connection-config.template.json](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.1/connection-config.template.json) | Empty format example for optional cloud setup; contains no working parameters | |
+| [SHA256SUMS.txt](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.1/SHA256SUMS.txt) | Verify downloaded files | |
 
-**Recorder works without a phone.** Only the vehicle APK is currently offered for download. The phone features below describe existing V5 installations; they do not indicate that a replacement phone package is available.
+**Recorder works without a phone.** To use the phone only for recordings: install it, choose **Set up later**, open **Media → Connection**, and follow secure pairing. Both devices must share a Wi-Fi network or phone hotspot. Compare the complete phone fingerprint before confirming pairing.
+
+Cloud controls are optional: independently prepare a compatible configuration, import it in **Home → Set up cloud**, then sign in with your authorised account. The app does not include, host or automatically download those parameters. Importing a file alone sends no vehicle requests. See the [cloud setup guide](https://github.com/Dantenothing/openavm-recorder/blob/main/docs/v5/CLOUD_SETUP.md).
 
 [Setup and upgrade guide](https://github.com/Dantenothing/openavm-recorder/blob/main/docs/v5/GETTING_STARTED.md) · [Project overview](https://github.com/Dantenothing/openavm-recorder)
 
@@ -24,14 +28,14 @@ V5 brings improved recording and floating-mirror controls to the vehicle app, pl
 - **Secure phone transfer:** encrypted local connections and pairing that requires comparing the full phone identity fingerprint.
 - **Setup help:** revised tutorials and six interface languages, including English.
 
-## Android companion — public download paused
+## Android phone
 
 - **Recordings:** receive, play, export and share vehicle recordings. V5 improves seeking across legacy video segments and brings recording management into the same app as vehicle controls.
 - **Vehicle status and widgets:** battery, range, cabin temperature, location and data timestamps; 2×2, 4×1, 4×2 and 4×3 widgets with direct actions and progress feedback.
 - **Preconditioning:** set temperature, duration and seat preferences; tap to start and tap again to stop, or schedule a departure.
 - **Factory Sentry rules:** optionally enable Sentry after parking away from home and disable it after a confirmed arrival home. Manual choices made in OpenAVM are respected for the current parking session.
 - **Separate refresh actions:** ordinary status refresh and a dedicated cabin-temperature button, with clearer progress and results.
-- **Simpler setup:** the current Australian connection configuration is included. Ordinary users do not need to import a protocol JSON file. Onboarding is available in English and Simplified Chinese.
+- **Optional cloud setup:** local recording features work immediately. Cloud status and controls require user-supplied configuration and login; automation is separately enabled. Setup and help are available in English and Simplified Chinese.
 
 **Phone cloud controls currently target the Australian ZEEKR 7X, using the AU 1.6.6 integration.** Other regions and models are not generally verified, and shared accounts keep only the permissions granted by the owner. This limitation concerns cloud vehicle controls; local recording transfer and playback do not require a ZEEKR account.
 
@@ -40,8 +44,15 @@ V5 brings improved recording and floating-mirror controls to the vehicle app, pl
 1. **Install over the existing app; do not uninstall first.** Use the official matching-signature APK. Early standalone-assistant users should follow the setup guide before changing installations.
 2. **Check camera directions while parked.** The first V5 launch applies the right-hand-drive preset once: Front 1, Rear 2, Left 3, Right 4; Cabin 1, Infrared 0. Later manual adjustments are retained.
 3. **Choose your return behaviour again.** Confirm Logo, full preview or the additional automatic-recording option after installing or updating.
-4. **Recording transfer requires compatible V5 apps on both ends.** The V4 phone APK is not a substitute for the withdrawn V5 phone build. Existing V5 installations should compare the complete fingerprint when pairing.
+4. **Use Recorder 5.0.0 with Phone 5.0.1 for recording transfer.** Existing V5 pairing is retained; V4 connections need secure pairing again once. Compare the complete fingerprint during pairing.
 5. **Moving to a new phone?** Pause scheduled departures and Sentry automation on the old phone before enabling them on the new one.
+6. **Upgrading Phone 5.0.0 or an older configuration format?** Old cloud configuration and login are removed, and old cloud tasks are stopped. Import and sign in once to use cloud controls again. Recordings, Recorder pairing, home and comfort preferences are retained; review disabled plans and deliberately re-enable the rules you want. The old Phone 5.0.0 APK is not being restored.
+
+## Connection verification for this update
+
+The exact signed Phone 5.0.1 APK passed an Android emulator test using the same transport code as the published Recorder 5.0.0: fingerprint verification, encrypted pairing, session reconnection, WebSocket messaging, real MP4 transfer, receiver restart and resume, SHA-256 verification, media-library indexing and credential revocation. The complete local-media and security suite also passed, including video playback in the embedded player, without Zeekr cloud setup.
+
+These are emulator/code compatibility checks, not a new test in the owner's physical vehicle. Camera access and the actual vehicle/phone Wi-Fi environment remain device dependent. [Verification details](https://github.com/Dantenothing/openavm-recorder/blob/main/docs/v5/PHONE_5_0_1_VERIFICATION.md).
 
 ## Compatibility and practical limits
 

@@ -103,7 +103,7 @@ class AssistantFeaturesTest {
                 Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("synthetic")
                     .body("""{"success":true,"data":{"sessionId":"synthetic"}}""".toResponseBody("application/json".toMediaType())).build()
             }.build()
-            val client = CloudClient(Fixture.config(), ReadOnlyTransport(http), restoredSession = SavedSession("synthetic-user", "synthetic-access", "d294932f-f97e-4b6d-a63c-41bfa80d83ca", Fixture.config().fingerprint()))
+            val client = CloudClient(Fixture.config(), Fixture.transport(http), restoredSession = SavedSession("synthetic-user", "synthetic-access", "d294932f-f97e-4b6d-a63c-41bfa80d83ca", Fixture.config().fingerprint()))
             val result = client.controlVehicle(Vehicle("L6T00000000000001", emptyList()), VehicleCommand.Body(BodyAction.HORN), {}) {}
             assertEquals(if (failure) CommandResult.UNKNOWN else CommandResult.ACCEPTED, result)
             assertEquals(1, requests); assertEquals(0, client.passwordLogins); assertEquals(0, client.renewalAttempts)
@@ -120,7 +120,7 @@ class AssistantFeaturesTest {
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(503).message("synthetic")
                 .body("PRIVATE-SERVER-BODY".toResponseBody("text/plain".toMediaType())).build()
         }.build()
-        val client = CloudClient(Fixture.config(), ReadOnlyTransport(http), restoredSession = SavedSession("synthetic-user", "synthetic-access", "d294932f-f97e-4b6d-a63c-41bfa80d83ca", Fixture.config().fingerprint()))
+        val client = CloudClient(Fixture.config(), Fixture.transport(http), restoredSession = SavedSession("synthetic-user", "synthetic-access", "d294932f-f97e-4b6d-a63c-41bfa80d83ca", Fixture.config().fingerprint()))
         val probe = client.probe(Endpoint.STATUS, Vehicle("L6T00000000000001", emptyList()))
         assertEquals(ProbeOutcome.NETWORK, probe.outcome); assertEquals(503, probe.httpStatus)
         val report = Report(false, now, now, "synthetic", emptyList(), listOf(probe)).export(now)

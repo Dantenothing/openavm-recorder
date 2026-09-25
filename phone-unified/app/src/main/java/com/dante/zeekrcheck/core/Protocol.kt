@@ -24,9 +24,7 @@ class ProtocolConfig private constructor(
 ) {
     companion object {
         fun parse(text: String): ProtocolConfig {
-            require(text.length <= 65_536) { "配置文件超过 64 KB" }
-            val obj = try { Json.parseToJsonElement(text) as? JsonObject } catch (_: Exception) { null }
-                ?: throw IllegalArgumentException("需要 JSON 对象格式的协议配置")
+            val obj = ProtocolFile.parse(text)
             fun required(name: String): String {
                 val value = (obj[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
                 require(!value.isNullOrBlank() && value.length <= 8_192 && !value.startsWith("<")) { "缺少或无效字段：$name" }

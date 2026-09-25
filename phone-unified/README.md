@@ -1,12 +1,12 @@
 # OpenAVM Phone V5
 
-> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+> **Phone 5.0.1 is available for public testing.** Local Recorder pairing, recording transfer and playback work without cloud configuration. Optional cloud controls require a user-supplied configuration and authorised login. [Download](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1).
 
 This is the current Android phone application: vehicle status and controls, preconditioning, factory Sentry rules, home-screen widgets, and the OpenAVM recording library.
 
-Version: **5.0.0 / 51**. The normal `openavm` variant uses `com.dante.zeekrbridge`, preserving the original OpenAVM phone upgrade identity. The separate `assistantUpgrade` variant is only for the early standalone assistant and is not a normal public download.
+Current phone version: **5.0.1 / 52**. The normal `openavm` variant uses `com.dante.zeekrbridge`, preserving the original OpenAVM phone upgrade identity. The separate `assistantUpgrade` variant is only for the early standalone assistant and is not a normal public download.
 
-[User setup](../docs/v5/GETTING_STARTED.md) · [Build notes](../docs/v5/BUILD.md)
+[Optional cloud setup](../docs/v5/CLOUD_SETUP.md) · [User setup](../docs/v5/GETTING_STARTED.md) · [Build notes](../docs/v5/BUILD.md)
 
 ## Source layout
 
@@ -20,13 +20,13 @@ Cloud vehicle login and Recorder pairing are independent. Normal refresh only re
 
 Use JDK 17 or newer compatible with the checked-in Gradle wrapper and Android SDK 36. Set your local SDK path in `local.properties`.
 
-The withdrawn V5 phone APK included an AU connection profile. Public phone distribution is paused while this delivery approach is reviewed. Source builds require a locally supplied app-level profile, passed as `-PzeekrProtocolFile=<local-file>` or placed at `config/private/zeekr-au-166.json`. The build accepts exactly the six expected app-protocol fields and rejects account exports. Never commit this private file, account data or signing material. Ordinary APK users do not need it.
+Public builds do not read or bundle manufacturer connection parameters. No private JSON or zeekrProtocolFile property is required. Users can use local recordings immediately; optional cloud access requires an independently prepared configuration imported in the app, followed by account login. See the cloud setup guide and empty template.
 
 From this directory:
 
 ```text
-gradlew.bat :app:assembleOpenavmRelease -PzeekrProtocolFile=<local-file>
-gradlew.bat :app:testOpenavmReleaseUnitTest :openavm-companion:testReleaseUnitTest :app:lintOpenavmRelease -PzeekrProtocolFile=<local-file>
+gradlew.bat :app:assembleOpenavmRelease
+gradlew.bat :app:testOpenavmReleaseUnitTest :openavm-companion:testReleaseUnitTest :app:lintOpenavmRelease
 ```
 
 Release builds are not debuggable. The local signing configuration preserves the established maintainer upgrade channel on the maintainer's machine; building with another machine's key does not create an official upgrade.

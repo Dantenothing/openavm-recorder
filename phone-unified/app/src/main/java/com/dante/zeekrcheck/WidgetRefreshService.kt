@@ -18,6 +18,8 @@ class WidgetRefreshService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
+                CloudAccess.loaded(this@WidgetRefreshService)
+                if (!CloudAccess.accepts(params.extras.getString("cloudActionId"))) return@launch
                 val model = ViewModelProvider(application as VehicleApplication,
                     ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java]
                 val interactive = params.extras.getBoolean("interactive", true)
@@ -34,6 +36,7 @@ class WidgetRefreshService : JobService() {
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
     companion object {
         fun request(context: Context, interactive: Boolean) {
+            if (!CloudAccess.authorized) return
             val store = OverviewStore.get(context)
             if (store.state.value.vehicleKey == null) return
             val manager = context.getSystemService(JobScheduler::class.java)
@@ -43,7 +46,7 @@ class WidgetRefreshService : JobService() {
             if (!interactive && !AssistantStore.get(context).state.value.widgetSyncEnabled) return
             if (interactive && !store.state.value.refreshing()) store.edit { it.copy(message = "等待读取车辆状态") }
             val builder = JobInfo.Builder(jobId, ComponentName(context, WidgetRefreshService::class.java))
-                .setExtras(PersistableBundle().apply { putBoolean("interactive", interactive) })
+                .setExtras(PersistableBundle().apply { putBoolean("interactive", interactive); putString("cloudActionId", CloudAccess.actionId()) })
             if (interactive) builder.setOverrideDeadline(0) else builder.setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
             if (manager.schedule(builder.build()) != JobScheduler.RESULT_SUCCESS && interactive)
                 store.edit { it.copy(message = "刷新未能启动 · 请稍后再试") }

@@ -7,7 +7,7 @@
 | Application | Gradle project | Application ID | Version |
 | --- | --- | --- | --- |
 | Vehicle Recorder | Repository root, `:app` | `io.github.dantenothing.openavmrecorder` | 5.0.0 / 102 |
-| Android Phone | `phone-unified/`, `:app`, `openavm` flavour | `com.dante.zeekrbridge` | 5.0.0 / 51 |
+| Android Phone | `phone-unified/`, `:app`, `openavm` flavour | `com.dante.zeekrbridge` | 5.0.1 / 52 |
 
 The former standalone Companion project is retained as source for the unified phone library. Build the public phone APK from `phone-unified/`, not from the legacy standalone entry point.
 
@@ -23,7 +23,7 @@ Vehicle, from the repository root:
 gradlew.bat :app:assembleRelease :app:testDebugUnitTest :app:lintRelease
 ```
 
-Phone: follow [the phone build instructions](../../phone-unified/README.md). A maintainer-supplied app-level AU profile is a private build input. It is not a user account export and is not included in the public source tree. The published phone APK includes the connection configuration for ordinary users.
+Phone: follow [the phone build instructions](../../phone-unified/README.md). No private protocol file is required or consumed. Actual cloud connection parameters are supplied by the user at runtime, not bundled in public artifacts. See [optional cloud setup](CLOUD_SETUP.md).
 
 The existing distribution channel uses the maintainer's established signing identity. A build signed with another key cannot update that channel in place. APK debuggability is checked independently of certificate naming.
 
@@ -37,10 +37,18 @@ The existing distribution channel uses the maintainer's established signing iden
 
 ## Verification scope
 
-The release process checks package identity, increasing version codes, signing identity, the single launcher, non-debuggable release manifests, bundled notices, protocol-profile schema, builds, tests, lint and download hashes.
+The release process checks package identity, increasing version codes, signing identity, the single launcher, non-debuggable release manifests, bundled notices, absence of bundled parameters, import/migration behaviour, builds, tests, lint and download hashes.
 
 Owner-reported vehicle/phone connectivity is recorded separately from automated checks. The owner confirmed the two ends worked together on 2026-09-26; that report does not identify every device, scenario or final APK hash. Do not turn it into an all-hardware or all-scenarios claim.
 
 Certificates and keys under `app/src/test/resources/phone-security/` are deliberately synthetic unit-test identities. They are never installed as device identities or used to sign application packages. Real phone TLS identities are generated per installation with Android Keystore.
 
-Public release assets are the two APKs and their checksum file. Local configuration, signing keys, personal captures and private diagnostic archives are not release assets.
+The V5.0.1 release contains the unchanged Recorder 5.0.0 APK, Phone 5.0.1 APK, an empty cloud configuration template and checksums. Local configuration, signing keys, personal captures and private diagnostic archives are not release assets. See [Phone 5.0.1 verification](PHONE_5_0_1_VERIFICATION.md).
+
+Run the artifact guard against the actual APK that will be uploaded:
+
+```text
+python phone-unified/check_public_artifact.py phone-unified/app/build/outputs/apk/openavm/release/app-openavm-release.apk
+```
+
+The maintainer can add `--reference-apk <privately-retained-old-apk>` to compare all uncompressed entries against the six legacy configuration values. Output contains field names and findings, never the values. The old bundled APK is a negative control and must fail. Keep it private. This guard does not prove the absence of every possible secret or establish permission for third-party cloud access.

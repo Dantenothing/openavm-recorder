@@ -40,7 +40,8 @@ import java.time.Instant
     var mediaDetail by remember { mutableStateOf(false) }
     var guideReturn by rememberSaveable { mutableStateOf(false) }
     val guidePrefs = remember { BeginnerGuide.preferences(context) }
-    val canControl = overview.vehicleKey != null && (state.connected || state.sessionSaved)
+    val access by CloudAccess.state.collectAsStateWithLifecycle()
+    val canControl = access.ready && access.session && !state.busy && overview.vehicleKey != null && (state.connected || state.sessionSaved)
     val displayName = if (overview.vehicleKey == null && overview.nickname == VehicleOverview().nickname) ui(overview.nickname) else overview.nickname
     // Session restoration starts asynchronously. Do not mistake its initial empty state for a new install.
     LaunchedEffect(state.busy, state.sessionSaved) {
@@ -67,7 +68,8 @@ import java.time.Instant
     LaunchedEffect(tab, page) { scroll.scrollTo(0); mediaDetail = false }
     LaunchedEffect(navigationRequest) {
         if(navigationRequest>0) {
-            lab=false
+            lab=initialDestination=="cloud"
+            if (lab) connectionSetup = true
             tab=if(initialDestination in setOf("media","connection")) "media" else "home"
             page=initialDestination?.takeIf { it=="connection" }
         }
@@ -87,7 +89,7 @@ import java.time.Instant
         else context.startActivity(VehicleWidgetProvider.actionIntent(context, it)) }
     AssistantTheme {
         if (lab) Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            TextButton(onClick = { lab = false; if (guideReturn) backToPage() }) { UiText("‹ 返回 OpenAVM") }
+            TextButton(onClick = { lab = false; if (guideReturn) backToPage() }) { UiText(if (connectionSetup && !state.configReady) "稍后设置，返回 OpenAVM" else "‹ 返回 OpenAVM") }
             Box(Modifier.weight(1f)) { CheckApp(model, setupOnly = connectionSetup) }
         } else Scaffold(containerColor = AssistantPaper, bottomBar = {
             if(!mediaDetail && page != "guide") NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
@@ -116,23 +118,35 @@ import java.time.Instant
                     if (page != null) TextButton(onClick = { backToPage() }, contentPadding = PaddingValues(0.dp)) { UiText("‹ 返回") }
                     Column(Modifier.weight(1f)) {
                         UiText("OPENAVM", fontSize = 10.sp, letterSpacing = 1.5.sp, color = AssistantGreen)
-                        UiText(when (page ?: tab) { "home" -> displayName; "vehicle" -> "我的车辆"; "automation" -> "提前准备"; "guard" -> "停车守护";
+                        UiText(when (page ?: tab) { "home" -> if (state.configReady) displayName else "OpenAVM"; "vehicle" -> "我的车辆"; "automation" -> "提前准备"; "guard" -> "停车守护";
                             "history" -> "操作记录"; "background" -> "后台与自动化"; "prepare" -> "本次备车"; "places" -> "停车位置与家"; "appearance" -> "车辆外观"; "quickcheck" -> "离车检查"; "charge" -> "充电与电量"; "widgets" -> "桌面卡片"; "rule" -> "守护规则"; "guide" -> "新手指南"; "language" -> "语言 / Language"; "new_phone" -> "换手机使用"; else -> "我的助手" },
                             raw = (page ?: tab) == "home", fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 2, modifier = Modifier.padding(top = 4.dp))
                     }
-                    if (page == null && tab == "home") TextButton(onClick = { nameEditor = true }, modifier = Modifier.testTag("edit_vehicle_name")) { UiText("编辑") }
-                    if ((page ?: tab) in setOf("home", "vehicle")) {
+                    if (page == null && tab == "home" && state.configReady) TextButton(onClick = { nameEditor = true }, modifier = Modifier.testTag("edit_vehicle_name")) { UiText("编辑") }
+                    if (state.configReady && (page ?: tab) in setOf("home", "vehicle")) {
                     ManualRefreshButton(overview.refreshing(Instant.ofEpochMilli(preparationNow)), canControl, model::refreshOverview)
                     }
                 }
-                if (!state.connected && (page ?: tab) in setOf("home", "vehicle", "automation", "guard", "rule", "charge", "quickcheck")) AssistantCard {
+                if (!state.connected && (page ?: tab) in setOf("home", "vehicle", "automation", "guard", "rule", "charge", "quickcheck") && ((page ?: tab) != "home" || state.configReady)) AssistantCard {
                     UiText(if (state.busy) state.stage else "连接你的车辆", fontWeight = FontWeight.Bold)
                     if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     else Button(onClick = { if (state.sessionSaved) model.reconnect() else { connectionSetup = true; lab = true } }) { UiText(if (state.sessionSaved) "恢复保存的登录" else "连接账号") }
                     if (!state.sessionSaved) UiText("连接后显示你的车况。录像接收可在影像页单独设置。", fontSize = 13.sp, color = AssistantMuted)
                     state.message?.let { UiText(it, fontSize = 12.sp, color = AssistantMuted) }
                 }
-                when (page ?: tab) {
+                when (if ((page ?: tab) == "home" && !state.configReady) "local_home" else page ?: tab) {
+                    "local_home" -> {
+                        OpenAvmSummaryCard(false, { page = "connection" }, { tab = "media" })
+                        AssistantCard {
+                            UiText("极氪云端（可选）", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            UiText(if (access.needsImport) "请重新导入连接配置并登录；录像和车机配对已保留，云端自动化已暂停。"
+                                else "导入自己的连接配置并登录后，可使用车况、备车和车辆控制。", color = AssistantMuted)
+                            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Button(onClick = { connectionSetup = true; lab = true }, enabled = !state.busy,
+                                modifier = Modifier.fillMaxWidth().testTag("setup_cloud")) { UiText("设置云端连接") }
+                        }
+                        AssistantCard { FeatureRow("新手指南", "先用影像，云端连接可稍后设置") { page = "guide" } }
+                    }
                     "home" -> {
                         if (guidePrefs.getInt("completed", 0) < BeginnerGuide.VERSION) AssistantCard {
                             FeatureRow("新手指南", "连接、备车、桌面卡片，一次弄明白") { page = "guide" }

@@ -5,7 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import com.dante.zeekrcheck.core.ProtocolConfig
-import com.dante.zeekrcheck.core.ProtocolDefaults
+import com.dante.zeekrcheck.core.ImportedProtocol
 import com.dante.zeekrcheck.core.SealedConfig
 import com.dante.zeekrcheck.core.SavedSession
 import com.dante.zeekrcheck.core.SessionStorage
@@ -14,13 +14,19 @@ import java.security.KeyStore
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
-/** Call on Dispatchers.IO. Existing protocol files/aliases remain compatible with 0.2.0. */
-class SecureConfigStore(private val context: Context, private val name: String = "protocol") {
-    private val store = SecureRecordStore(context, name, SealedConfig.Purpose.PROTOCOL) { ProtocolConfig.parse(it) }
-    fun load(): String? = store.load()
-    fun loadOrDefault(): String = ProtocolDefaults.loadOrInstall(::load, { BundledProtocol.load(context) }, ::save)
-    fun save(text: String) = store.save(text)
+/** Only the explicit importer writes this authenticated provenance record. No default fallback. */
+class SecureConfigStore(private val context: Context, private val name: String = "connection-profile") {
+    private val store = SecureRecordStore(context, name, SealedConfig.Purpose.IMPORTED_PROTOCOL) { ImportedProtocol.parse(it) }
+    fun profile(): ImportedProtocol? = store.load()?.let(ImportedProtocol::parse)
+    fun load(): String? = profile()?.text
+    fun save(text: String) = save(ImportedProtocol.create(text))
+    fun save(profile: ImportedProtocol) = store.save(profile.encode())
     fun clear() = store.clear()
+    companion object {
+        fun legacyExists(context: Context) = listOf("protocol.sealed", "protocol.sealed.bak", "protocol.sealed.new")
+            .any { File(context.noBackupFilesDir, it).exists() }
+        fun clearLegacy(context: Context) = SecureRecordStore(context, "protocol", SealedConfig.Purpose.PROTOCOL) { }.clear()
+    }
 }
 
 class SecureSessionStore(context: Context, name: String = "session") : SessionStorage {

@@ -28,20 +28,20 @@ class TemperatureUpdateService : Service() {
             return START_NOT_STICKY
         }
         // A launcher may still hold local14–20's combined header PendingIntent after upgrade.
-        // Route that old entry to a read only refresh, including old stop=true header intents.
+        // Never reuse a pre-configuration intent after a configuration or account change.
         if (intent?.getBooleanExtra("combined", false) == true) {
-            WidgetRefreshService.request(this, interactive = true)
+            if (CloudAccess.accepts(intent)) WidgetRefreshService.request(this, interactive = true)
             if (worker?.isActive != true) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
             return START_NOT_STICKY
         }
         val expected = intent!!.getLongExtra("expectedId", 0)
         val stop = intent.getBooleanExtra("stop", false)
         // Initialize before the task is written, so process-recovery cannot retire this new task.
-        val model = ViewModelProvider(application as VehicleApplication,
-            ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java]
+        val model by lazy { ViewModelProvider(application as VehicleApplication,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java] }
         val existing = store.state.value.temperatureUpdate
         if (worker?.isActive == true) {
-            if (stop && existing?.id == expected) store.edit { it.copy(temperatureUpdate = existing.copy(cancelRequested = true,
+            if (CloudAccess.accepts(intent) && stop && existing?.id == expected) store.edit { it.copy(temperatureUpdate = existing.copy(cancelRequested = true,
                 message = if (existing.ownsAc) "正在结束临时空调" else "正在结束刷新")) }
             return START_NOT_STICKY
         }
@@ -50,7 +50,11 @@ class TemperatureUpdateService : Service() {
         }
         worker = scope.launch {
             val observer = launch { store.state.collectLatest { it.temperatureUpdate?.let { task -> notification(task.message, true) } } }
-            try { model.updateTemperature(key!!, expected, stop, ::bound) }
+            try {
+                CloudAccess.loaded(this@TemperatureUpdateService)
+                if (!CloudAccess.accepts(intent)) return@launch
+                model.updateTemperature(key!!, expected, stop) { bound() && CloudAccess.accepts(intent) }
+            }
             finally {
               withContext(NonCancellable) {
                 observer.cancelAndJoin()
@@ -87,7 +91,7 @@ class TemperatureUpdateService : Service() {
             else PendingIntent.getForegroundService(context, 4090 + widget, intent(context, key, task, widget), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         internal fun intent(context: Context, key: String?, task: TemperatureUpdate?, widget: Int, stop: Boolean = task?.let { it.active || it.needsStop } == true) =
             Intent(context, TemperatureUpdateService::class.java).setData(Uri.parse("openavm://temperature/$widget/${task?.id ?: 0}/$stop/false"))
-                .putExtra("vehicleKey", key).putExtra("originWidget", widget).putExtra("expectedId", task?.id ?: 0).putExtra("stop", stop)
+                .putExtra("vehicleKey", key).putExtra("originWidget", widget).putExtra("expectedId", task?.id ?: 0).putExtra("stop", stop).also { CloudAccess.stamp(context, it) }
         fun request(context: Context, stop: Boolean? = null) {
             val key = OverviewStore.get(context).state.value.vehicleKey ?: return
             val task = AssistantStore.get(context).state.value.temperatureUpdate?.takeIf { it.vehicleKey == key }
