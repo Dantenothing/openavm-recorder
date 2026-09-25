@@ -14,6 +14,7 @@ data class UsbOwnedSegmentBundle(
     val manifest: UsbMediaStoreBackend.Metadata,
     val video: UsbMediaStoreBackend.Metadata,
     val sidecar: UsbMediaStoreBackend.Metadata,
+    val incident: com.dante.zeekrcapabilitylab.service.recorder.IncidentTag? = null,
 ) {
     val existingBytes: Long
         get() = listOf(manifest, video, sidecar).sumOf { it.sizeBytes ?: 0L }
@@ -57,8 +58,13 @@ class UsbSegmentCatalog(
             add(packageName)
             addAll(UsbExportRepository.trustedProviderOwners(target))
         }
+        val markers = UsbIncidentMarkers(appContext)
         val segments = all.mapNotNull { metadata ->
             parse(target, metadata, byName, trustedOwners)
+        }.map { bundle ->
+            val protection = markers.read(target, bundle.manifestData, byName)
+            bundle.copy(manifestData = bundle.manifestData.copy(protected = bundle.manifestData.protected || protection.protected),
+                incident = protection.marker?.tag())
         }.distinctBy { it.manifestData.bundleId }
             .sortedBy { it.manifestData.startedAtEpochMs }
         return UsbSegmentCatalogSnapshot(
@@ -84,7 +90,7 @@ class UsbSegmentCatalog(
             )
         }.getOrNull() ?: return null
         if (!manifest.complete || manifest.kind != "OPENAVM_SEGMENT") return null
-        if (manifest.bundleId.length != 64 || manifest.contentKey.length != 64) return null
+        if (!manifest.bundleId.matches(Regex("[a-f0-9]{64}")) || !manifest.contentKey.matches(Regex("[a-f0-9]{64}"))) return null
         if (manifest.assets.size != 2 || manifest.assets.map { it.kind }.toSet() !=
             setOf(UsbExportAssetKind.VIDEO, UsbExportAssetKind.SIDECAR)
         ) return null
@@ -271,6 +277,7 @@ class UsbSegmentRetentionManager(context: Context) {
             }
         }
         writeCleanupIntent(intent.copy(completed = true))
+        runCatching { UsbIncidentMarkers(appContext).removeAfterVideoDeletion(target, bundle) }
     }
 
     private fun writeCleanupIntent(intent: UsbCleanupIntent) {

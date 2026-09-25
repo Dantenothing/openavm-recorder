@@ -28,6 +28,8 @@ import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.isFourLane
+import com.dante.zeekrbridge.core.ContinuousRasterSupport
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import com.dante.zeekrbridge.player.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -46,15 +48,43 @@ internal fun InlineMediaPlayer(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val playable = remember(entries) { entries.filter { it.readable } }
     val first = playable.firstOrNull()
-    if (first == null || playable.any { it.sourceRole != first.sourceRole || it.layoutKind != first.layoutKind }) {
+    val metadataError = playable.firstNotNullOfOrNull {
+        ContinuousRasterSupport.error(it.raster, it.sourceRole, it.layoutKind, it.lanes, it.originalWidth, it.originalHeight)
+    }
+    if (first == null || metadataError != null || playable.any {
+        it.sourceRole != first.sourceRole || it.layoutKind != first.layoutKind || it.raster != first.raster ||
+            (first.raster is RecordingRasterMetadata.Repacked && it.lanes != first.lanes)
+    }) {
         Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium) {
             Text(
                 if (first == null) t("The recording files are missing.", "录像文件已缺失。")
+                else if (metadataError != null) t("Recording layout is unavailable: {0}", "录像布局无法识别：{0}", metadataError)
                 else t("This session contains mixed camera layouts and cannot be played continuously.", "这个录像片段包含不同摄像头布局，无法安全连续播放。"),
                 Modifier.fillMaxWidth().padding(20.dp),
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
         }
+        return
+    }
+    // Validate every repacked segment before creating the decoder, off the UI thread.
+    // The first segment's geometry cannot vouch for rotation or size in later files.
+    val checkedTracks by produceState<Pair<List<PlaybackEntry>, String?>?>(null, playable) {
+        value = withContext(Dispatchers.IO) {
+            playable to playable.filter { it.raster is RecordingRasterMetadata.Repacked }.firstNotNullOfOrNull { item ->
+                val geometry = readDisplayGeometry(context, item)
+                ContinuousRasterSupport.trackError(item.raster, item.layoutKind,
+                    geometry?.width ?: 0, geometry?.height ?: 0, geometry?.metadataRotationDegrees ?: 0)
+            }
+        }
+    }
+    val tracks = checkedTracks?.takeIf { it.first == playable }
+    if (tracks == null) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        return
+    }
+    if (tracks.second != null) {
+        Text(t("Recording layout is unavailable: {0}", "录像布局无法识别：{0}", tracks.second),
+            color = MaterialTheme.colorScheme.error)
         return
     }
     val ids = remember(playable) { playable.map { it.id } }
@@ -82,6 +112,7 @@ internal fun InlineMediaPlayer(
     var speed by rememberSaveable(ids) { mutableFloatStateOf(1f) }
     var muted by rememberSaveable(ids) { mutableStateOf(false) }
     var error by remember(player) { mutableStateOf<String?>(null) }
+    var renderProblem by remember(player) { mutableStateOf<String?>(null) }
     var mode by rememberSaveable(ids) { mutableIntStateOf(FourLaneGlView.MODE_GRID) }
     var lensMode by rememberSaveable(ids) { mutableStateOf(FourLaneLensMode.FISHEYE) }
     var firstFrame by remember(player) { mutableStateOf(false) }
@@ -111,8 +142,8 @@ internal fun InlineMediaPlayer(
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(player, intent, obstructed) {
-        player.playWhenReady = intent.copy(obstructed = obstructed).shouldPlay
+    LaunchedEffect(player, intent, obstructed, renderProblem) {
+        player.playWhenReady = renderProblem == null && intent.copy(obstructed = obstructed).shouldPlay
     }
     val view = LocalView.current
     DisposableEffect(view, isPlaying, obstructed, intent.foreground) {
@@ -126,7 +157,7 @@ internal fun InlineMediaPlayer(
             override fun onIsPlayingChanged(value: Boolean) { isPlaying = value }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) intent = intent.copy(wantsToPlay = false)
-                if (state == Player.STATE_READY) error = null
+                if (state == Player.STATE_READY && renderProblem == null) error = null
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (!playWhenReady && (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
@@ -205,13 +236,17 @@ internal fun InlineMediaPlayer(
                         Box(Modifier.fillMaxWidth().height(frame.height.dp), contentAlignment = Alignment.Center) {
                             if (activeEntry.layoutKind.isFourLane) {
                                 Box(Modifier.size(frame.width.dp, frame.height.dp)) {
-                                    FourLaneVideoSurface(
+                                    key(player) { FourLaneVideoSurface(
                                         player = player, entry = first, mode = mode, lensMode = lensMode,
                                         onModeChanged = { mode = it }, onFirstFrame = { firstFrame = true },
                                         onSurfaceReady = { surfaceAttached = true },
-                                        onRenderError = { error = t("360° rendering failed: {0}", "360° 渲染失败：{0}", it) },
+                                        onRenderError = {
+                                            renderProblem = it
+                                            error = t("360° rendering failed: {0}", "360° 渲染失败：{0}", it)
+                                            intent = intent.copy(wantsToPlay = false)
+                                        },
                                         modifier = Modifier.fillMaxSize(),
-                                    )
+                                    ) }
                                     LaneLabels(entry = first, mode = mode)
                                 }
                             } else {
@@ -225,7 +260,7 @@ internal fun InlineMediaPlayer(
                     PlaybackControls(
                         positionMs = if (dragging) sliderMs.toLong() else currentGlobalMs,
                         durationMs = totalDurationMs,
-                        playing = intent.copy(obstructed = obstructed).shouldPlay,
+                        playing = renderProblem == null && intent.copy(obstructed = obstructed).shouldPlay,
                         speed = speed, muted = muted,
                         onScrub = { dragging = true; sliderMs = it },
                         onScrubFinished = { seekGlobal(sliderMs.toLong()); dragging = false },
@@ -270,7 +305,7 @@ internal fun InlineMediaPlayer(
                             player.prepare()
                             intent = intent.copy(wantsToPlay = true)
                         }
-                    }) { Text(t("Retry", "重试")) }
+                    }, enabled = renderProblem == null) { Text(t("Retry", "重试")) }
                 }
             }
         }

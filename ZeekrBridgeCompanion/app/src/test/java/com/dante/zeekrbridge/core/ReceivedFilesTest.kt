@@ -26,13 +26,14 @@ class ReceivedFilesTest {
     }
 
     @Test
-    fun relatedMetadataFindsBothSupportedSidecarNames() {
+    fun relatedMetadataFindsAllSupportedSidecarNames() {
         val video = tmp.newFile("drive.mp4")
         val legacy = tmp.newFile("drive.mp4.sidecar.json")
         val transferred = tmp.newFile("drive.json")
+        val usb = tmp.newFile("drive.sidecar.json")
 
         assertEquals(
-            setOf(legacy.absolutePath, transferred.absolutePath),
+            setOf(legacy.absolutePath, transferred.absolutePath, usb.absolutePath),
             ReceivedFiles.relatedMetadataFiles(video).map { it.absolutePath }.toSet(),
         )
     }

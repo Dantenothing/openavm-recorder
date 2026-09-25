@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="received" path="received/" />
+    <files-path name="trash" path="trash/" />
+    <files-path name="exports" path="exports/" />
+    <files-path name="usb-sentry" path="usb-sentry-imports/" />
+    <files-path name="sound-projects" path="sounds/" />
+    <files-path name="share" path="openavm-share/" />
+    <cache-path name="sound-export" path="sound-export/" />
+</paths>

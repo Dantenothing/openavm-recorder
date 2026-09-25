@@ -10,6 +10,9 @@ import android.os.Looper
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import com.dante.zeekrbridge.core.IndexedLane
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
+import io.github.dantenothing.avmtransfer.protocol.StripRasterShader
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -146,7 +149,12 @@ class FourLaneGlView(context: Context) : GLSurfaceView(context) {
     }
 
     fun setVideoSize(width: Int, height: Int) {
-        glRenderer.setVideoSize(width, height)
+        queueEvent { glRenderer.setVideoSize(width, height) }
+        requestRender()
+    }
+
+    internal fun setPlaybackRaster(raster: RecordingRasterMetadata, lanes: List<IndexedLane>) {
+        queueEvent { glRenderer.setPlaybackRaster(raster, lanes) }
         requestRender()
     }
 
@@ -215,6 +223,8 @@ private class FourLaneRenderer(
     private val correction = FourLaneCorrectionConfig()
     private var videoWidth = 1280
     private var videoHeight = 5140
+    private var raster: RecordingRasterMetadata = RecordingRasterMetadata.Original
+    private var lanes = emptyList<IndexedLane>()
     private var viewWidth = 1
     private var viewHeight = 1
 
@@ -227,6 +237,8 @@ private class FourLaneRenderer(
     private var uLensMode = 0
     private var uViewport = 0
     private var uCorrection = 0
+    private var uRasterSource = 0
+    private var uRasterStorage = 0
 
     // GLES requires direct, native-order client buffers. A heap FloatBuffer
     // can accept playback while leaving this view permanently black.
@@ -322,6 +334,11 @@ private class FourLaneRenderer(
         }
     }
 
+    fun setPlaybackRaster(raster: RecordingRasterMetadata, lanes: List<IndexedLane>) {
+        this.raster = raster
+        this.lanes = lanes.toList()
+    }
+
     fun provideSurfaceTexture(emit: (SurfaceTexture) -> Unit) {
         created?.let {
             emit(it)
@@ -401,6 +418,8 @@ private class FourLaneRenderer(
             uLensMode = GLES20.glGetUniformLocation(program, "uLensMode")
             uViewport = GLES20.glGetUniformLocation(program, "uViewport")
             uCorrection = GLES20.glGetUniformLocation(program, "uCorrection")
+            uRasterSource = GLES20.glGetUniformLocation(program, "uRasterSource")
+            uRasterStorage = GLES20.glGetUniformLocation(program, "uRasterStorage")
         }
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         if (program == 0) reportRenderError("GL shader initialization failed")
@@ -453,11 +472,20 @@ private class FourLaneRenderer(
             finishDraw("NO_FRAME")
             return
         }
+        raster.trackError(videoWidth, videoHeight)?.let {
+            reportRenderError(it)
+            finishDraw("RASTER_REJECTED")
+            return
+        }
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
         GLES20.glUniform1i(uTexture, 0)
         GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, texMatrix, 0)
+        val contract = (raster as? RecordingRasterMetadata.Repacked)?.contract
+        GLES20.glUniform2f(uRasterSource, (contract?.inputWidth ?: videoWidth).toFloat(), (contract?.inputHeight ?: videoHeight).toFloat())
+        GLES20.glUniform4f(uRasterStorage, videoWidth.toFloat(), videoHeight.toFloat(),
+            (contract?.stripHeight ?: 1).toFloat(), if (contract != null) 1f else 0f)
         GLES20.glUniform1i(uLensMode, if (lensMode == FourLaneLensMode.STANDARD) 1 else 0)
         GLES20.glUniform4f(uViewport, viewport.zoom, viewport.centerX, viewport.centerY, 0f)
         GLES20.glUniform4f(
@@ -497,10 +525,12 @@ private class FourLaneRenderer(
 
     private fun drawCell(col: Int, row: Int, sourceLane: Int) {
         val full = col == -1 && row == -1
+        val contract = (raster as? RecordingRasterMetadata.Repacked)?.contract
         val window = FourLaneTextureLayout.windowForLane(
-            videoWidth = videoWidth,
-            videoHeight = videoHeight,
+            videoWidth = contract?.inputWidth ?: videoWidth,
+            videoHeight = contract?.inputHeight ?: videoHeight,
             lane = sourceLane.coerceIn(1, 4),
+            lanes = if (contract != null) lanes else emptyList(),
         ).forSurfaceTextureTransform()
         GLES20.glUniform4f(uWindow, window.u, window.v, window.width, window.height)
 
@@ -616,7 +646,7 @@ private class FourLaneRenderer(
     companion object {
         private const val VERTEX_SHADER = """
             attribute vec2 aPosition;
-            varying vec2 vLocalUv;
+            varying highp vec2 vLocalUv;
             uniform vec4 uCellRect;
             void main() {
               vec2 p = uCellRect.xy + uCellRect.zw * (aPosition * 0.5 + 0.5);
@@ -625,16 +655,21 @@ private class FourLaneRenderer(
             }
         """
 
-        private const val FRAGMENT_SHADER = """
+        private val FRAGMENT_SHADER = """
             #extension GL_OES_EGL_image_external : require
-            precision mediump float;
-            varying vec2 vLocalUv;
+            precision highp float;
+            varying highp vec2 vLocalUv;
             uniform samplerExternalOES uTexture;
             uniform mat4 uTexMatrix;
             uniform vec4 uWindow;
             uniform int uLensMode;
             uniform vec4 uViewport;
             uniform vec4 uCorrection;
+            vec4 readEncodedRaster(vec2 sourceUv) {
+              vec2 uv = (uTexMatrix * vec4(sourceUv, 0.0, 1.0)).xy;
+              return texture2D(uTexture, uv);
+            }
+            ${StripRasterShader.sampling}
             void main() {
               vec2 sourceUnit;
               if (uLensMode == 1) {
@@ -650,8 +685,7 @@ private class FourLaneRenderer(
               }
               sourceUnit = clamp(sourceUnit, vec2(0.0), vec2(1.0));
               vec2 sourceUv = uWindow.xy + uWindow.zw * sourceUnit;
-              vec2 uv = (uTexMatrix * vec4(sourceUv, 0.0, 1.0)).xy;
-              gl_FragColor = texture2D(uTexture, uv);
+              gl_FragColor = sampleLogicalRaster(sourceUv);
             }
         """
     }

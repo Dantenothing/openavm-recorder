@@ -58,6 +58,11 @@ class UsbMediaStoreBackend(private val context: Context) {
         descriptor.fileDescriptor.sync()
     }
 
+    /** After recorder release only. MediaStore's cached SIZE can still be zero for a nonempty MP4. */
+    fun closedFileLength(uri: Uri): Long? = resolver.openFileDescriptor(uri, "r")?.use {
+        it.statSize.takeIf { bytes -> bytes >= 0L }
+    }
+
     fun trackMetadata(uri: Uri): TrackMetadata? {
         val descriptor = resolver.openFileDescriptor(uri, "r") ?: return null
         descriptor.use { pfd ->
@@ -183,6 +188,22 @@ class UsbMediaStoreBackend(private val context: Context) {
             "${MediaStore.MediaColumns.IS_PENDING}=0",
         selectionArgs = arrayOf(UsbExportPolicy.RELATIVE_PATH, displayName),
     ).firstOrNull()
+
+    fun findOwnedPending(target: UsbExportTarget, displayName: String): Metadata? = query(
+        Uri.parse(target.collectionUri), "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.IS_PENDING}=1",
+        arrayOf(UsbExportPolicy.RELATIVE_PATH, displayName),
+    ).filter { it.ownerPackage == context.packageName }.singleOrNull()
+
+    /** Recovery writes are allowed only to this application's exact pending item. */
+    fun replaceOwnedPendingBytes(uri: Uri, bytes: ByteArray) {
+        val current = requireNotNull(metadata(uri))
+        require(current.pending == 1 && current.ownerPackage == context.packageName)
+        require(current.mimeType == "application/json" && current.displayName?.endsWith(".incident.json") == true)
+        resolver.openFileDescriptor(uri, "rwt").use { descriptor ->
+            requireNotNull(descriptor)
+            FileOutputStream(descriptor.fileDescriptor).use { output -> output.write(bytes); output.flush(); descriptor.fileDescriptor.sync() }
+        }
+    }
 
     fun listPublishedOpenAvm(target: UsbExportTarget): List<Metadata> = query(
         uri = Uri.parse(target.collectionUri),

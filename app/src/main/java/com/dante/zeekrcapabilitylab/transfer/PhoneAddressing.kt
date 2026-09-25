@@ -76,10 +76,15 @@ object PhoneReconnectPolicy {
         saved: PhoneEndpoint,
         discovery: DiscoveryReply,
         health: HealthResponse,
+        verified: VerifiedPhoneSession? = null,
     ): PhoneEndpoint? {
+        // Public discovery/health can suggest an address, never authorize migration.
+        if (verified == null || !saved.securelyPaired || !saved.samePairing(verified.endpoint)) return null
+        if (verified.endpoint.host != discovery.ip || verified.endpoint.port != discovery.port) return null
+        if (verified.response.phoneDeviceId != saved.phoneId) return null
         if (health.service != TransferProtocol.SERVICE || health.phoneDeviceId != saved.phoneId) return null
         if (discovery.service != TransferProtocol.SERVICE || discovery.port !in 1..65_535) return null
-        return saved.copy(
+        return verified.endpoint.copy(
             host = discovery.ip,
             port = discovery.port,
             phoneName = health.deviceName,

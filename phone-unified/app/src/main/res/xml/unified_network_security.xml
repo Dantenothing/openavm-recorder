@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Recorder LAN addresses are chosen during pairing. The Companion validates local endpoints. -->
+    <base-config cleartextTrafficPermitted="true" />
+    <!-- Cloud credentials retain HTTPS-only transport, also enforced by RequestPolicy. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">zeekrlife.com</domain>
+    </domain-config>
+</network-security-config>

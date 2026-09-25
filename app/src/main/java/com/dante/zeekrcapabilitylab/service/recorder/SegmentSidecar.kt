@@ -4,6 +4,10 @@ import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
 import com.dante.zeekrcapabilitylab.player.FourLaneTextureLayout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline
+import io.github.dantenothing.avmtransfer.protocol.StripRepackContract
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -118,7 +122,23 @@ data class SegmentSidecar(
     val timeLapseRelativeError: Double? = null,
     val timeLapseAccuracy: TimeLapseAccuracy? = null,
     val finalizeReason: String? = null,
+    /** Explicit encoded-pixel arrangement; profile/laneLayout remain camera-source coordinates.
+     * Keep unknown descriptors intact so readers reject them rather than fall back to old geometry. */
+    val rasterLayout: JsonElement? = null,
+    val continuousTimeline: ContinuousSegmentTimeline? = null,
 ) {
+    /** Called by the new writer only after it knows the encoded file's exact source coverage. */
+    fun withContinuousRaster(layout: StripRepackContract, timeline: ContinuousSegmentTimeline): SegmentSidecar {
+        require(layout.validate().isEmpty() && timeline.validate().isEmpty())
+        require(profile.size.width == layout.inputWidth && profile.size.height == layout.inputHeight)
+        require(sourceRole == RecordingSourceRole.SURROUND && layoutKind == RecordingLayoutKind.FOUR_LANE_V1)
+        require(recordingSessionId == timeline.runId)
+        require(if (recordingMode == RecordingMode.NORMAL) timeLapseMultiplier == 1 else timeLapseMultiplier in TimeLapsePolicy.MULTIPLIERS)
+        require(laneLayout?.let { it.originalWidth == layout.inputWidth && it.originalHeight == layout.inputHeight } == true)
+        actualTrack?.let { require(layout.matchesTrack(it.width ?: 0, it.height ?: 0)) }
+        return copy(schemaVersion = 9, rasterLayout = Json.encodeToJsonElement(layout), continuousTimeline = timeline)
+    }
+
     companion object {
         const val RESULT_SUCCESS = "SUCCESS"
         const val RESULT_FAILED = "FAILED"
@@ -181,6 +201,10 @@ object SegmentSidecarIO {
     }
 
     fun sidecarFileFor(mp4: File): File = SegmentNaming.sidecarFileFor(mp4)
+
+    /** Direct USB bundles use stem.sidecar.json; internal segments use file.mp4.sidecar.json. */
+    fun readForMedia(mp4: File): SegmentSidecar? = read(sidecarFileFor(mp4))
+        ?: mp4.takeIf { it.extension.equals("mp4", true) }?.let { read(File(it.parentFile, it.nameWithoutExtension + ".sidecar.json")) }
 
     /** Writes to a `.tmp` sibling and renames over the target so readers never see a torn file. */
     fun writeAtomic(mp4: File, sidecar: SegmentSidecar): File {

@@ -26,6 +26,7 @@ class UsbMediaStoreRecordingOutputSink(
     private val recordingMode: RecordingMode,
     private val tokenDir: File,
     private val journal: UsbRecordingRecoveryJournal,
+    private val onUnconfirmedDescriptorClose: ((ParcelFileDescriptor) -> Unit)? = null,
 ) : RecordingOutputSink {
     private val appContext = context.applicationContext
     private val backend = UsbMediaStoreBackend(appContext)
@@ -50,8 +51,9 @@ class UsbMediaStoreRecordingOutputSink(
             cleanupInserted(inserted, segmentNumber)
             throw failure
         }
-        tokenDir.mkdirs()
         val marker = File(tokenDir, "$operationId.token")
+        try {
+        tokenDir.mkdirs()
         marker.writeText(operationId)
         val pending = UsbPendingVideo(
             operationId = operationId,
@@ -98,6 +100,16 @@ class UsbMediaStoreRecordingOutputSink(
             localWorkingFile = marker,
             journal = journal,
         )
+        } catch (failure: Throwable) {
+            // No recorder/camera has seen this descriptor yet. Do not leak it if local journal storage fails.
+            runCatching { descriptor.close() }.onFailure {
+                failure.addSuppressed(it)
+                onUnconfirmedDescriptorClose?.invoke(descriptor)
+            }
+            runCatching { cleanupInserted(inserted, segmentNumber) }
+            runCatching { journal.remove(operationId); marker.delete() }
+            throw failure
+        }
     }
 
     private fun cleanupInserted(metadata: UsbMediaStoreBackend.Metadata, segmentNumber: Int) {
@@ -139,10 +151,38 @@ class UsbMediaStoreRecordingOutputHandle internal constructor(
         description = target.description,
     )
     override val displayName: String = pendingVideo.displayName
+    override val nativeReleaseConfirmed: Boolean get() = descriptor == null
+
+    override fun appendFinalMetadata(document: String) {
+        check(nativeReleaseConfirmed) { "PRODUCT_DESCRIPTOR_STILL_OWNED" }
+        UsbMutationCoordinator.withTarget(target.storageUuid) {
+            requireNotNull(appContext.contentResolver.openFileDescriptor(Uri.parse(pendingVideo.itemUri), "rw")).use { fd ->
+                ContinuousFileMetadata.append(RecordingDescriptorChannel(fd.fileDescriptor), document)
+                android.system.Os.fsync(fd.fileDescriptor)
+            }
+        }
+    }
 
     override fun bind(recorder: MediaRecorder) {
         recorder.setOutputFile(requireNotNull(descriptor).fileDescriptor)
     }
+
+    fun bindNext(recorder: MediaRecorder) {
+        recorder.setNextOutputFile(requireNotNull(descriptor).fileDescriptor)
+    }
+
+    /** Local metadata only. Never reads, publishes, renames or syncs the active video. */
+    fun checkpointNative(sidecar: SegmentSidecar) {
+        check(journal.checkpointNative(pendingVideo.operationId, sidecar)) { "NATIVE_OUTPUT_JOURNAL_MISSING" }
+    }
+
+    fun clearNativeCheckpoint() = journal.clearNativeCheckpoint(pendingVideo.operationId)
+
+    fun bytesAfterRecorderRelease(): Long? = backend.closedFileLength(Uri.parse(pendingVideo.itemUri))
+
+    /** Muxer owns its native duplicate; this handle still owns durability/FD/journal lifetime. */
+    override fun createMuxer(): android.media.MediaMuxer = android.media.MediaMuxer(requireNotNull(descriptor).fileDescriptor,
+        android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
     override fun close() {
         val current = descriptor ?: return
@@ -157,7 +197,7 @@ class UsbMediaStoreRecordingOutputHandle internal constructor(
         close()
         // A disappearing provider must not escape into a recorder/camera executor and kill
         // the process. The durable journal intentionally remains for the next same-volume mount.
-        runCatching { UsbPendingRecordingRecoveryEngine.recoverMounted(appContext) }
+        runCatching { UsbPendingRecordingRecoveryEngine.recoverMounted(appContext, pendingVideo.operationId) }
         runCatching {
             if (journal.entries().none { it.operationId == pendingVideo.operationId }) {
                 localWorkingFile.delete()
@@ -176,6 +216,25 @@ class UsbMediaStoreRecordingOutputHandle internal constructor(
         journal.remove(pendingVideo.operationId)
         localWorkingFile.delete()
     }
+}
+
+/** A seekable view of the granted descriptor. Does not reopen a provider path or own the FD. */
+private class RecordingDescriptorChannel(private val descriptor: java.io.FileDescriptor) : java.nio.channels.SeekableByteChannel {
+    private var open = true
+    override fun isOpen() = open && descriptor.valid()
+    override fun close() { open = false }
+    private fun checkOpen() { check(isOpen) { "PRODUCT_METADATA_DESCRIPTOR_CLOSED" } }
+    override fun position(): Long { checkOpen(); return android.system.Os.lseek(descriptor, 0, android.system.OsConstants.SEEK_CUR) }
+    override fun position(newPosition: Long): java.nio.channels.SeekableByteChannel {
+        require(newPosition >= 0); checkOpen(); android.system.Os.lseek(descriptor, newPosition, android.system.OsConstants.SEEK_SET); return this
+    }
+    override fun size(): Long { checkOpen(); return android.system.Os.fstat(descriptor).st_size }
+    override fun truncate(size: Long): java.nio.channels.SeekableByteChannel = error("PRODUCT_METADATA_TRUNCATE_FORBIDDEN")
+    override fun read(dst: java.nio.ByteBuffer): Int {
+        checkOpen(); if (!dst.hasRemaining()) return 0
+        return android.system.Os.read(descriptor, dst).let { if (it == 0) -1 else it }
+    }
+    override fun write(src: java.nio.ByteBuffer): Int { checkOpen(); return android.system.Os.write(descriptor, src) }
 }
 
 /** Reconciles only exact alpha19 pending URIs; it never scans or mutates SentryMode. */

@@ -1,0 +1,4 @@
+<resources>
+    <string name="widget_label_full">Vehicle card · 4×3</string>
+    <string name="widget_label_compact">Quick controls · 4×2</string>
+</resources>

@@ -52,6 +52,22 @@ class TrashStoreTest {
     }
 
     @Test
+    fun usbMetadataFollowsVideoThroughTrashAndCollisionRestore() {
+        val received = temp.newFolder("received-usb")
+        val trash = temp.newFolder("trash-usb")
+        val original = File(received, "drive.mp4").apply { writeText("old") }
+        val sidecar = File(received, "drive.sidecar.json").apply { writeText("old-layout") }
+        val repository = TrashRepository(received, trash) { 1234L }
+        assertEquals(1, repository.moveToTrash(listOf(original)))
+        assertFalse(sidecar.exists())
+        original.writeText("new")
+        sidecar.writeText("new-layout")
+        assertEquals(1, repository.restore(repository.list().single().id))
+        assertEquals("new-layout", sidecar.readText())
+        assertEquals("old-layout", File(received, "drive (2).sidecar.json").readText())
+    }
+
+    @Test
     fun permanentDeleteRemovesOneEntryOnly() {
         val received = temp.newFolder("received-delete")
         val trash = temp.newFolder("trash-delete")

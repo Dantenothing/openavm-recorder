@@ -60,6 +60,8 @@ data class VehicleUsbRecording(
     val layoutKind: RecordingLayoutKind,
     val timeLapseMultiplier: Int,
     val containsDirectRecording: Boolean = false,
+    val protectedSegments: Int = 0,
+    val eventTimes: List<Long> = emptyList(),
     val ownedUnits: List<OpenAvmOwnedUnitRef> = emptyList(),
 )
 
@@ -89,7 +91,7 @@ data class VehicleUsbMediaSnapshot(
 
 /**
  * Read-only vehicle library for removable OpenAVM exports and factory SentryMode events.
- * USB contents are never changed here. Only the compact index cache under filesDir is written.
+ * Existing videos/metadata are read-only. Durable bookmark intents may finish publication on USB reconnect.
  */
 object VehicleUsbMediaLibrary {
     private val json = Json {
@@ -105,6 +107,9 @@ object VehicleUsbMediaLibrary {
         val errors = mutableListOf<String>()
 
         targets.forEach { target ->
+            if (!com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.active) {
+                runCatching { com.dante.zeekrcapabilitylab.usbexport.UsbIncidentMarkers(appContext).synchronizePending(target) }
+            }
             val old = previous[target.storageUuid]
             val root = target.directoryPath?.let(::File)
             val sentryEvents = if (root != null) {
@@ -212,6 +217,8 @@ object VehicleUsbMediaLibrary {
                 layoutKind = sidecar?.layoutKind?.name ?: RecordingLayoutKind.FOUR_LANE_V1.name,
                 timeLapseMultiplier = sidecar?.timeLapseMultiplier ?: 1,
                 containsDirectRecording = manifest.sourceKind == UsbSegmentSourceKind.DIRECT_RECORDING,
+                protectedSegments = if (manifest.protected) 1 else 0,
+                eventTimes = listOfNotNull(bundle.incident?.requestedAtEpochMs ?: sidecar?.eventRequestedAtEpochMs),
                 ownedUnits = listOf(OpenAvmOwnedUnitRef(OpenAvmOwnedUnitKind.SEGMENT_BUNDLE, manifest.bundleId)),
             )
         }
@@ -234,6 +241,8 @@ object VehicleUsbMediaLibrary {
                     videoRelativePaths = videos.map { it.first },
                     videoDurationsMs = videos.map { it.second },
                     containsDirectRecording = ordered.any { it.containsDirectRecording },
+                    protectedSegments = ordered.sumOf { it.protectedSegments },
+                    eventTimes = ordered.flatMap { it.eventTimes }.distinct().sorted(),
                     ownedUnits = ordered.flatMap { it.ownedUnits }.distinct(),
                 )
             }
@@ -277,6 +286,8 @@ object VehicleUsbMediaLibrary {
                     layoutKind = enumValueOrDefault(recording.layoutKind, RecordingLayoutKind.FOUR_LANE_V1),
                     timeLapseMultiplier = recording.timeLapseMultiplier.coerceAtLeast(1),
                     containsDirectRecording = recording.containsDirectRecording,
+                    protectedSegments = recording.protectedSegments,
+                    eventTimes = recording.eventTimes,
                     ownedUnits = recording.ownedUnits,
                 )
             }
@@ -425,6 +436,8 @@ object VehicleUsbMediaLibrary {
         val layoutKind: String,
         val timeLapseMultiplier: Int,
         val containsDirectRecording: Boolean = false,
+        val protectedSegments: Int = 0,
+        val eventTimes: List<Long> = emptyList(),
         val ownedUnits: List<OpenAvmOwnedUnitRef> = emptyList(),
     )
 

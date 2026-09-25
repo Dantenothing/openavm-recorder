@@ -1,5 +1,7 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
+import com.dante.zeekrcapabilitylab.sharing.ShareSelection
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -25,6 +27,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
@@ -48,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +76,7 @@ import com.dante.zeekrcapabilitylab.player.RecordingPresentationPolicy
 import com.dante.zeekrcapabilitylab.player.FourLaneThumbs
 import com.dante.zeekrcapabilitylab.product.EventGroups
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.product.RecordingDateFilter
 import com.dante.zeekrcapabilitylab.product.MediaAvailability
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.VehicleMediaCategory
@@ -99,6 +104,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -169,6 +175,7 @@ private sealed interface VehiclePlaybackItem {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun EventsScreen() {
     val context = LocalContext.current
@@ -181,6 +188,7 @@ fun EventsScreen() {
     }
     val languageMode by AppLanguage.mode.collectAsState()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val nativePublicationRevision by com.dante.zeekrcapabilitylab.service.recorder.NativeUsbPublication.revision.collectAsState()
     val guardStore = remember { GuardEventStore(context) }
     val phoneConnection by TransferRepository.connection.collectAsState()
     val usbExportTasks by UsbExportRepository.tasks.collectAsState()
@@ -193,6 +201,10 @@ fun EventsScreen() {
     var usbMedia by remember { mutableStateOf(VehicleUsbMediaSnapshot()) }
     var guardRows by remember { mutableStateOf<List<OpenAvmSentryRow>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf(VehicleMediaCategory.ALL) }
+    var selectedEpochDay by rememberSaveable { mutableStateOf<Long?>(null) }
+    val dateZone = ZoneId.systemDefault()
+    val libraryGrid = rememberLazyGridState()
+    LaunchedEffect(selectedEpochDay, selectedCategory) { libraryGrid.scrollToItem(0) }
     var statusText by remember { mutableStateOf("") }
     var playRecording by remember { mutableStateOf<RecorderLibrary.Recording?>(null) }
     var playUsbRecording by remember { mutableStateOf<VehicleUsbRecording?>(null) }
@@ -211,6 +223,13 @@ fun EventsScreen() {
     var availableUsbTargets by remember { mutableStateOf<List<UsbExportTarget>>(emptyList()) }
     var selectedUsbTarget by remember { mutableStateOf<UsbExportTarget?>(null) }
     var findingUsb by remember { mutableStateOf(false) }
+    var browserShare by remember { mutableStateOf<ShareSelection?>(null) }
+
+    fun shareInBrowser(selection: ShareSelection) {
+        if (CameraRecordingService.isRunning() || pendingCameraCleanup > 0) {
+            statusText = Utils.t("Stop recording and wait for the camera to finish closing first.", "请先停止录像，等待相机关闭完成。")
+        } else browserShare = selection
+    }
 
     fun refresh(scanUsb: Boolean = false) {
         scope.launch(Dispatchers.IO) {
@@ -562,6 +581,10 @@ fun EventsScreen() {
         if (recorderState.libraryRevision > 0L) refresh(scanUsb = false)
     }
 
+    LaunchedEffect(nativePublicationRevision) {
+        if (nativePublicationRevision > 0L) refresh(scanUsb = true)
+    }
+
     LaunchedEffect(guardRows, playGuardRow?.event?.id) {
         val selectedId = playGuardRow?.event?.id ?: return@LaunchedEffect
         playGuardRow = guardRows.firstOrNull { it.event.id == selectedId }
@@ -586,37 +609,40 @@ fun EventsScreen() {
             segments.filter { it.sidecar.recordingMode == RecordingMode.NORMAL },
         )
     }
-    val visibleIncidents = remember(incidents, selectedCategory) {
+    val visibleIncidents = remember(incidents, selectedCategory, selectedEpochDay, dateZone) {
         if (selectedCategory in setOf(VehicleMediaCategory.ALL, VehicleMediaCategory.EVENTS)) {
-            incidents
+            incidents.filter { RecordingDateFilter.matches(it.startedAtEpochMs, selectedEpochDay, dateZone) }
         } else {
             emptyList()
         }
     }
-    val visibleRecordings = remember(recordings, selectedCategory) {
+    val visibleRecordings = remember(recordings, selectedCategory, selectedEpochDay, dateZone) {
         when (selectedCategory) {
             VehicleMediaCategory.ALL -> recordings
             VehicleMediaCategory.NORMAL -> recordings.filterNot { it.isTimeLapse }
             VehicleMediaCategory.TIME_LAPSE -> recordings.filter { it.isTimeLapse }
             VehicleMediaCategory.EVENTS, VehicleMediaCategory.OPENAVM_SENTRY, VehicleMediaCategory.SENTRY -> emptyList()
-        }
+        }.filter { RecordingDateFilter.matches(it.startedAtEpochMs, selectedEpochDay, dateZone) }
     }
     val internalIds = remember(recordings) { recordings.mapTo(mutableSetOf()) { it.id } }
-    val visibleUsbRecordings = remember(usbMedia, selectedCategory, internalIds) {
+    val visibleUsbRecordings = remember(usbMedia, selectedCategory, internalIds, selectedEpochDay, dateZone) {
         usbMedia.openAvmRecordings.filter { recording ->
-            (recording.logicalId !in internalIds || recording.containsDirectRecording) &&
-                (selectedCategory == VehicleMediaCategory.ALL || recording.category == selectedCategory)
+            RecordingDateFilter.matches(recording.startedAtEpochMs, selectedEpochDay, dateZone) &&
+                (recording.logicalId !in internalIds || recording.containsDirectRecording) &&
+                (selectedCategory == VehicleMediaCategory.ALL || recording.category == selectedCategory ||
+                    (selectedCategory == VehicleMediaCategory.EVENTS && recording.eventTimes.isNotEmpty()))
         }
     }
-    val visibleSentryRecordings = remember(usbMedia, selectedCategory) {
+    val visibleSentryRecordings = remember(usbMedia, selectedCategory, selectedEpochDay, dateZone) {
         if (selectedCategory in setOf(VehicleMediaCategory.ALL, VehicleMediaCategory.SENTRY)) {
-            usbMedia.sentryRecordings
+            usbMedia.sentryRecordings.filter { RecordingDateFilter.matches(it.startedAtEpochMs, selectedEpochDay, dateZone) }
         } else {
             emptyList()
         }
     }
-    val visibleGuardRows = remember(guardRows, selectedCategory) {
-        if (selectedCategory in setOf(VehicleMediaCategory.ALL, VehicleMediaCategory.OPENAVM_SENTRY)) guardRows else emptyList()
+    val visibleGuardRows = remember(guardRows, selectedCategory, selectedEpochDay, dateZone) {
+        if (selectedCategory in setOf(VehicleMediaCategory.ALL, VehicleMediaCategory.OPENAVM_SENTRY))
+            guardRows.filter { RecordingDateFilter.matches(it.event.createdAtEpochMs, selectedEpochDay, dateZone) } else emptyList()
     }
     val timelineItems = remember(
         visibleIncidents,
@@ -743,9 +769,9 @@ fun EventsScreen() {
         deletingSelection = true
         scope.launch(Dispatchers.IO) {
             val result = OpenAvmUsbDeletionManager(context).delete(
-                listOf(OpenAvmUsbDeleteRequest(recording.stableKey, recording.storageUuid, recording.ownedUnits)),
+                listOf(OpenAvmUsbDeleteRequest(recording.stableKey, recording.storageUuid, recording.ownedUnits, includeProtected = true)),
             )
-            val details = result.errors.joinToString(" | ").take(360)
+            val details = result.errors.map(::usbDeleteMessage).distinct().joinToString(" | ").take(360)
             withContext(Dispatchers.Main) {
                 deletingSelection = false
                 statusText = if (result.deletedRecordings == 1) {
@@ -765,7 +791,7 @@ fun EventsScreen() {
         if (deletingSelection || selectedTimelineItems.isEmpty()) return
         val internalFiles = selectedInternalFiles
         val usbRequests = selectedUsbRecordings.map { recording ->
-            OpenAvmUsbDeleteRequest(recording.stableKey, recording.storageUuid, recording.ownedUnits)
+            OpenAvmUsbDeleteRequest(recording.stableKey, recording.storageUuid, recording.ownedUnits, includeProtected = true)
         }
         confirmDeleteSelected = false
         deletingSelection = true
@@ -778,7 +804,7 @@ fun EventsScreen() {
             withContext(Dispatchers.Main) {
                 deletingSelection = false
                 leaveSelectionMode()
-                val usbErrors = usbResult.errors.joinToString(" | ").take(360)
+                val usbErrors = usbResult.errors.map(::usbDeleteMessage).distinct().joinToString(" | ").take(360)
                 statusText = Utils.t("Deleted {0} local files and {1} USB recordings", "已删除 {0} 个本地文件和 {1} 条 U 盘录像", deletedInternal, usbResult.deletedRecordings) +
                     if (blockedInternal + usbResult.blockedRecordings > 0) {
                         Utils.t("; {0} blocked", "；{0} 项被阻止", blockedInternal + usbResult.blockedRecordings) +
@@ -800,6 +826,7 @@ fun EventsScreen() {
         }
         LazyVerticalGrid(
             columns = GridCells.Fixed(columnCount),
+            state = libraryGrid,
             modifier = Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 18.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -810,20 +837,11 @@ fun EventsScreen() {
                     Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
+                    RecordingLibraryHeader(
+                        subtitle = if (selectionMode) Utils.t(
+                            "{0} selected · {1}", "已选 {0} 项 · {1}", selectedTimelineItems.size, formatBytes(selectedDeleteBytes))
+                        else Utils.t("{0} items", "{0} 项内容", visibleCount),
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(Utils.t("Recordings", "录像记录"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                            Text(
-                                if (selectionMode) Utils.t(
-                                    "{0} selected · {1}", "已选 {0} 项 · {1}", selectedTimelineItems.size, formatBytes(selectedDeleteBytes)) else Utils.t("{0} items", "{0} 项内容", visibleCount),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (selectionMode) {
                                 OutlinedButton(onClick = { selectedDeleteKeys = selectableKeys }, enabled = selectableKeys.isNotEmpty() && !deletingSelection) {
                                     Text(Utils.t("Select visible", "全选当前"))
@@ -839,10 +857,10 @@ fun EventsScreen() {
                                 }
                             } else {
                                 OutlinedButton(onClick = { selectionMode = true }) { Text(Utils.t("Select", "多选")) }
-                                OutlinedButton(onClick = { confirmDeleteUnprotected = true }, enabled = segments.any { !it.sidecar.protected }) {
+                                if (selectedEpochDay == null) OutlinedButton(onClick = { confirmDeleteUnprotected = true }, enabled = segments.any { !it.sidecar.protected }) {
                                     Text(Utils.t("Delete unprotected", "删除未保护"))
                                 }
-                                OutlinedButton(onClick = { confirmDeleteAll = true }, enabled = segments.isNotEmpty()) {
+                                if (selectedEpochDay == null) OutlinedButton(onClick = { confirmDeleteAll = true }, enabled = segments.isNotEmpty()) {
                                     Text(
                                         Utils.t("Clear recordings", "清空录像"),
                                         color = if (segments.isNotEmpty()) MaterialTheme.colorScheme.error else Color.Unspecified,
@@ -851,7 +869,6 @@ fun EventsScreen() {
                                 OutlinedButton(onClick = { refresh(scanUsb = true) }) { Text(Utils.t("Refresh", "刷新")) }
                             }
                         }
-                    }
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -860,7 +877,7 @@ fun EventsScreen() {
                             category != VehicleMediaCategory.OPENAVM_SENTRY || guardRows.isNotEmpty() ||
                                 usbMedia.openAvmRecordings.any { it.category == VehicleMediaCategory.OPENAVM_SENTRY }
                         }.forEach { category ->
-                            OutlinedButton(onClick = {
+                            OutlinedButton(enabled = !deletingSelection, onClick = {
                                 selectedCategory = category
                                 if (selectionMode) selectedDeleteKeys = emptySet()
                             }) {
@@ -870,6 +887,11 @@ fun EventsScreen() {
                                 )
                             }
                         }
+                    }
+                    RecordingDateControls(selectedEpochDay, enabled = !deletingSelection) { date ->
+                        selectedDeleteKeys = emptySet()
+                        confirmDeleteSelected = false
+                        selectedEpochDay = date
                     }
                     if (statusText.isNotBlank()) {
                         Text(
@@ -901,7 +923,9 @@ fun EventsScreen() {
                             .padding(vertical = 80.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(Utils.t("No recordings", "暂无录像"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (selectedEpochDay == null) Utils.t("No recordings", "暂无录像") else
+                            Utils.t("No recordings for this date and category", "这个日期和分类下暂无录像"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -974,6 +998,7 @@ fun EventsScreen() {
                                 onPlay = { playRecording = recording },
                                 onToggleProtect = { toggleRecordingProtection(recording) },
                                 onSendToPhone = { queueForPhone(recording.files) },
+                                onBrowserShare = { shareInBrowser(ShareSelection.Internal(recording.files)) },
                                 onExportToUsb = {
                                     requestUsbExport(
                                         UsbExportSelection(
@@ -1004,6 +1029,7 @@ fun EventsScreen() {
                                     }
                                 },
                                 onSendToPhone = { queueUsbForPhone(recording, recording.files) },
+                                onBrowserShare = { shareInBrowser(ShareSelection.Usb(recording)) },
                                 onDelete = { pendingDeleteUsbRecording = recording },
                                 deleteEnabled = entry.key in selectableKeys && !deletingSelection,
                                 selectionMode = selectionMode,
@@ -1024,6 +1050,7 @@ fun EventsScreen() {
                                     }
                                 },
                                 onSendToPhone = { queueSentryForPhone(sentry) },
+                                onBrowserShare = { shareInBrowser(ShareSelection.Factory(sentry)) },
                                 selectionMode = selectionMode,
                             )
                         }
@@ -1031,6 +1058,10 @@ fun EventsScreen() {
                 }
             }
         }
+    }
+
+    if (BuildConfig.BROWSER_DOWNLOAD_ENABLED) {
+        browserShare?.let { selection -> BrowserShareDialog(selection) { browserShare = null } }
     }
 
     playGuardRow?.let { row ->
@@ -1093,6 +1124,7 @@ fun EventsScreen() {
                 file = recording.files.first(),
                 files = recording.files,
                 segmentDurationHintsMs = recording.segmentDurationsMs,
+                manualEventEpochs = recording.eventTimes,
                 layoutKind = recording.layoutKind,
                 sourceRole = recording.sourceRole,
                 recordingMode = if (recording.category == VehicleMediaCategory.TIME_LAPSE) {
@@ -1274,6 +1306,7 @@ fun EventsScreen() {
                             "{0} protected internal files are included by this explicit action.", "本次明确操作包含 {0} 个受保护内部文件。", selectedProtectedFiles),
                         color = MaterialTheme.colorScheme.error,
                     )
+                    if (selectedUsbRecordings.any { it.protectedSegments > 0 }) Text(Utils.t("Protected USB clips are included in this permanent deletion.", "本次永久删除包含已保护的 USB 片段。"), color = MaterialTheme.colorScheme.error)
                     Text(Utils.t(
                         "Playback, transfer and active recording locks still win. Factory /SentryMode/ is read-only and excluded.",
                         "播放、传输和正在录像的锁仍然优先。原厂 /SentryMode/ 只读且已排除。",
@@ -1299,6 +1332,7 @@ fun EventsScreen() {
             title = { Text(Utils.t("Delete this USB recording?", "删除这段 U 盘录像？")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (recording.protectedSegments > 0) Text(Utils.t("Protected USB clips are included in this permanent deletion.", "本次永久删除包含已保护的 USB 片段。"), color = MaterialTheme.colorScheme.error)
                     Text(
                         Utils.t(
                             "This permanently deletes all {0} manifest-proven OpenAVM units in this recording ({1}).", "这会永久删除本次录像中全部 {0} 个经 manifest 验证的 OpenAVM 单元（{1}）。", recording.ownedUnits.size, formatBytes(recording.totalBytes)),
@@ -1432,6 +1466,38 @@ fun EventsScreen() {
     }
 }
 
+/** Keep library actions at the top right; only a narrow window puts them on a second row. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun RecordingLibraryHeader(subtitle: String, actions: @Composable () -> Unit) {
+    val title: @Composable () -> Unit = {
+        Column {
+            Text(Utils.t("Recordings", "录像记录"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    val controls: @Composable (Modifier) -> Unit = { modifier ->
+        androidx.compose.foundation.layout.FlowRow(
+            modifier,
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) { actions() }
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= 800.dp) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Box(Modifier.weight(1f).padding(end = 16.dp)) { title() }
+                controls(Modifier.weight(2f))
+            }
+        } else {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                title()
+                controls(Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionTitle(title: String, count: String) {
     Row(
@@ -1453,6 +1519,7 @@ private fun RecordingCard(
     onPlay: () -> Unit,
     onToggleProtect: () -> Unit,
     onSendToPhone: () -> Unit,
+    onBrowserShare: () -> Unit,
     onExportToUsb: () -> Unit,
     usbExportEnabled: Boolean,
     onDelete: () -> Unit,
@@ -1510,6 +1577,7 @@ private fun RecordingCard(
                         onDismiss = { menuOpen = false },
                         onToggleProtect = onToggleProtect,
                         onSendToPhone = onSendToPhone,
+                        onBrowserShare = onBrowserShare,
                         onExportToUsb = onExportToUsb,
                         usbExportEnabled = usbExportEnabled,
                         onDelete = onDelete,
@@ -1615,6 +1683,7 @@ private fun UsbOpenAvmMediaCard(
     cover: Bitmap?,
     onPlay: () -> Unit,
     onSendToPhone: () -> Unit,
+    onBrowserShare: () -> Unit,
     onDelete: () -> Unit,
     deleteEnabled: Boolean,
     selectionMode: Boolean,
@@ -1643,6 +1712,7 @@ private fun UsbOpenAvmMediaCard(
                     verticalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     StatusBadge("USB", Color(0xFF64B5F6))
+                    if (recording.protectedSegments > 0) StatusBadge(Utils.t("Protected", "已保护"), Color(0xFFFFB74D))
                     StatusBadge(categoryLabel(recording.category), Color(0xFF81C784))
                 }
                 if (!online) {
@@ -1667,6 +1737,7 @@ private fun UsbOpenAvmMediaCard(
                             mediaAvailable = online && recording.files.isNotEmpty(),
                             onPlay = onPlay,
                             onSendToPhone = onSendToPhone,
+                            onBrowserShare = onBrowserShare,
                             onDelete = onDelete,
                             deleteEnabled = deleteEnabled,
                         )
@@ -1696,6 +1767,7 @@ private fun UsbSentryMediaCard(
     cover: Bitmap?,
     onPlay: () -> Unit,
     onSendToPhone: () -> Unit,
+    onBrowserShare: () -> Unit,
     selectionMode: Boolean,
 ) {
     val online = recording.availability == MediaAvailability.ONLINE
@@ -1742,6 +1814,7 @@ private fun UsbSentryMediaCard(
                             mediaAvailable = online && recording.videoFile != null,
                             onPlay = onPlay,
                             onSendToPhone = onSendToPhone,
+                            onBrowserShare = onBrowserShare,
                         )
                     }
                 }
@@ -1862,6 +1935,7 @@ private fun UsbRecordingActionsMenu(
     mediaAvailable: Boolean,
     onPlay: () -> Unit,
     onSendToPhone: () -> Unit,
+    onBrowserShare: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     deleteEnabled: Boolean = false,
 ) {
@@ -1875,6 +1949,11 @@ private fun UsbRecordingActionsMenu(
             text = { Text(Utils.t("Send to phone", "发送到手机")) },
             onClick = { onDismiss(); onSendToPhone() },
             enabled = mediaAvailable && GalleryTransferActionPolicy.menuEnabled,
+        )
+        if (BuildConfig.BROWSER_DOWNLOAD_ENABLED && onBrowserShare != null) DropdownMenuItem(
+            text = { Text(Utils.t("Browser download", "浏览器下载")) },
+            onClick = { onDismiss(); onBrowserShare() },
+            enabled = mediaAvailable,
         )
         if (onDelete != null) {
             DropdownMenuItem(
@@ -1893,6 +1972,7 @@ private fun RecordingActionsMenu(
     onDismiss: () -> Unit,
     onToggleProtect: () -> Unit,
     onSendToPhone: () -> Unit,
+    onBrowserShare: (() -> Unit)? = null,
     onExportToUsb: () -> Unit,
     usbExportEnabled: Boolean,
     onDelete: () -> Unit,
@@ -1906,6 +1986,10 @@ private fun RecordingActionsMenu(
             text = { Text(Utils.t("Send to phone", "发送到手机")) },
             onClick = { onDismiss(); onSendToPhone() },
             enabled = GalleryTransferActionPolicy.menuEnabled,
+        )
+        if (BuildConfig.BROWSER_DOWNLOAD_ENABLED && onBrowserShare != null) DropdownMenuItem(
+            text = { Text(Utils.t("Browser download", "浏览器下载")) },
+            onClick = { onDismiss(); onBrowserShare() },
         )
         DropdownMenuItem(
             text = { Text(Utils.t("Export to USB (experimental)", "导出到 USB（实验性）")) },
@@ -2083,6 +2167,15 @@ private fun decodeSampledCover(file: File): Bitmap? {
             BitmapFactory.Options().apply { inSampleSize = sample },
         )
     }.getOrNull()
+}
+
+private fun usbDeleteMessage(error: String): String = when (error.substringAfterLast(':')) {
+    "RECORDING_ACTIVE" -> Utils.t("Recording or saving is in progress. Stop recording and wait for saving to finish before deleting.", "正在录像或保存文件，请停止录像并等待保存完成后再删除。")
+    "CAMERA_WORK_BUSY" -> Utils.t("Camera work is still finishing. Wait for it to finish before deleting.", "相机任务尚未结束，请等待收尾完成后再删除。")
+    "USB_SEGMENT_PLAYING", "USB_EXPORT_PLAYING" -> Utils.t("Close playback before deleting this recording.", "请先关闭这段录像的播放，再删除。")
+    "USB_SEGMENT_TRANSFER_ACTIVE" -> Utils.t("This recording is being transferred. Wait for the transfer to finish.", "这段录像正在传输，请等待传输完成。")
+    "TARGET_NOT_MOUNTED" -> Utils.t("The selected USB is no longer connected.", "所选 U 盘已断开。")
+    else -> error
 }
 
 private fun deleteFailureText(reason: String?): String = when (reason) {

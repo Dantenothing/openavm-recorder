@@ -26,12 +26,12 @@ internal object UsbPendingRecordingRecoveryEngine {
     private const val MAX_MANIFEST_BYTES = 2 * 1024 * 1024
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun recoverMounted(context: Context) {
+    fun recoverMounted(context: Context, onlyOperationId: String? = null) {
         val appContext = context.applicationContext
         val journal = UsbRecordingRecoveryJournal(appContext)
         val backend = UsbMediaStoreBackend(appContext)
         val targets = UsbExportVolumeResolver.mountedTargets(appContext)
-        journal.entries().forEach { entry ->
+        journal.entries().filter { onlyOperationId == null || it.operationId == onlyOperationId }.forEach { entry ->
             val target = targets.singleOrNull {
                 it.storageUuid.equals(entry.storageUuid, ignoreCase = true) &&
                     it.volumeName.equals(entry.volumeName, ignoreCase = true)
@@ -49,6 +49,8 @@ internal object UsbPendingRecordingRecoveryEngine {
         target: UsbExportTarget,
         entry: UsbPendingRecordingOutput,
     ) {
+        // A gallery refresh/recovery pass must never inspect or clean files owned by this live process.
+        if (entry.nativeCheckpoint?.processStartId == com.dante.zeekrcapabilitylab.ZeekrApp.processStartId) return
         val recordedAssets = entry.assets.ifEmpty {
             listOf(
                 UsbPendingRecordingAsset(
@@ -112,6 +114,36 @@ internal object UsbPendingRecordingRecoveryEngine {
                 report(context, entry, target, "RECOVERY_RETAINED", "Ownership marker could not be persisted")
             }
             return
+        }
+
+        entry.nativeCheckpoint?.let { checkpoint ->
+            val video = observations.singleOrNull { it.recorded.kind == UsbExportAssetKind.VIDEO }
+            val onlyVideoPresent = observations.none { it.recorded.kind != UsbExportAssetKind.VIDEO && it.metadata != null }
+            val actualBytes = video?.metadata?.uri?.let { uri -> runCatching { backend.closedFileLength(uri) }.getOrNull() }
+            val action = NativePendingRecoveryPolicy.decide(false, actualBytes, onlyVideoPresent)
+            if (action == NativePendingRecoveryPolicy.Action.RECOVER && video != null &&
+                checkpoint.recordingSessionId == entry.recordingSessionId && checkpoint.segmentNumber == entry.segmentNumber &&
+                entry.bundleId != null) {
+                val recovered = runCatching {
+                    // Rollback may have removed sidecars but retained the video. Forget only verified-missing assets.
+                    journal.put(entry.copy(assets = listOf(video.recorded)))
+                    val pending = com.dante.zeekrcapabilitylab.usbexport.UsbPendingVideo(entry.operationId,
+                        entry.bundleId, target, "session:${entry.recordingSessionId}", entry.recordingSessionId,
+                        entry.segmentNumber, checkpoint.recordingMode.name, checkpoint.requestedAtEpochMs ?: entry.createdAtEpochMs,
+                        entry.requestedName, entry.itemUri, entry.observedOwnerPackage)
+                    val result = com.dante.zeekrcapabilitylab.usbexport.UsbSegmentCommitEngine(context)
+                        .commitDirect(pending, checkpoint, preserveVideoOnFailure = true)
+                    check(UsbCommittedBundleStore(context).mark(target.storageUuid, result.bundleId, result.observedOwnerPackage))
+                    removeJournalAndToken(context, journal, entry)
+                }
+                report(context, entry, target, if (recovered.isSuccess) "NATIVE_RECOVERED" else "NATIVE_RETAINED",
+                    if (recovered.isSuccess) "Closed native segment verified" else "Nonempty video retained for recovery")
+                return
+            }
+            if (action != NativePendingRecoveryPolicy.Action.REMOVE_EMPTY) {
+                report(context, entry, target, "NATIVE_RETAINED", "Uncertain native output retained without deletion")
+                return
+            }
         }
 
         val failures = mutableListOf<String>()

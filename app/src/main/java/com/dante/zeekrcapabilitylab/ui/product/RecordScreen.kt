@@ -64,6 +64,10 @@ import com.dante.zeekrcapabilitylab.product.SurroundPreviewLifecyclePolicy
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.product.RecordingCapacity
+import com.dante.zeekrcapabilitylab.product.RecordingCapacityMath
+import com.dante.zeekrcapabilitylab.product.RecordingCapacityReader
+import com.dante.zeekrcapabilitylab.service.recorder.RecordingStorageKind
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommandPolicy
@@ -87,7 +91,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 private const val CONFIG_TIMEOUT_MS = 8_000L
-private const val DEFAULT_ESTIMATED_BITRATE_BPS = 28_000_000L
 private const val FOUR_GRID_ASPECT_RATIO = 1f
 
 /**
@@ -101,7 +104,6 @@ private sealed interface RecordConfigState {
     data class Failed(val reason: String) : RecordConfigState
 }
 
-private data class DiskStats(val freeBytes: Long)
 private data class ConfigLookup(val config: RecorderConfig?)
 
 @Composable
@@ -109,10 +111,16 @@ fun RecordScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val modeSwitchProgress by CameraRecordingService.modeSwitchProgress.collectAsState()
+    val auxiliary by com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.collectAsState()
+    val floatingMirror by com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.state.collectAsState()
+    val floatingChoice by com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.idleSelection.collectAsState()
+    val mirrorHome by com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.homeControls.collectAsState()
     val appForeground by ZeekrApp.isForeground.collectAsState()
     val languageMode by AppLanguage.mode.collectAsState()
     val settings = remember(languageMode) { SettingsStore.get(context) }
     val previewController = remember { SafeManualPreviewController(context.applicationContext) }
+    val mirrorEntry = remember { com.dante.zeekrcapabilitylab.mirror.MirrorAppEntryGate() }
     val previewState by previewController.state.collectAsState()
     val segmentsDir = remember { File(context.filesDir, "recordings/segments") }
     val now by produceState(initialValue = System.currentTimeMillis()) {
@@ -137,6 +145,9 @@ fun RecordScreen() {
     var confirmStop by remember { mutableStateOf(false) }
     var configState by remember { mutableStateOf<RecordConfigState>(RecordConfigState.Idle) }
     var previewEnabled by remember { mutableStateOf(false) }
+    var sourceHandoffPending by remember { mutableStateOf(false) }
+    var sourceHandoffBlocked by remember { mutableStateOf(false) }
+    var sourceHandoffJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var startupPermissionPrompted by rememberSaveable { mutableStateOf(false) }
     // Deliberately not persisted: every fresh app process returns to 360°.
     var selectedSourceRole by remember { mutableStateOf(RecordingSourceRole.SURROUND) }
@@ -152,6 +163,7 @@ fun RecordScreen() {
         key1 = selectedSourceRole,
         key2 = cameraPermission,
     ) {
+        value = null // A previous source's metadata must not start a new preview during lookup.
         value = if (cameraPermission) {
             withContext(Dispatchers.IO) {
                 ProductRecorderConfigFactory.resolveSource(context, selectedSourceRole)
@@ -173,18 +185,21 @@ fun RecordScreen() {
     }
 
     val recordingActive = RecorderCommandPolicy.isActive(recorderState.status)
-    val activeSourceRole = if (recordingActive) {
-        recorderState.sourceRole ?: selectedSourceRole
-    } else {
-        selectedSourceRole
-    }
+    val independentMirrorActive = auxiliary.active && auxiliary.kind == "PREVIEW"
+    val activeSourceRole = com.dante.zeekrcapabilitylab.product.HomePreviewSelection.displayedSource(
+        selectedSourceRole, recordingActive, recorderState.sourceRole,
+        independentMirrorActive || floatingMirror.active, mirrorHome.sourceRole)
     val activeRecordingMode = if (recordingActive) {
         recorderState.recordingMode
+    } else if (floatingMirror.active) {
+        floatingChoice.mode
     } else {
         selectedRecordingMode
     }
     val activeTimeLapseMultiplier = if (recordingActive) {
         recorderState.timeLapseMultiplier
+    } else if (floatingMirror.active && floatingChoice.mode == RecordingMode.TIME_LAPSE) {
+        floatingChoice.multiplier
     } else {
         selectedTimeLapseMultiplier
     }
@@ -196,7 +211,7 @@ fun RecordScreen() {
         val current = latestRecorderState
         val profile = current.profile
         val foregroundAllowed = current.sourceRole != RecordingSourceRole.SURROUND || latestAppForeground
-        if (foregroundAllowed && current.status == RecorderStatus.RECORDING &&
+        if (!current.mirrorPreviewManaged && foregroundAllowed && current.status == RecorderStatus.RECORDING &&
             profile != null && settings.previewWhileRecordingEnabled
         ) {
             val surface = previewController.acquireRecorderPreviewSurface(
@@ -214,7 +229,7 @@ fun RecordScreen() {
                 currentGeneration = surroundPreviewGeneration,
             )
             if (decision.invalidateSurface) {
-                if (decision.disableRecorderPreview) {
+                if (decision.disableRecorderPreview && !latestRecorderState.mirrorPreviewManaged) {
                     CameraRecordingService.setPreviewOutputEnabled(context, false)
                 }
                 if (decision.stopIdlePreview) previewController.stopAndAwait()
@@ -248,10 +263,10 @@ fun RecordScreen() {
     DisposableEffect(previewController) {
         previewController.onRecorderPreviewSurfaceAvailable = attachReplacementPreview
         previewController.onRecorderPreviewSurfaceDestroyed = {
-            CameraRecordingService.setPreviewOutputEnabled(context, false)
+            if (!latestRecorderState.mirrorPreviewManaged) CameraRecordingService.setPreviewOutputEnabled(context, false)
         }
         onDispose {
-            CameraRecordingService.setPreviewOutputEnabled(context, false)
+            if (!latestRecorderState.mirrorPreviewManaged) CameraRecordingService.setPreviewOutputEnabled(context, false)
             previewController.release()
         }
     }
@@ -264,8 +279,37 @@ fun RecordScreen() {
         recorderState.previewFallbackUsed,
         appForeground,
         activeSourceRole,
+        auxiliary.active,
+        floatingMirror.active,
+        sourceHandoffPending,
+        sourceHandoffBlocked,
     ) {
+        if (sourceHandoffPending || sourceHandoffBlocked) {
+            previewEnabled = false
+            return@LaunchedEffect
+        }
+        if (mirrorEntry.request(
+                foreground = appForeground, enabled = settings.mirrorPreviewEnabled,
+                resident = com.dante.zeekrcapabilitylab.mirror.MirrorPresentation(context).resident,
+                cameraPermission = cameraPermission, overlayPermission = android.provider.Settings.canDrawOverlays(context),
+                calibratedRear = settings.mirrorRearLane in 1..4,
+                surroundSelected = selectedSourceRole == RecordingSourceRole.SURROUND,
+                recordingActive = recordingActive || serviceRunning,
+                auxiliaryActive = auxiliary.active, controlsActive = floatingMirror.active)) {
+            previewEnabled = false
+            previewController.clearRecorderPreviewHandoff()
+            val accepted = com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.open(context)
+            EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MIRROR_APP_ENTRY",
+                payload = mapOf("reason" to if (accepted) "PREVIEW_REQUESTED" else "PREVIEW_REJECTED"))
+            if (accepted) {
+                // Arm visible controls while the Activity is foreground. The service's
+                // handoff gate still waits for this producer's real close acknowledgement.
+                previewController.stopAndAwait()
+                return@LaunchedEffect
+            }
+        }
         when {
+            auxiliary.active || floatingMirror.active -> { previewEnabled = false; previewController.stopAndAwait() }
             !appForeground && activeSourceRole == RecordingSourceRole.SURROUND -> {
                 previewEnabled = false
                 if (!recordingActive) previewController.stopAndAwait()
@@ -277,7 +321,7 @@ fun RecordScreen() {
                 if (!recorderPreviewVisible) previewController.clearRecorderPreviewHandoff()
             }
             cameraPermission && !recordingActive &&
-                resolvedIdleSource != null &&
+                resolvedIdleSource?.sourceRole == selectedSourceRole &&
                 ProductHomeCameraPolicy.shouldAutoStartPreview(0L) &&
                 ProductHomeCameraPolicy.cameraAccessAllowed(
                     ProductHomeCameraPolicy.TRIGGER_AUTO_PREVIEW,
@@ -301,39 +345,89 @@ fun RecordScreen() {
         }
     }
 
+    LaunchedEffect(recorderState.recordingSessionId, recorderState.recordingMode, recorderState.timeLapseMultiplier) {
+        if (RecorderCommandPolicy.isActive(recorderState.status)) {
+            selectedRecordingMode = recorderState.recordingMode
+            if (recorderState.recordingMode == RecordingMode.TIME_LAPSE) selectedTimeLapseMultiplier = recorderState.timeLapseMultiplier
+        }
+    }
+
+    LaunchedEffect(mirrorHome.sourceRole, floatingMirror.active) {
+        if (floatingMirror.active && !sourceHandoffPending) mirrorHome.sourceRole?.let { selectedSourceRole = it }
+    }
+
+    val selectSource: (RecordingSourceRole) -> Unit = select@{ role ->
+        if (!com.dante.zeekrcapabilitylab.product.HomePreviewSelection.canSelect(
+                RecorderCommandPolicy.isActive(CameraRecordingService.state.value.status), CameraRecordingService.isRunning(),
+                com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value,
+                com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.active(), floatingMirror.busy,
+                sourceHandoffPending || modeSwitchProgress != null || configState is RecordConfigState.Loading)) return@select
+        if (role == activeSourceRole && !sourceHandoffBlocked) return@select
+        sourceHandoffBlocked = false
+        selectedSourceRole = role
+        configState = RecordConfigState.Idle
+        if (floatingMirror.active && role != RecordingSourceRole.IR) {
+            // Reuse the already-tested Cabin / surround owner and its release acknowledgements.
+            if (!com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.selectPreviewSource(role)) {
+                configState = RecordConfigState.Failed(Utils.t("Preview is busy. Please retry.", "预览正在切换，请稍后重试。"))
+            }
+        } else {
+            // IR remains on the existing single-source home preview. Only an explicit click
+            // can transfer ownership; a timeout never grants permission to open another camera.
+            sourceHandoffPending = true
+            com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.close()
+            sourceHandoffJob = scope.launch {
+                val gate = com.dante.zeekrcapabilitylab.mirror.MirrorHandoffGate()
+                val request = checkNotNull(gate.begin(com.dante.zeekrcapabilitylab.mirror.MirrorHandoffGate.Target.PREVIEW,
+                    android.os.SystemClock.elapsedRealtime()))
+                val stopped = previewController.stopAndAwait()
+                var decision = com.dante.zeekrcapabilitylab.mirror.MirrorHandoffGate.Decision.WAIT
+                while (decision == com.dante.zeekrcapabilitylab.mirror.MirrorHandoffGate.Decision.WAIT) {
+                    val work = com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value
+                    decision = gate.poll(request.token, android.os.SystemClock.elapsedRealtime(),
+                        allowed = stopped && latestAppForeground && work.error == null,
+                        recorderGone = !CameraRecordingService.isRunning(),
+                        previewGone = !com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.isRunning(),
+                        auxiliaryGone = !work.active,
+                        nativeIdle = com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock.normalIdle(),
+                        glIdle = com.dante.zeekrcapabilitylab.mirror.MirrorGlPreview.isIdle())
+                    if (decision == com.dante.zeekrcapabilitylab.mirror.MirrorHandoffGate.Decision.WAIT) kotlinx.coroutines.delay(50)
+                }
+                sourceHandoffBlocked = decision != com.dante.zeekrcapabilitylab.mirror.MirrorHandoffGate.Decision.START
+                sourceHandoffPending = false
+                if (sourceHandoffBlocked) configState = RecordConfigState.Failed(
+                    Utils.t("Camera release is unconfirmed. Please retry after it finishes.", "相机释放尚未确认，请待释放完成后重试。"))
+                else if (role == RecordingSourceRole.SURROUND && settings.mirrorPreviewEnabled &&
+                    com.dante.zeekrcapabilitylab.mirror.MirrorPresentation(context).resident) {
+                    com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.open(context)
+                }
+            }
+        }
+    }
+
     // Directory scans and free-space probes run on IO, never on the UI thread.
-    val diskStats by produceState(initialValue = DiskStats(-1L), recordingActive) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { segmentsDir.mkdirs() }
-            val free = runCatching { segmentsDir.usableSpace }.getOrDefault(-1L)
-            DiskStats(free)
+    val capacity by produceState(initialValue = RecordingCapacity(), recordingActive, recorderState.activeStorageUuid, appForeground) {
+        if (appForeground) value = withContext(Dispatchers.IO) {
+            runCatching { RecordingCapacityReader.read(context, recorderState, serviceRunning) }.getOrDefault(RecordingCapacity())
         }
     }
 
     val readyConfig = (configState as? RecordConfigState.Ready)?.config
     val canStart = RecorderCommandPolicy.canStart(recorderState.status, serviceRunning) &&
-        configState !is RecordConfigState.Loading
+        (!auxiliary.active || independentMirrorActive && floatingMirror.active) && !floatingMirror.busy && modeSwitchProgress == null &&
+        configState !is RecordConfigState.Loading && !sourceHandoffPending
     val canStop = RecorderCommandPolicy.canStop(recorderState.status, serviceRunning)
     val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning) &&
         activeRecordingMode == RecordingMode.NORMAL && recorderState.status != RecorderStatus.AWAKE_IDLE
 
-    val estimatedBitrateBps = recorderState.profile?.bitrateBps
-        ?.takeIf { it > 0 }
-        ?.toLong()
-        ?: readyConfig?.profile?.bitrateBps
-            ?.takeIf { it > 0 }
-            ?.toLong()
-        ?: DEFAULT_ESTIMATED_BITRATE_BPS
+    val requestedProfile = if (serviceRunning) recorderState.profile else readyConfig?.profile ?: resolvedIdleSource?.profile
+    val estimatedBitrateBps = requestedProfile?.bitrateBps?.takeIf { it > 0 }?.toLong()
     val estimatedCapacityMultiplier = if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
         activeTimeLapseMultiplier.toLong()
     } else {
         1L
     }
-    val estimatedMinutes = if (diskStats.freeBytes > 0) {
-        diskStats.freeBytes * 8 / estimatedBitrateBps / 60 * estimatedCapacityMultiplier
-    } else {
-        null
-    }
+    val estimatedMinutes = RecordingCapacityMath.minutes(capacity.availableBytes, estimatedBitrateBps, estimatedCapacityMultiplier.toInt())
     val recordingElapsed = (recorderState.sessionStartedAtEpochMs ?: recorderState.segmentStartedAtEpochMs)
         ?.let { now - it }
     val guardStoppedWithError = false
@@ -372,6 +466,9 @@ fun RecordScreen() {
                 trigger,
             ) -> Unit
             configState is RecordConfigState.Loading -> Unit
+            floatingMirror.active -> {
+                com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.startRecording()
+            }
             else -> {
                 val requestedMode = selectedRecordingMode
                 val requestedMultiplier = selectedTimeLapseMultiplier
@@ -410,7 +507,9 @@ fun RecordScreen() {
                     }
                     val ready = configState as? RecordConfigState.Ready
                     if (ready != null) {
-                        val recorderPreviewSurface = if (settings.previewWhileRecordingEnabled) {
+                        val mirror = settings.mirrorPreviewEnabled && android.provider.Settings.canDrawOverlays(context) &&
+                            com.dante.zeekrcapabilitylab.mirror.MirrorPreviewPolicy.supports(ready.config)
+                        val recorderPreviewSurface = if (!mirror && settings.previewWhileRecordingEnabled) {
                             // Initial handoff keeps the buffer size already
                             // proven by idle preview (including its fallback).
                             previewController.acquireRecorderPreviewSurface()
@@ -418,7 +517,7 @@ fun RecordScreen() {
                             null
                         }
                         previewEnabled = recorderPreviewSurface != null
-                        CameraRecordingService.start(context, ready.config, recorderPreviewSurface)
+                        CameraRecordingService.start(context, ready.config.copy(mirrorPreviewEnabled = mirror), recorderPreviewSurface)
                     } else if (cameraPermission) {
                         resolvedIdleSource?.let { source ->
                             previewEnabled = true
@@ -441,7 +540,7 @@ fun RecordScreen() {
         Modifier
             .fillMaxSize()
             .padding(horizontal = 18.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        horizontalArrangement = DriverPaneArrangement(com.dante.zeekrcapabilitylab.mirror.MirrorPresentation(context).rightHandDrive),
     ) {
         HomePreviewPane(
             controller = previewController,
@@ -449,10 +548,16 @@ fun RecordScreen() {
             previewEnabled = previewEnabled,
             recordingActive = recordingActive,
             settings = settings,
-            layoutKind = if (recordingActive) recorderState.layoutKind else resolvedIdleSource?.layoutKind,
+            layoutKind = when {
+                recordingActive -> recorderState.layoutKind
+                independentMirrorActive || floatingMirror.active -> if (activeSourceRole == RecordingSourceRole.SURROUND)
+                    RecordingLayoutKind.FOUR_LANE_V1 else RecordingLayoutKind.SINGLE_V1
+                else -> resolvedIdleSource?.layoutKind
+            },
             sourceRole = activeSourceRole,
             appForeground = appForeground,
             surroundPreviewGeneration = surroundPreviewGeneration,
+            mirrorManaged = (recorderState.mirrorPreviewManaged && recordingActive) || independentMirrorActive || (floatingMirror.active && !recordingActive),
             modifier = Modifier
                 .weight(1.75f)
                 .fillMaxHeight(),
@@ -474,32 +579,55 @@ fun RecordScreen() {
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.weight(1f))
-                StatusPill(recorderStatusText, recorderStatusColor)
+                StatusPill(if(auxiliary.active) {
+                    if(auxiliary.kind == "MULTI") Utils.t("Two-camera test · 60 s", "两路录像测试 · 60 秒") else Utils.t("Preview only", "仅预览")
+                } else recorderStatusText, if(auxiliary.active) MaterialTheme.colorScheme.tertiary else recorderStatusColor)
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(8.dp))
+            QuickStartEntry()
+            Spacer(Modifier.height(8.dp))
+            modeSwitchProgress?.let { progress ->
+                Text(com.dante.zeekrcapabilitylab.service.RecordingModeOverlayMenu.progressLabel(progress))
+                Spacer(Modifier.height(8.dp))
+            }
+            if (auxiliary.active) {
+                Text(auxiliary.message.ifBlank { Utils.t("Preparing preview", "正在准备预览") })
+                OutlinedButton(onClick = {
+                    if (sourceHandoffPending) {
+                        sourceHandoffJob?.cancel(); sourceHandoffPending = false; sourceHandoffBlocked = true
+                    }
+                    if(auxiliary.kind == "MULTI") com.dante.zeekrcapabilitylab.enhancement.ConcurrentRecordingService.stop()
+                    else com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.stop()
+                }) {
+                    Text(Utils.t("Stop", "停止"))
+                }
+            }
+            if (sourceHandoffPending) Text(Utils.t("Switching preview…", "正在切换预览…"))
             RecordingModeCard(
                 mode = activeRecordingMode,
                 multiplier = activeTimeLapseMultiplier,
-                enabled = !recordingActive && configState !is RecordConfigState.Loading,
+                enabled = (!auxiliary.active || independentMirrorActive) && !floatingMirror.busy && !sourceHandoffPending && modeSwitchProgress == null && !recordingActive && configState !is RecordConfigState.Loading,
                 onModeChanged = { mode ->
                     selectedRecordingMode = mode
+                    if (floatingMirror.active) com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.selectMode(
+                        com.dante.zeekrcapabilitylab.service.recorder.RecordingModeChoice(mode, if (mode == RecordingMode.NORMAL) 1 else settings.timeLapseMultiplier))
                     configState = RecordConfigState.Idle
                 },
                 onMultiplierChanged = { multiplier ->
                     selectedTimeLapseMultiplier = multiplier
                     settings.setTimeLapseMultiplier(multiplier)
+                    if (floatingMirror.active) com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.selectMode(
+                        com.dante.zeekrcapabilitylab.service.recorder.RecordingModeChoice(RecordingMode.TIME_LAPSE, multiplier))
                     configState = RecordConfigState.Idle
                 },
             )
             Spacer(Modifier.height(14.dp))
             RecordingSourceSelector(
-                selected = if (recordingActive) {
-                    recorderState.sourceRole ?: selectedSourceRole
-                } else {
-                    selectedSourceRole
-                },
-                enabled = !recordingActive && configState !is RecordConfigState.Loading,
+                selected = activeSourceRole,
+                enabled = com.dante.zeekrcapabilitylab.product.HomePreviewSelection.canSelect(
+                    recordingActive, serviceRunning, auxiliary, floatingMirror.active, floatingMirror.busy,
+                    sourceHandoffPending || modeSwitchProgress != null || configState is RecordConfigState.Loading),
                 onSelect = { role ->
                     if (
                         role != RecordingSourceRole.SURROUND &&
@@ -507,8 +635,7 @@ fun RecordScreen() {
                     ) {
                         pendingWarningRole = role
                     } else {
-                        selectedSourceRole = role
-                        configState = RecordConfigState.Idle
+                        selectSource(role)
                     }
                 },
             )
@@ -524,22 +651,12 @@ fun RecordScreen() {
                 )
             }
             Spacer(Modifier.height(14.dp))
-            ProductStatusCard(
-                freeSpace = if (diskStats.freeBytes >= 0) {
-                    formatBytes(diskStats.freeBytes)
-                } else {
-                    Utils.t("Unknown", "未知")
-                },
-                estimatedMinutes = estimatedMinutes,
-                segmentSeconds = if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
-                    TimeLapsePolicy.SAFETY_CHUNK_SECONDS
-                } else {
-                    settings.segmentSeconds
-                },
-                autoCleanupEnabled = settings.autoCleanupEnabled,
-                timeLapse = activeRecordingMode == RecordingMode.TIME_LAPSE,
-            )
-            Spacer(Modifier.height(14.dp))
+            ProductInfoRow(Utils.t("Storage destination", "录像存储位置"), when (capacity.storage) {
+                RecordingStorageKind.USB_MEDIASTORE -> "USB"
+                RecordingStorageKind.INTERNAL -> Utils.t("Head unit", "车机")
+                null -> Utils.t("Unknown", "未知")
+            })
+            Spacer(Modifier.height(8.dp))
 
             Button(
                 onClick = {
@@ -554,7 +671,7 @@ fun RecordScreen() {
                     when {
                         configState is RecordConfigState.Loading -> Utils.t("Preparing…", "准备中…")
                         recordingActive -> Utils.t("Recording", "录像中")
-                        selectedRecordingMode == RecordingMode.TIME_LAPSE ->
+                        activeRecordingMode == RecordingMode.TIME_LAPSE ->
                             Utils.t("Start time-lapse", "开始延时摄影")
                         else -> Utils.t("Start recording", "开始录像")
                     },
@@ -583,14 +700,34 @@ fun RecordScreen() {
                     if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
                         Utils.t("Protect after stopping in Library", "停止后可在录像记录中保护")
                     } else {
-                        Utils.t("Save clip", "保存片段")
+                        Utils.t("Save emergency video", "保存紧急视频")
                     },
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
 
+            ProductStatusCard(
+                freeSpace = capacity.freeBytes?.let(::formatBytes) ?: Utils.t("Unknown", "未知"),
+                storage = when (capacity.storage) {
+                    RecordingStorageKind.USB_MEDIASTORE -> "USB"
+                    RecordingStorageKind.INTERNAL -> Utils.t("Head unit", "车机")
+                    null -> Utils.t("Unknown", "未知")
+                },
+                quality = requestedProfile?.label ?: Utils.t("Unknown", "未知"),
+                estimatedMinutes = estimatedMinutes,
+                segmentSeconds = if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
+                    TimeLapsePolicy.SAFETY_CHUNK_SECONDS
+                } else {
+                    settings.segmentSeconds
+                },
+                autoCleanupEnabled = settings.autoCleanupEnabled,
+                timeLapse = activeRecordingMode == RecordingMode.TIME_LAPSE,
+            )
+            Spacer(Modifier.height(14.dp))
+
             if (recordingActive) {
+                recorderState.incidentMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Text(
                     when (recorderState.status) {
                         RecorderStatus.AWAKE_IDLE -> Utils.t("Camera closed; waiting for your return.", "相机已关闭，正在等待回车。")
@@ -729,8 +866,7 @@ fun RecordScreen() {
             confirmButton = {
                 TextButton(onClick = {
                     settings.acknowledgeSourceConflictWarning()
-                    selectedSourceRole = role
-                    configState = RecordConfigState.Idle
+                    selectSource(role)
                     pendingWarningRole = null
                 }) { Text(Utils.t("I understand", "我知道了")) }
             },
@@ -754,9 +890,14 @@ private fun HomePreviewPane(
     sourceRole: RecordingSourceRole,
     appForeground: Boolean,
     surroundPreviewGeneration: Int,
+    mirrorManaged: Boolean,
     modifier: Modifier = Modifier,
 ) {
     var lensMode by remember(settings) { mutableStateOf(settings.lensMode) }
+    val mirrorHome by com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.homeControls.collectAsState()
+    BackHandler(enabled = mirrorManaged && sourceRole == RecordingSourceRole.SURROUND && mirrorHome.displayMode.singleLane != null) {
+        mirrorHome.displayMode.singleLane?.let(com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime::toggleHomeLane)
+    }
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center,
@@ -771,7 +912,20 @@ private fun HomePreviewPane(
             } else {
                 previewEnabled
             } && (sourceRole != RecordingSourceRole.SURROUND || appForeground)
-            if (showLivePreview && layoutKind == RecordingLayoutKind.SINGLE_V1) {
+            if (mirrorManaged) {
+                val context = LocalContext.current
+                val host = remember { com.dante.zeekrcapabilitylab.mirror.MirrorHomeHost(context) }
+                DisposableEffect(host) { onDispose { com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.detachHome(host) } }
+                AndroidView(factory = { host }, modifier = Modifier.fillMaxSize())
+                if (sourceRole == RecordingSourceRole.SURROUND) FourLaneDirectionOverlay(
+                    labels = listOf("1", "2", "3", "4"),
+                    displayMode = mirrorHome.displayMode,
+                    interactionEnabled = mirrorHome.interactive,
+                    zoom = mirrorHome.zoom,
+                    onLaneTapped = com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime::toggleHomeLane,
+                    onTransformGesture = com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime::transformHome,
+                )
+            } else if (showLivePreview && layoutKind == RecordingLayoutKind.SINGLE_V1) {
                 SinglePreviewPanel(
                     controller = controller,
                     state = state,
@@ -796,6 +950,7 @@ private fun HomePreviewPane(
                     onModeChanged = { selected ->
                         lensMode = selected
                         settings.setLensMode(selected)
+                        com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.refreshHome()
                     },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -948,6 +1103,8 @@ private fun StaticSinglePreview(modifier: Modifier = Modifier) {
 @Composable
 private fun ProductStatusCard(
     freeSpace: String,
+    storage: String,
+    quality: String,
     estimatedMinutes: Long?,
     segmentSeconds: Int,
     autoCleanupEnabled: Boolean,
@@ -961,9 +1118,12 @@ private fun ProductStatusCard(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(10.dp))
-            ProductInfoRow(Utils.t("Phone transfer", "手机传输"), Utils.t("Connect in the Phone tab", "在「手机」页连接"))
             ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
-            ProductInfoRow(Utils.t("Estimated recording", "预计可录"), formatEstimatedMinutes(estimatedMinutes))
+            ProductInfoRow(Utils.t("Storage destination", "录像存储位置"), storage)
+            ProductInfoRow(Utils.t("Requested quality", "当前请求画质"), quality)
+            ProductInfoRow(Utils.t("Estimated before cleanup", "清理前预计可录"), formatEstimatedMinutes(estimatedMinutes))
+            Text(Utils.t("Estimate uses the current bitrate, storage quota and reserved space. Cleanup may extend recording; actual file size varies.", "按当前码率、存储配额和保留空间估算。清理旧录像后可继续录制，实际文件大小会有变化。"),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ProductInfoRow(
                 if (timeLapse) Utils.t("Safety chunk", "安全分段") else Utils.t("Segment length", "分段时长"),
                 formatSegmentDuration(segmentSeconds),

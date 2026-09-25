@@ -186,6 +186,8 @@ internal class TrashRepository(
 
     private fun metadataTarget(restoredVideo: File, originalVideoName: String, metadataName: String): File = when {
         metadataName == "$originalVideoName.sidecar.json" -> File(receivedRoot, "${restoredVideo.name}.sidecar.json")
+        metadataName == "${originalVideoName.substringBeforeLast('.')}.sidecar.json" ->
+            File(receivedRoot, "${restoredVideo.nameWithoutExtension}.sidecar.json")
         metadataName == "${originalVideoName.substringBeforeLast('.')}.json" ->
             File(receivedRoot, "${restoredVideo.nameWithoutExtension}.json")
         else -> File(receivedRoot, metadataName)

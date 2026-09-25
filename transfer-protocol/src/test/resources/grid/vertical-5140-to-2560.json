@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "format": "OPENAVM_GRID_LAYOUT_V1",
+  "inputWidth": 1280,
+  "inputHeight": 5140,
+  "encodedWidth": 2560,
+  "encodedHeight": 2560,
+  "lanes": [
+    {"id":1,"source":{"left":0,"top":4,"width":1280,"height":1280},"encoded":{"left":0,"top":0,"width":1280,"height":1280},"bakedRotationClockwise":0,"bakedMirrorAfterRotation":false},
+    {"id":2,"source":{"left":0,"top":1288,"width":1280,"height":1280},"encoded":{"left":1280,"top":0,"width":1280,"height":1280},"bakedRotationClockwise":90,"bakedMirrorAfterRotation":true},
+    {"id":3,"source":{"left":0,"top":2572,"width":1280,"height":1280},"encoded":{"left":0,"top":1280,"width":1280,"height":1280},"bakedRotationClockwise":180,"bakedMirrorAfterRotation":false},
+    {"id":4,"source":{"left":0,"top":3856,"width":1280,"height":1280},"encoded":{"left":1280,"top":1280,"width":1280,"height":1280},"bakedRotationClockwise":270,"bakedMirrorAfterRotation":true}
+  ]
+}

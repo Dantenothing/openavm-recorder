@@ -47,6 +47,7 @@ android {
 }
 
 dependencies {
+    implementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
     implementation(project(":transfer-protocol"))
     implementation(project(":sound-core"))
     implementation(project(":localization"))

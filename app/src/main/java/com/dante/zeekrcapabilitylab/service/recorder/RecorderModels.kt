@@ -20,6 +20,12 @@ data class RecorderConfig(
     val usbQuotaBytes: Long = UsbRecordingQuotaPolicy.DEFAULT_QUOTA_BYTES,
     val recordingMode: RecordingMode = RecordingMode.NORMAL,
     val timeLapseMultiplier: Int = 1,
+    /** Explicit experimental opt-in, captured only by a manual start. */
+    val mirrorPreviewEnabled: Boolean = false,
+    val requestedFrameRate: Int = 30,
+    val strictFrameRate: Boolean = false,
+    /** Product settings select this by default for supported sources; raw/diagnostic configs remain explicit. */
+    val sharedInputRecordingEnabled: Boolean = false,
 ) {
     val cameraId: String get() = source.cameraId
     val profile: CameraFormatProfile get() = source.profile
@@ -31,6 +37,8 @@ data class RecorderConfig(
             errors += "profile size must be positive"
         }
         if (profile.bitrateBps <= 0) errors += "bitrateBps must be positive"
+        if (requestedFrameRate !in setOf(15, 20, 30)) errors += "unsupported frame rate"
+        if (recordingMode == RecordingMode.TIME_LAPSE && requestedFrameRate != 30) errors += "time lapse requires 30 fps output"
         if (segmentSeconds !in SEGMENT_OPTIONS_SECONDS) {
             errors += "segmentSeconds must be one of ${SEGMENT_OPTIONS_SECONDS.sorted()}"
         }
@@ -50,6 +58,12 @@ data class RecorderConfig(
             RecordingMode.TIME_LAPSE -> if (timeLapseMultiplier !in TimeLapsePolicy.MULTIPLIERS) {
                 errors += "timeLapseMultiplier must be one of ${TimeLapsePolicy.MULTIPLIERS}"
             }
+        }
+        if (mirrorPreviewEnabled && !com.dante.zeekrcapabilitylab.mirror.MirrorPreviewPolicy.supports(this)) {
+            errors += "mirror preview requires surround or single-view cabin recording"
+        }
+        if (sharedInputRecordingEnabled && !ProductContinuousPolicy.eligible(this)) {
+            errors += "shared input requires calibrated 1280x5140 surround recording"
         }
         return errors
     }
@@ -89,6 +103,7 @@ data class RecorderConfig(
 }
 
 object RecorderStatus {
+    const val PREVIEWING = "PREVIEWING"
     const val AWAKE_IDLE = "AWAKE_IDLE"
     const val SENTRY_LISTENING = "SENTRY_LISTENING"
     const val IDLE = "IDLE"
@@ -114,6 +129,7 @@ data class RecorderState(
     val storagePreference: RecordingStoragePreference = RecordingStoragePreference.USB_PREFERRED,
     val usbQuotaBytes: Long = UsbRecordingQuotaPolicy.DEFAULT_QUOTA_BYTES,
     val activeStorageKind: RecordingStorageKind = RecordingStorageKind.INTERNAL,
+    val activeStorageUuid: String? = null,
     val segmentNumber: Int = 0,
     val currentFile: String? = null,
     val segmentStartedAtEpochMs: Long? = null,
@@ -122,9 +138,22 @@ data class RecorderState(
     /** Increments only when a completed successful segment becomes library-visible. */
     val libraryRevision: Long = 0L,
     val message: String? = null,
+    val incidentMessage: String? = null,
     val previewRequested: Boolean = false,
     val previewActive: Boolean = false,
     val previewFallbackUsed: Boolean = false,
+    val mirrorPreviewManaged: Boolean = false,
+    /** Successful CameraDevice ownership generation; unchanged across segment rotation. */
+    val cameraGeneration: Long = 0,
+    val recordingBackend: String = "MEDIA_RECORDER",
+    val nativeFileSwitches: Int = 0,
+    val nativePendingFiles: Int = 0,
+    val encoderSelection: ContinuousEncoderSelection? = null,
+    /** Changes only when a CameraCaptureSession is configured, not when an MP4 file rotates. */
+    val captureSessionRevision: Long = 0,
+    val recovery: CameraRecoverySnapshot = CameraRecoverySnapshot(),
+    val cleanupPending: Boolean = false,
+    val cleanupUnconfirmed: Boolean = false,
     /** PARTIAL_WAKE_LOCK held while segments are actively recording. */
     val wakeLockHeld: Boolean = false,
     val recordingSessionId: String? = null,
@@ -274,10 +303,14 @@ object SegmentGuardPolicy {
     ): Boolean = generation == currentGeneration && currentPartial === partial
 }
 
-/** A new session uses the UI preview only while it both exists and is still desired. */
+/** A retained mirror stays configured even while hidden. Requests still omit hidden outputs. */
 object SegmentPreviewPolicy {
-    fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean): Boolean =
-        previewConfigured && previewDesired
+    fun includeInNewSession(previewConfigured: Boolean, previewDesired: Boolean, retainedPreview: Boolean = false): Boolean =
+        previewConfigured && (previewDesired || retainedPreview)
+
+    /** Remember nonterminal UI intent during close; never submit a new request during close. */
+    fun canRememberEnable(stopping: Boolean, releasing: Boolean, releaseRequested: Boolean, cleanupUnconfirmed: Boolean): Boolean =
+        !stopping && !releasing && !releaseRequested && !cleanupUnconfirmed
 }
 
 /** Guards an in-flight preview swap from ever taking ownership of a newer encoder segment. */

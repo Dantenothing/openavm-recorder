@@ -7,6 +7,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
+import io.github.dantenothing.avmtransfer.protocol.StripBitmapDrawing
+import io.github.dantenothing.avmtransfer.protocol.StripRepackContract
+import io.github.dantenothing.avmtransfer.protocol.PixelRectangle
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -34,6 +39,7 @@ object MediaThumbnailCache {
         context = context,
         key = cacheKey(segment),
     ) {
+        if (ContinuousRasterSupport.error(segment) != null) return@loadOrCreate null
         createCover(
             context = context,
             uri = Uri.fromFile(segment.file),
@@ -41,6 +47,7 @@ object MediaThumbnailCache {
             lanes = segment.lanes,
             expectedWidth = segment.originalWidth,
             expectedHeight = segment.originalHeight,
+            raster = segment.raster,
         )
     }
 
@@ -102,6 +109,7 @@ object MediaThumbnailCache {
         lanes: List<IndexedLane>,
         expectedWidth: Int?,
         expectedHeight: Int?,
+        raster: RecordingRasterMetadata = RecordingRasterMetadata.Original,
     ): Bitmap? {
         val retriever = MediaMetadataRetriever()
         return try {
@@ -114,6 +122,8 @@ object MediaThumbnailCache {
                 ?: expectedWidth ?: 0
             val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
                 ?: expectedHeight ?: 0
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (ContinuousRasterSupport.trackError(raster, layoutKind, width, height, rotation) != null) return null
             val fourLane = layoutKind.isFourLane ||
                 (layoutKind == IndexedLayoutKind.UNKNOWN && strongFourLane(width, height))
             val sampleSize = sampleSize(width, height, fourLane)
@@ -128,7 +138,9 @@ object MediaThumbnailCache {
                 retriever.getFrameAtTime(500_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } ?: return null
             try {
-                if (fourLane) fourLaneCover(frame, lanes, width, height) else singleCover(frame)
+                val repacked = (raster as? RecordingRasterMetadata.Repacked)?.contract
+                if (repacked != null) repackedCover(frame, lanes, repacked)
+                else if (fourLane) fourLaneCover(frame, lanes, width, height) else singleCover(frame)
             } finally {
                 frame.recycle()
             }
@@ -158,6 +170,21 @@ object MediaThumbnailCache {
                 Rect(left, top, left + COVER_WIDTH / 2, top + COVER_HEIGHT / 2),
                 paint,
             )
+        }
+        return output
+    }
+
+    private fun repackedCover(frame: Bitmap, lanes: List<IndexedLane>, contract: StripRepackContract): Bitmap {
+        val output = Bitmap.createBitmap(COVER_WIDTH, COVER_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output).apply { drawColor(Color.BLACK) }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        lanes.sortedBy { it.displayOrder }.forEachIndexed { index, lane ->
+            val source = centerCrop(Rect(lane.x0, lane.y0, lane.x1, lane.y1), COVER_WIDTH / 2, COVER_HEIGHT / 2)
+            val left = (index % 2) * COVER_WIDTH / 2f
+            val top = (index / 2) * COVER_HEIGHT / 2f
+            StripBitmapDrawing.drawCrop(canvas, frame, contract,
+                PixelRectangle(source.left, source.top, source.width(), source.height()),
+                RectF(left, top, left + COVER_WIDTH / 2f, top + COVER_HEIGHT / 2f), paint)
         }
         return output
     }
@@ -239,6 +266,7 @@ object MediaThumbnailCache {
             append(segment.sizeBytes).append('|')
             append(segment.file.lastModified()).append('|')
             append(segment.layoutKind).append('|')
+            append(segment.raster).append('|')
             segment.lanes.forEach { append(it).append('|') }
         }
         return hashKey(material)

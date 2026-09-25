@@ -159,7 +159,6 @@ class ProductHomeCameraPolicyTest {
         assertTrue(source.contains("HomePreviewPane("))
         assertTrue(source.contains("ProductStatusCard("))
         assertTrue(source.contains(".weight(1.75f)"))
-        assertTrue(source.contains("手机传输"))
         assertTrue(source.contains("可用空间"))
         assertTrue(source.contains("预计可录"))
         assertTrue(source.contains("自动清理"))

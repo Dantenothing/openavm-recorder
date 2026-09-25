@@ -37,7 +37,7 @@ class CaptureCloseTransaction(
     private val trace: (String, String) -> Unit,
     private val unconfirmed: (String) -> Unit,
     private val completed: (CaptureCloseResult) -> Unit,
-    private val preferDeviceClose: Boolean = false,
+    private var preferDeviceClose: Boolean = false,
 ) {
     private val outstanding = sequences.toMutableSet()
     @Volatile private var lost = lost
@@ -45,6 +45,7 @@ class CaptureCloseTransaction(
     private var stage = "NEW"
     private var timer: (() -> Unit)? = null
     private var ready = false
+    private var sessionClosedAck = false
     private var evidence: String? = null
     private var deviceAck = !hasDevice
     private var sessionCloseIssued = false
@@ -80,13 +81,17 @@ class CaptureCloseTransaction(
         }
     }
 
-    fun merge(terminal: Boolean = false, outputLost: Boolean = false) {
+    fun merge(terminal: Boolean = false, outputLost: Boolean = false, requireDeviceClose: Boolean = false) {
         // Revoke FD use before a previously queued native task can reach stop/reset.
         if (outputLost) lost = true
         submit {
         if (finished) return@submit
         this.terminal = this.terminal || terminal
         lost = lost || outputLost
+        if (requireDeviceClose) {
+            preferDeviceClose = true
+            requestDeviceClose()
+        }
         trace("INTENT_MERGED", "terminal=" + this.terminal + " lost=" + lost)
         if (outputDone && !deviceAck && this.terminal) requestDeviceClose()
         }
@@ -94,14 +99,29 @@ class CaptureCloseTransaction(
 
     fun sequenceEnded(id: Int) = submit {
         if (outstanding.remove(id)) trace("SEQUENCE_ENDED", id.toString())
-        if (ready && outstanding.isEmpty()) producerEnded("READY_AND_SEQUENCES_ENDED")
+        if (outstanding.isEmpty()) {
+            if (sessionClosedAck) producerEnded("CLOSED_AND_SEQUENCES_ENDED")
+            else if (ready) producerEnded("READY_AND_SEQUENCES_ENDED")
+        }
     }
     fun sessionReady() = submit {
         ready = true
         if (outstanding.isEmpty()) producerEnded("SESSION_READY")
         else trace("READY_WAITING_FOR_SEQUENCES", outstanding.sorted().toString())
     }
-    fun sessionClosed() = submit { producerEnded("SESSION_CLOSED") }
+    fun sessionClosed() = submit {
+        if (finished || sessionClosedAck) return@submit
+        sessionClosedAck = true
+        sessionCloseIssued = true
+        // Camera2 onClosed stops repeating requests, but in-flight captures may
+        // still complete. Never release their encoder/output on this callback alone.
+        if (outstanding.isEmpty()) {
+            producerEnded("CLOSED_AND_SEQUENCES_ENDED")
+        } else if (!mediaStarted && !deviceCloseIssued) {
+            trace("CLOSED_WAITING_FOR_SEQUENCES", outstanding.sorted().toString())
+            phase("DRAINING_CLOSED_SESSION", 2_000) { fail("CAPTURE_DRAIN_UNCONFIRMED") }
+        }
+    }
     fun deviceClosed() = submit {
         if (deviceAck) return@submit
         deviceAck = true
@@ -116,6 +136,12 @@ class CaptureCloseTransaction(
     }
     private fun producerEnded(value: String) {
         if (mediaStarted || finished) return
+        // Another session can still use this recorder's surface. Evidence about
+        // the current session cannot replace the explicitly requested device fence.
+        if (preferDeviceClose && hasDevice && !deviceAck) {
+            trace("WAITING_FOR_DEVICE_FENCE", value)
+            return
+        }
         evidence = value
         trace("PRODUCER_CONFIRMED", value)
         mediaStarted = true

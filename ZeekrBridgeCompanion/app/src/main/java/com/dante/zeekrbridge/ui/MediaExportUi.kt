@@ -45,6 +45,8 @@ import com.dante.zeekrbridge.core.MediaExportQueue
 import com.dante.zeekrbridge.core.MediaExportState
 import com.dante.zeekrbridge.core.MediaExportTarget
 import com.dante.zeekrbridge.core.SavedMediaOrigin
+import com.dante.zeekrbridge.core.IndexedLayoutKind
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import java.io.File
 
 @Composable
@@ -98,6 +100,11 @@ internal fun MediaExportDialog(
                     )
                 }
                 Text(t("Output", "输出内容"), fontWeight = FontWeight.SemiBold)
+                if (first?.raster is RecordingRasterMetadata.Repacked && MediaExportTarget.ORIGINAL in selected) {
+                    Text(t("The original keeps all views for OpenAVM. Select one view for other players or sharing.",
+                        "原片保留所有视角，适合在 OpenAVM 中查看。发给别人或用其他播放器观看时，请选择单个视角。"),
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 targets.forEach { target ->
                     Row(
                         Modifier.fillMaxWidth().clickable {
@@ -181,8 +188,22 @@ internal fun MediaExportDialog(
 @Composable
 internal fun MediaExportQueueCard(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    var preview by remember { mutableStateOf<MediaExportJob?>(null) }
     val jobs by MediaExportQueue.jobs.collectAsState()
     if (jobs.isEmpty()) return
+    preview?.let { job ->
+        val uri = outputUri(context, job)
+        val raster = job.plan.clips.firstOrNull()?.raster
+        if (uri != null && raster != null) UriMediaPlaybackDialog(
+            uri = uri, displayName = job.outputName, durationMs = job.plan.outputDurationMs,
+            sourceRole = IndexedSourceRole.SURROUND, layoutKind = IndexedLayoutKind.FOUR_LANE_V1,
+            laneLabels = job.plan.compositeLanes.sortedBy { it.displayOrder }.map { it.label },
+            laneOrder = job.plan.compositeLanes.sortedBy { it.displayOrder }.map { it.lane },
+            originalWidth = raster.inputWidth, originalHeight = raster.inputHeight,
+            raster = RecordingRasterMetadata.Repacked(raster), lanes = job.plan.compositeLanes,
+            onDismiss = { preview = null },
+        )
+    }
     Card(modifier.fillMaxWidth().padding(bottom = 10.dp)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(t("Export tasks", "导出任务"), fontWeight = FontWeight.SemiBold)
@@ -208,7 +229,9 @@ internal fun MediaExportQueueCard(modifier: Modifier = Modifier) {
                                     Text(t("Cancel", "取消"))
                                 }
                             MediaExportState.COMPLETED -> {
-                                TextButton(onClick = { openExport(context, job) }) { Text(t("Play", "播放")) }
+                                TextButton(onClick = {
+                                    if (job.plan.embeddedMetadata != null) preview = job else openExport(context, job)
+                                }) { Text(t("Play", "播放")) }
                                 TextButton(onClick = { shareExport(context, job) }) { Text(t("Share", "分享")) }
                                 TextButton(onClick = { MediaExportQueue.dismiss(job.id) }) { Text(t("Dismiss", "隐藏")) }
                             }

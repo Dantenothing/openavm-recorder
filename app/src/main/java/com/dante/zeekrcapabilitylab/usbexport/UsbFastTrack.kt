@@ -107,6 +107,7 @@ class UsbSegmentCommitEngine(context: Context) {
         sidecar: SegmentSidecar,
         sourceKind: UsbSegmentSourceKind = UsbSegmentSourceKind.DIRECT_RECORDING,
         canaryRequired: Boolean = false,
+        preserveVideoOnFailure: Boolean = false,
     ): UsbSegmentCommitResult = UsbMutationCoordinator.withTarget(pending.target.storageUuid) {
         val videoUri = Uri.parse(pending.itemUri)
         val created = mutableListOf<UsbExportAsset>()
@@ -119,12 +120,17 @@ class UsbSegmentCommitEngine(context: Context) {
             require(videoMetadata.volumeName.equals(pending.target.volumeName, ignoreCase = true)) {
                 "USB_VIDEO_VOLUME_MISMATCH"
             }
-            require(videoMetadata.pending == 1) { "USB_VIDEO_NOT_PENDING" }
+            require(videoMetadata.pending == 1 || (preserveVideoOnFailure && videoMetadata.pending == 0)) { "USB_VIDEO_NOT_PENDING" }
             val videoHash = backend.hashUri(videoUri)
             require(videoHash.first > 0L) { "USB_VIDEO_EMPTY" }
             val track = backend.trackMetadata(videoUri) ?: error("USB_VIDEO_TRACK_UNREADABLE")
             require((track.width ?: 0) > 0 && (track.height ?: 0) > 0 && (track.durationMs ?: 0L) > 0L) {
                 "USB_VIDEO_TRACK_INVALID"
+            }
+            if (sidecar.rasterLayout != null) {
+                val metadata = io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(json.encodeToString(sidecar))
+                require(metadata is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked &&
+                    metadata.contract.matchesTrack(track.width ?: 0, track.height ?: 0)) { "USB_REPACKED_TRACK_MISMATCH" }
             }
             created += ownedAsset(
                 kind = UsbExportAssetKind.VIDEO,
@@ -288,7 +294,8 @@ class UsbSegmentCommitEngine(context: Context) {
                 track = track,
             )
         } catch (failure: Throwable) {
-            created.asReversed().forEach { backend.deleteOwned(pending.target, it) }
+            created.asReversed().filter { !preserveVideoOnFailure || it.kind != UsbExportAssetKind.VIDEO }
+                .forEach { backend.deleteOwned(pending.target, it) }
             UsbFastTrackReportStore.append(
                 appContext,
                 UsbFastTrackEvent(

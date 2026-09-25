@@ -166,6 +166,9 @@ private fun ServiceScreen(context: android.content.Context) {
             KV("Status", if (running) "RUNNING" else "STOPPED")
             KV("IP", state.ip.ifEmpty { "-" })
             KV("Port", state.port.toString())
+            KV("TLS port", state.tlsPort.toString())
+            if (state.identityFingerprint.isNotBlank()) KV("Phone fingerprint",
+                com.dante.zeekrbridge.server.PhoneIdentityCertificate.displayFingerprint(state.identityFingerprint))
             KV("Pairing code", code.ifEmpty { "-" })
             KV(
                 "Code expires",
@@ -193,20 +196,15 @@ private fun ServiceScreen(context: android.content.Context) {
                     ) {
                         permissions += Manifest.permission.POST_NOTIFICATIONS
                     }
-                    if (Build.VERSION.SDK_INT >= 31 &&
-                        context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        permissions += Manifest.permission.BLUETOOTH_CONNECT
-                    }
                     if (permissions.isEmpty()) BridgeService.start(context) else permissionLauncher.launch(permissions.toTypedArray())
                 }) { Text("Start server") }
                 OutlinedButton(onClick = { BridgeService.stop(context) }) { Text("Stop server") }
-                OutlinedButton(onClick = { PairingManager.newPairingCode() }) { Text("New pairing code") }
+                OutlinedButton(onClick = { BridgeService.start(context, openPairingWindow = true) }) { Text("Open secure pairing") }
             }
         }
         Text(
-            "Security: cleartext HTTP/WebSocket LAN bridge with Bearer auth and no TLS. " +
-                "Use only on a trusted hotspot/LAN, never public/untrusted Wi-Fi. Tokens are never logged.",
+            "Security: HTTPS/WSS with a phone-specific identity. Compare the full fingerprint before pairing. " +
+                "HTTP provides public discovery only. Update both apps and securely pair once.",
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
@@ -496,7 +494,7 @@ private fun shareLog(context: android.content.Context) {
             appendLine(ServerLog.lines.value.joinToString("\n"))
             appendLine()
             appendLine("--- pairing ---")
-            appendLine("code=${PairingManager.code.value} expires=${PairingManager.codeExpiresAt.value}")
+            appendLine("pairingWindowOpen=${PairingManager.code.value.isNotBlank()}")
             PairingManager.devices.value.forEach {
                 appendLine("car=${it.carDeviceId} name=${it.name} paired=${it.pairedAt} lastSeen=${it.lastSeen}")
             }
@@ -510,8 +508,9 @@ private fun shareLog(context: android.content.Context) {
             val bt = BluetoothServer.state.value
             appendLine("btRunning=${bt.running} btCars=${bt.connectedCars} btLast=${bt.lastClient} btError=${bt.lastError}")
         }
-        val file = File(context.filesDir, "bridge-log-export.txt")
-        file.writeText(text)
+        val directory = File(context.filesDir, "openavm-share").apply { mkdirs() }
+        val file = File(directory, "bridge-log-export.txt")
+        file.writeText(com.dante.zeekrbridge.core.ConnectionLogRedactor.redact(text))
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

@@ -7358,5 +7358,1663 @@
     "sources": [
       "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
     ]
+  },
+  "1c1e9fbc457c2f06": {
+    "en": "All dates",
+    "zh-CN": "全部日期",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordingDateControls.kt"
+    ]
+  },
+  "c0da77b614d254b1": {
+    "en": "Choose date",
+    "zh-CN": "选择日期",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordingDateControls.kt"
+    ]
+  },
+  "8fbe806b6c56940d": {
+    "en": "Filtered by recording start date",
+    "zh-CN": "按录像开始日期筛选",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordingDateControls.kt"
+    ]
+  },
+  "b484fac03b8a4fe8": {
+    "en": "No recordings for this date and category",
+    "zh-CN": "这个日期和分类下暂无录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "69112f44e366f811": {
+    "en": "SOS",
+    "zh-CN": "紧急",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "d36fadafbbe32ebf": {
+    "en": "Save emergency video",
+    "zh-CN": "保存紧急视频",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt",
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "432f0fecec5d1b78": {
+    "en": "Marking emergency video…",
+    "zh-CN": "正在标记紧急视频…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "feccca396b0f6914": {
+    "en": "Available during normal recording",
+    "zh-CN": "普通录像时可保存紧急视频",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "92de33b4400e2cd8": {
+    "en": "Quick start & help",
+    "zh-CN": "新手教程与帮助",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt",
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "023ebe75d4d84369": {
+    "en": "New to OpenAVM?",
+    "zh-CN": "第一次使用 OpenAVM？",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "47ae123f66b04501": {
+    "en": "A short guide to USB recording, the floating mirror and saved events.",
+    "zh-CN": "快速了解 USB 录像、悬浮后视镜与紧急视频。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "3521fa8b44147fcb": {
+    "en": "Open guide",
+    "zh-CN": "查看教程",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "b10aed2a319d357d": {
+    "en": "Hide this tip",
+    "zh-CN": "收起提示",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "523b8b7cce3336ef": {
+    "en": "1 · Get ready",
+    "zh-CN": "1 · 开始前",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "efb8f86e596f26a5": {
+    "en": "Park before setting up. Connect a writable USB drive and select USB preferred in Settings. On the recording page, check Storage destination before starting; if it shows Head unit, the video will use internal storage.\n\nThe Android phone app is optional. Camera availability depends on the vehicle and its firmware.",
+    "zh-CN": "请停车后设置。插入可写的 U 盘，在设置中选择“USB 优先”。开始前查看录像页的“录像存储位置”；显示“车机”时会使用内置存储。\n\n安卓手机 App 不是必装的。可用摄像头取决于车辆与固件。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "b40c335874491119": {
+    "en": "2 · Record and stop",
+    "zh-CN": "2 · 开始与停止录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "0ff039246b9bda2d": {
+    "en": "Choose Surround, Cabin or Infrared, then Normal or Time-lapse. Tap Start recording and check the recording status. A live picture marked Preview only is not being saved.\n\nTo finish, tap Stop and wait for saving to complete before removing USB. Recording after you leave depends on vehicle power; it is not guaranteed parking coverage or automatic recording on return.",
+    "zh-CN": "选择环视、车内或红外，再选择普通或延时。点击“开始录像”并确认录像状态；显示“仅预览”时，画面不会保存为录像。\n\n结束时点击“停止”，等保存完成再拔 U 盘。离车后的录像取决于车辆供电，不保证停车全程覆盖，也不会在回车时自动开始录像。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "019cca360b69f58a": {
+    "en": "3 · Use the floating mirror",
+    "zh-CN": "3 · 使用悬浮后视镜",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "b5fb6dec4c1bfde4": {
+    "en": "Enable Floating mirror in Settings and allow overlay access if the vehicle provides it. The window appears when OpenAVM is in the background. Tap around the car logo for Front/Rear/Left/Right, or its centre for Cabin; the grid button shows four surround views.\n\nDrag the header to move and the lower corner to resize. Use Standard/Fisheye to change the view. The arrow hides the picture; closing the window does not stop recording. Switching to Cabin during recording changes the recording source.",
+    "zh-CN": "在设置中开启“悬浮后视镜”；车机提供权限页时允许悬浮显示。OpenAVM 进入后台后才显示窗口。点击车标四周选择前后左右，点中间切换车内；四宫格按钮显示四路环视。\n\n拖动标题移动，拉下角调整窗口大小，点击标准／鱼眼切换视角。箭头可收起画面；关闭窗口不会停止录像。录像时切到车内，录像源也会随之切换。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "91a527677d8ae878": {
+    "en": "4 · Keep an important moment",
+    "zh-CN": "4 · 保存重要时刻",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "37be71e89a12fd95": {
+    "en": "During normal recording, tap Save emergency video on the home page, or SOS in the floating window or its menu. Recording continues. Available previous two segments, the current segment and the following segment are marked for protection.\n\nCurrent and following segments must finish before they can be saved. Check the result message, then find them in Library → Events. Protection prevents automatic cleanup; it does not replace a backup. Time-lapse does not support this live shortcut.",
+    "zh-CN": "普通录像时，点击首页“保存紧急视频”，或悬浮窗的“紧急”按钮／菜单。录像会继续，系统标记可用的前两段、当前段和后一段。\n\n当前段与后一段完成后才能保存。请看结果提示，再到“记录 → 紧急事件”查看。保护可防止自动清理，但不能代替备份；延时录像不支持此实时快捷操作。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "9ba24b005c2c84e2": {
+    "en": "5 · Find and manage videos",
+    "zh-CN": "5 · 查找与管理录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "b7dcea8a7b5535f2": {
+    "en": "In Library, choose a category and Today, Yesterday or a date. Dates use the recording start time. Tap a recording to play it and choose its segments; one session may contain several files.\n\nUse Select to delete the visible recordings you choose, or each recording's menu. Stop recording and wait for saving before USB deletion. Factory Sentry videos are read-only. Use All dates to leave the date filter.",
+    "zh-CN": "在记录页选择分类，再选今天、昨天或指定日期；按录像开始日期归类。点开录像即可播放和选择分段，同一次录像可能包含多个文件。\n\n点“多选”删除当前列表中选中的录像，也可使用单条菜单。删除 USB 视频前请停止录像并等保存完成。原车哨兵视频只读。点击“全部日期”取消日期筛选。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "19fc4582f757ab7a": {
+    "en": "6 · Phone, sounds and help",
+    "zh-CN": "6 · 手机、音效与帮助",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "c9b576e53577f0c9": {
+    "en": "For phone transfer, connect the car to your Android phone's hotspot. Start receiving in OpenAVM Companion, then enter its address and pairing code under Phone / Tools. Pairing is remembered. For new recording formats, use a compatible Companion release.\n\nSound tools also work on the car: import local music/video, trim and save WAV to USB, then select it in the vehicle's settings. The factory list may refresh only after leaving and returning or reconnecting USB. Reopen this guide from Settings at any time.",
+    "zh-CN": "需要传手机时，让车机连接安卓手机热点。在 OpenAVM Companion 开启接收，再到“手机 / 工具”输入地址与配对码；配对会被记住。新录像格式需要兼容版本的 Companion。\n\n车机也可独立制作音效：导入本地音乐／视频，裁剪后将 WAV 保存至 USB，再到原车设置选择。原车列表可能要离车再回车或重新连接 USB 才刷新。随时可从设置重看本教程。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "2c0f2a614c328255": {
+    "en": "Previous",
+    "zh-CN": "上一步",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "9ffd5994750ec05f": {
+    "en": "Done",
+    "zh-CN": "完成",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "b527069e7f1b6913": {
+    "en": "Next",
+    "zh-CN": "下一步",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "4c2ad104e7625fc5": {
+    "en": "Preview is busy. Please retry.",
+    "zh-CN": "预览正在切换，请稍后重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "af20c4e2b771d6ce": {
+    "en": "Camera release is unconfirmed. Please retry after it finishes.",
+    "zh-CN": "相机释放尚未确认，请待释放完成后重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "4bbe57ca2612bac5": {
+    "en": "Two-camera test · 60 s",
+    "zh-CN": "两路录像测试 · 60 秒",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "76081bcf3a8e7865": {
+    "en": "Preview only",
+    "zh-CN": "仅预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt",
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "65f50b080e53ea08": {
+    "en": "Preparing preview",
+    "zh-CN": "正在准备预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt",
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt",
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "0c8b5e97bd58ce5e": {
+    "en": "Switching preview…",
+    "zh-CN": "正在切换预览…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "2307ce79d40d6882": {
+    "en": "Storage destination",
+    "zh-CN": "录像存储位置",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "19f30e302293ca3c": {
+    "en": "Head unit",
+    "zh-CN": "车机",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "13453d8d5cc47979": {
+    "en": "Requested quality",
+    "zh-CN": "当前请求画质",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "e8a348008b2cf1d6": {
+    "en": "Estimated before cleanup",
+    "zh-CN": "清理前预计可录",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "911587f86195419f": {
+    "en": "Estimate uses the current bitrate, storage quota and reserved space. Cleanup may extend recording; actual file size varies.",
+    "zh-CN": "按当前码率、存储配额和保留空间估算。清理旧录像后可继续录制，实际文件大小会有变化。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordScreen.kt"
+    ]
+  },
+  "1bfda178dbf996fe": {
+    "en": "Stop recording and wait for the camera to finish closing first.",
+    "zh-CN": "请先停止录像，等待相机关闭完成。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "0d8a079283abbb9b": {
+    "en": "Protected USB clips are included in this permanent deletion.",
+    "zh-CN": "本次永久删除包含已保护的 USB 片段。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "31778b2f3f672245": {
+    "en": "Browser download",
+    "zh-CN": "浏览器下载",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "6ca6f9e3f7dddf85": {
+    "en": "Recording or saving is in progress. Stop recording and wait for saving to finish before deleting.",
+    "zh-CN": "正在录像或保存文件，请停止录像并等待保存完成后再删除。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "6e3022b0f56061ae": {
+    "en": "Camera work is still finishing. Wait for it to finish before deleting.",
+    "zh-CN": "相机任务尚未结束，请等待收尾完成后再删除。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "29b243d46dc36b5b": {
+    "en": "Close playback before deleting this recording.",
+    "zh-CN": "请先关闭这段录像的播放，再删除。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "9b9769f1fd297747": {
+    "en": "This recording is being transferred. Wait for the transfer to finish.",
+    "zh-CN": "这段录像正在传输，请等待传输完成。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "ad46fb74701212a0": {
+    "en": "The selected USB is no longer connected.",
+    "zh-CN": "所选 U 盘已断开。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/EventsScreen.kt"
+    ]
+  },
+  "b524fcb50195a1a7": {
+    "en": "The phone app is optional. Recording, playback and sound tools work on the vehicle with USB.",
+    "zh-CN": "手机 App 为可选项，车机配合 USB 即可录像、回看和制作音效。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "2269f9b2c045b4ea": {
+    "en": "OpenAVM Preflight · hardware and preview baseline",
+    "zh-CN": "重构体检 · 硬件能力与预览基线",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "18c597020bd2999f": {
+    "en": "Sounds sent from the phone are checked and saved to the vehicle USB. Select the new sound in the vehicle settings after transfer.",
+    "zh-CN": "手机发来的音效会经过校验并保存到车机 USB，传输完成后请到原车设置选择新音效。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "2d604017affffe9c": {
+    "en": "Saved to USB. Select it in vehicle settings; the sound list may refresh after leaving and returning, or reconnecting USB once file operations finish.",
+    "zh-CN": "已保存到 USB，请到原车设置选择；列表可能需要离车再回车，或等文件操作结束后重新连接 USB 才刷新。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "224424ef1d60599a": {
+    "en": "Overlay permission was not granted.",
+    "zh-CN": "尚未获得悬浮窗权限。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "de0e9dbb4d116624": {
+    "en": "Floating recording status",
+    "zh-CN": "录像悬浮窗",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "d56255355e233f9c": {
+    "en": "Show status, stop and return controls outside OpenAVM. Drag the title to move it.",
+    "zh-CN": "离开 OpenAVM 页面时显示状态、停止和返回按钮，可拖动标题移动。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "4f3086b65def339f": {
+    "en": "This head unit does not provide the permission page.",
+    "zh-CN": "此车机未提供该权限设置页面。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "a754b7266a2b01c6": {
+    "en": "Floating mirror",
+    "zh-CN": "悬浮后视镜",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "73f21b07ed20f52f": {
+    "en": "Live view with or without surround recording. Start and stop recording directly from the floating window.",
+    "zh-CN": "环视录像或不录像时均可看实时画面，也可直接从悬浮窗开始、停止录像。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "5b7ac51124fcf7b8": {
+    "en": "Select the rear view and grant camera/overlay permissions before opening the mirror.",
+    "zh-CN": "请先选择后方视角，并确认相机及悬浮窗权限，再开启后视镜。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "56cea5cb18182713": {
+    "en": "Open floating mirror",
+    "zh-CN": "开启悬浮后视镜",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "dafd4193bfff256b": {
+    "en": "Driver side",
+    "zh-CN": "驾驶位",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "f24f8828393ba203": {
+    "en": "Left",
+    "zh-CN": "左侧",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "6c3f2d384a7aa52c": {
+    "en": "Right",
+    "zh-CN": "右侧",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "fa6b88dfff329438": {
+    "en": "Left camera view",
+    "zh-CN": "左方对应视角",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "a781aa7845a0c370": {
+    "en": "Right camera view",
+    "zh-CN": "右方对应视角",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "31862283f408af3f": {
+    "en": "The four-view button changes the preview layout only. Tap a view to enlarge it.",
+    "zh-CN": "四宫格按钮只改变预览布局，点击一个视角即可放大。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "c1f6bfd415083992": {
+    "en": "Use the car logo to select a view. Drag the header to move, pull the lower corner to resize, and use the arrow to hide the picture. Closing the window does not stop recording.",
+    "zh-CN": "点击车标选择视角，拖动标题移动，拉下角调整窗口大小，箭头可收起画面。关闭窗口不会停止录像。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "0032866dd3b4b03a": {
+    "en": "While parked, match the camera directions to the real surroundings. These settings change the displayed view only.",
+    "zh-CN": "停车时对照真实环境确认摄像头方向。这些设置只改变显示视角。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "ba283f22e4e47aa3": {
+    "en": "Rear camera view",
+    "zh-CN": "后方对应视角",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "2788c3867cd309a5": {
+    "en": "Display rotation",
+    "zh-CN": "显示旋转",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "a97abb553f990758": {
+    "en": "Mirror left and right",
+    "zh-CN": "左右镜像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "3f30202637e80301": {
+    "en": "Tap Normal or Time-lapse, then adjust the rate beside Time-lapse. Photos save the original view to USB Pictures/OpenAVM. Screen-off ends preview-only mode.",
+    "zh-CN": "点击普通或延时，在延时旁调整倍率。照片按原始视角保存到 USB Pictures/OpenAVM。息屏后结束纯预览。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "5a93bf30b3180c7c": {
+    "en": "Continuous recording",
+    "zh-CN": "连续录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "9ebede072fd54824": {
+    "en": "On by default for supported surround cameras. Keeps recording and preview running between files. Turn off if compatibility problems occur; applies to the next recording start.",
+    "zh-CN": "支持的环视摄像头默认开启，分段时保持录像和预览连续。出现兼容问题时可关闭，下次开始录像生效。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "f1e86a06508b7870": {
+    "en": "Videos stay on the head unit or USB and transfer over your local network. Online diagnostic upload and remote lab sessions require separate activation in developer tools. Checking releases contacts GitHub.",
+    "zh-CN": "视频保留在车机或 USB，通过本地网络传输。在线诊断上传和远程实验会话需在开发者工具中另行开启；检查版本会连接 GitHub。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "0a5ae016ddb0b523": {
+    "en": "No browser is available to open this page.",
+    "zh-CN": "没有可用于打开此页面的浏览器。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "368d0a079cb7aedb": {
+    "en": "Official releases and updates",
+    "zh-CN": "官方发布与更新",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "30544367e10185a6": {
+    "en": "Quality by camera",
+    "zh-CN": "各摄像头画质",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordingQualitySettings.kt"
+    ]
+  },
+  "230edf3a00eb5d30": {
+    "en": "Surround",
+    "zh-CN": "环视",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordingQualitySettings.kt"
+    ]
+  },
+  "07160a7b81017be9": {
+    "en": "Applies to the next normal recording. Original keeps existing settings; Balanced requests about 71% of the bitrate, Save space 50%. Resolution and time lapse stay unchanged. Actual frame rate depends on the camera.",
+    "zh-CN": "下次普通录像生效。原画沿用现有参数；均衡请求约 71% 码率，节省空间请求 50% 码率。分辨率及延时录像不变，实际帧率取决于摄像头。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/RecordingQualitySettings.kt"
+    ]
+  },
+  "8b0716c24e5ba994": {
+    "en": "Thumbnail unavailable",
+    "zh-CN": "缩略图暂不可用",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/FourLanePlayerDialog.kt"
+    ]
+  },
+  "4f718e0ae26f804c": {
+    "en": "This recording's layout cannot be read safely. Keep the original video and its metadata together.",
+    "zh-CN": "无法正确读取这段录像的画面布局，请保留原视频及其配套信息文件。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/FourLanePlayerDialog.kt"
+    ]
+  },
+  "db2da8976a0c7aa8": {
+    "en": "Recent preview photos",
+    "zh-CN": "最近保存的预览照片",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PreviewPhotoGallery.kt"
+    ]
+  },
+  "6522cda1e4af9e3a": {
+    "en": "Preview photos",
+    "zh-CN": "预览照片",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PreviewPhotoGallery.kt"
+    ]
+  },
+  "d441707cd2bb9a8c": {
+    "en": "Connect the USB drive to view saved photos.",
+    "zh-CN": "连接对应 USB 后可查看已保存的照片。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PreviewPhotoGallery.kt"
+    ]
+  },
+  "5d02a99528cb7327": {
+    "en": "No photos yet",
+    "zh-CN": "暂无照片",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PreviewPhotoGallery.kt"
+    ]
+  },
+  "e58a23e62cd6c309": {
+    "en": "Drag rear view",
+    "zh-CN": "拖动后视镜窗口",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "02007389ac10474b": {
+    "en": "Hide controls",
+    "zh-CN": "收起控制栏",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "aa35f46cfb4c3687": {
+    "en": "Hide video",
+    "zh-CN": "隐藏视频",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "6bfa06efdb331c9b": {
+    "en": "Mirror actions",
+    "zh-CN": "后视镜操作",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "289b2bdc9bf16f40": {
+    "en": "Close window; keep recording",
+    "zh-CN": "关闭窗口，录像继续",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "613beb6e0b197831": {
+    "en": "Choose camera",
+    "zh-CN": "选择摄像头",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "a5d13446e3c9f2cd": {
+    "en": "Switch standard / fisheye",
+    "zh-CN": "切换标准／鱼眼",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "c83d11d9c8c38391": {
+    "en": "Four-view preview",
+    "zh-CN": "四宫格预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "2ee8c34879d08919": {
+    "en": "Framing and photo",
+    "zh-CN": "取景与拍照",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "0f56ddef5c843a29": {
+    "en": "◎ Photo",
+    "zh-CN": "◎ 拍照",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "3a2d94cd65b4984b": {
+    "en": "Photo",
+    "zh-CN": "拍照",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "8b9cb8eaf5142a70": {
+    "en": "Normal recording",
+    "zh-CN": "普通录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "f5983385e2ab1168": {
+    "en": "Lapse",
+    "zh-CN": "延时录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "25ab6f59c494563f": {
+    "en": "Time-lapse recording",
+    "zh-CN": "延时录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "0b5655a17812a879": {
+    "en": "Recording mode / speed",
+    "zh-CN": "录像模式／倍率",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "08217a3823aaf130": {
+    "en": "Drag to resize window",
+    "zh-CN": "拖动调整窗口大小",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "ac64d20ee3a180de": {
+    "en": "Set all four camera directions first",
+    "zh-CN": "请先设置四个摄像头的方向对应",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "75bc046f7cd590e2": {
+    "en": "Standard / fisheye",
+    "zh-CN": "标准／鱼眼",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "505095c7f030434f": {
+    "en": "Switching…",
+    "zh-CN": "切换中…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "f7b90c6af3015581": {
+    "en": " Cabin",
+    "zh-CN": " 车内",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "49476f95a4d3e9b6": {
+    "en": "Cabin preview",
+    "zh-CN": "车内预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "b74af739007f36f2": {
+    "en": "Live preview",
+    "zh-CN": "实时预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "89eefd94d1d26593": {
+    "en": "Standard",
+    "zh-CN": "标准",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "7b6e9d2ca607a64a": {
+    "en": "Stop recording",
+    "zh-CN": "停止录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "ded325a39e9c6ff9": {
+    "en": "Mode",
+    "zh-CN": "普通",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "538e652425d6db33": {
+    "en": "Show video",
+    "zh-CN": "显示视频",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "e0cdbdbde3d6b3df": {
+    "en": "Show controls",
+    "zh-CN": "展开控制栏",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "cfa71cd5ff300dc7": {
+    "en": "⊞ Four views",
+    "zh-CN": "⊞ 四宫格",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "d72776d1d2d2b1e9": {
+    "en": "■ Stop recording",
+    "zh-CN": "■ 停止录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "fbb2c37ab6256e77": {
+    "en": "● Start recording",
+    "zh-CN": "● 开始录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorOverlayWindow.kt"
+    ]
+  },
+  "7784677b69d1e19f": {
+    "en": "Floating mirror controls",
+    "zh-CN": "悬浮后视镜控制",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "24795251167fc097": {
+    "en": "Close window",
+    "zh-CN": "关闭悬浮窗",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "7c66adcb67e76463": {
+    "en": "Mirror operation stopped. Open the App to check the camera before trying again.",
+    "zh-CN": "后视镜操作已停止，请回到 App 检查相机状态后重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "f6172204c2a416f7": {
+    "en": "Preview unavailable. Reopen the mirror manually.",
+    "zh-CN": "预览不可用，请手动重新开启后视镜。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "5e3596a67850c308": {
+    "en": "Preview hidden",
+    "zh-CN": "预览已隐藏",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "b171a5110b939f99": {
+    "en": "Waiting for live preview",
+    "zh-CN": "等待实时预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "74240380d0ab218e": {
+    "en": "Preview unavailable · reopen manually",
+    "zh-CN": "预览不可用 · 请手动重开",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "4bc3d23a79d0ce63": {
+    "en": "Camera in use · waiting to resume",
+    "zh-CN": "相机被占用 · 等待恢复",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "27362ecba79c8e48": {
+    "en": "Switching / saving…",
+    "zh-CN": "正在切换／保存…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt",
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "381b7a29363b7d53": {
+    "en": "Video hidden · not recording",
+    "zh-CN": "画面隐藏 · 未录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "f81b6f4892135067": {
+    "en": "Keep window after stopping",
+    "zh-CN": "停止录像后保留窗口",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "e528c9e240b97bda": {
+    "en": "Lock position and size",
+    "zh-CN": "锁定位置和大小",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "a55141a3d5027936": {
+    "en": "Camera directions",
+    "zh-CN": "方向对应",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "a5ffb4b2dac19d39": {
+    "en": "Camera controls on right",
+    "zh-CN": "镜头控制放右侧",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "a3fd010bb5f74322": {
+    "en": "Recording preview is preparing. If unavailable, stop recording before trying again.",
+    "zh-CN": "正在准备录像预览；若不可用，请先停止录像再重新尝试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "25e224d0b1eb0e86": {
+    "en": "View presets and saved clips",
+    "zh-CN": "视角预设与保存片段",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "4068eeab0be9b3c4": {
+    "en": "Cabin preview · not recording",
+    "zh-CN": "车内预览 · 未录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "dff87873ada5a2cb": {
+    "en": "Recording cabin",
+    "zh-CN": "正在录制车内",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "1dc9fdb498d26ac9": {
+    "en": "Live preview · not recording",
+    "zh-CN": "实时预览 · 未录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "853ed86711604f1a": {
+    "en": "Restore mirror",
+    "zh-CN": "展开后视镜",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "41d1c1112502a2ec": {
+    "en": "3 views",
+    "zh-CN": "三视图",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "9a97d20387fe4eaa": {
+    "en": "Wide view",
+    "zh-CN": "宽视野",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "26bc229ce570e902": {
+    "en": "Save original view frame to USB",
+    "zh-CN": "保存当前视角原始帧到 USB",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "73713fa765319586": {
+    "en": "Load preset {0}",
+    "zh-CN": "读取预设 {0}",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "273d44a80bad63dd": {
+    "en": "Save preset {0}",
+    "zh-CN": "保存预设 {0}",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "7de9359615f1c735": {
+    "en": "Preset saved",
+    "zh-CN": "预设已保存",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "ef92b3f743a7c5b2": {
+    "en": "Unlock position",
+    "zh-CN": "解锁位置",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "730207c312b0d40b": {
+    "en": "Lock position",
+    "zh-CN": "锁定位置",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "fb57da00445c8f2d": {
+    "en": "No fresh preview frame",
+    "zh-CN": "暂无可用预览帧",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "a13d1faebfc5a668": {
+    "en": "Frame saved to USB Pictures/OpenAVM",
+    "zh-CN": "画面已保存到 USB Pictures/OpenAVM",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "999191319b05ed6b": {
+    "en": "Could not save frame. Connect one writable USB drive.",
+    "zh-CN": "保存画面失败，请连接一个可写入的 USB。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "4fce64c303ba9e7a": {
+    "en": "High-resolution preview unavailable. Recording can continue; check diagnostics.",
+    "zh-CN": "高清预览不可用；录像可继续，请查看诊断。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "0378cc3b74fdc50f": {
+    "en": "Preview stopped. Check recording status; stop and start manually to retry.",
+    "zh-CN": "预览已停止，请检查录像状态；手动停止并重新开始可重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "6c5cf67d96abfcf6": {
+    "en": "Select the rear camera view in Settings first.",
+    "zh-CN": "请先在设置中选择后方对应的视角。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "6fc7dc6d67d5788a": {
+    "en": "Camera picture interrupted · waiting for new frames",
+    "zh-CN": "相机画面暂时中断 · 等待新画面恢复",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "d87a4c187581d1f7": {
+    "en": "Recording is changing segment. Waiting for live view…",
+    "zh-CN": "录像正在切换分段，等待实时画面…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "372265be7e358838": {
+    "en": "Live view unavailable · waiting for a new frame",
+    "zh-CN": "实时画面暂不可用 · 等待新画面",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorPreviewController.kt"
+    ]
+  },
+  "d70f47c359067026": {
+    "en": "Time-lapse speed",
+    "zh-CN": "延时倍率",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorRateControl.kt"
+    ]
+  },
+  "a5a87a0adad7b885": {
+    "en": "Swipe up to increase, down to decrease",
+    "zh-CN": "上滑增大倍率，下滑减小倍率",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/MirrorRateControl.kt"
+    ]
+  },
+  "5c3a6ca9b7851c03": {
+    "en": "Verify phone identity",
+    "zh-CN": "核对手机身份",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "f30d5df9399aedc9": {
+    "en": "Compare all fingerprint groups with the pairing page on your phone. Continue only if they match.",
+    "zh-CN": "请与手机配对页逐组核对完整指纹，全部一致后再继续。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "b39e277e1a333be0": {
+    "en": "I checked every group on both screens.",
+    "zh-CN": "我已核对两块屏幕上的每一组指纹。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "fb3f1a1a026ef1a4": {
+    "en": "Secure pairing complete. Future connections are automatic.",
+    "zh-CN": "安全配对完成，以后会自动连接。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "35ce963a16af509c": {
+    "en": "Confirm and pair",
+    "zh-CN": "确认并配对",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "e5602b1ea763e117": {
+    "en": "Verify and pair",
+    "zh-CN": "核对并配对",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "f9892d9bcb34834c": {
+    "en": "Phone transfers use encrypted connections tied to the phone identity you confirmed. Update both apps and complete secure pairing once; interrupted transfers can resume.",
+    "zh-CN": "手机传输通过加密连接进行，并绑定您确认的手机身份。请更新两端应用并完成一次安全配对；中断后可续传。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/PhoneScreen.kt"
+    ]
+  },
+  "f0c8957435b1b24d": {
+    "en": "Update the phone app to use secure transfers.",
+    "zh-CN": "请更新手机版以使用安全传输。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "92d4de261c91448b": {
+    "en": "Pair again once to enable secure phone transfers.",
+    "zh-CN": "请重新配对一次，以启用手机安全传输。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "95b19bc5e892c250": {
+    "en": "Phone identity could not be verified. Check the phone and pair again if it has changed.",
+    "zh-CN": "无法验证手机身份。请检查手机，如已更换则重新配对。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "f1abf66faa01af65": {
+    "en": "This pairing is no longer valid. Pair the phone again.",
+    "zh-CN": "此配对已失效，请重新配对手机。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "56acd97ae5c7e8af": {
+    "en": "The pairing code is invalid or expired. Generate a new code on the phone.",
+    "zh-CN": "配对码无效或已过期，请在手机生成新码。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "cd67aad8e6654a19": {
+    "en": "Too many pairing attempts. Reopen pairing on the phone.",
+    "zh-CN": "配对尝试过多，请在手机重新打开配对。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "eece3d4139e5d9f3": {
+    "en": "Identity confirmation expired. Check the phone fingerprint again.",
+    "zh-CN": "身份确认已过期，请重新核对手机指纹。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "3955be7bb9b7ea79": {
+    "en": "The phone returned an incompatible response. Update both apps.",
+    "zh-CN": "手机返回的响应不兼容，请更新两端应用。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "fd316f137e4c500c": {
+    "en": "The pairing changed. Reconnect using the current phone.",
+    "zh-CN": "配对已更改，请连接当前手机。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "8549549e74873fa8": {
+    "en": "Phone unavailable. Check the hotspot and phone receiver.",
+    "zh-CN": "手机未连接，请检查热点和手机接收服务。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/transfer/PhoneSecurityMessages.kt"
+    ]
+  },
+  "fca5ed3c4d9449d0": {
+    "en": "Preview paused. Tap the floating entry to resume.",
+    "zh-CN": "预览已暂停，点击悬浮入口恢复。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "e7b26d835f21a9c0": {
+    "en": "Tap to retry",
+    "zh-CN": "点击手动重试",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "541965d80ffd9fd0": {
+    "en": "Open App to resume",
+    "zh-CN": "打开 App 恢复",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "b3be113a15f98779": {
+    "en": "Not ready · tap to retry",
+    "zh-CN": "尚未就绪 · 点击重试",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "58f41d154752507d": {
+    "en": "Tap to restore",
+    "zh-CN": "点击恢复预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/PausedMirrorWindow.kt"
+    ]
+  },
+  "97f1b05609016e11": {
+    "en": "Starting recording…",
+    "zh-CN": "即将自动录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "94894cd965940748": {
+    "en": "Restoring preview…",
+    "zh-CN": "即将恢复预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "ff6dc6d5e1d9501c": {
+    "en": "Wait for the camera to be released before resuming.",
+    "zh-CN": "请等相机释放完成后再恢复。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "70c9ce8c7e3e4930": {
+    "en": "Report unavailable",
+    "zh-CN": "报告暂时不可用",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "b0a2eb5888c095e2": {
+    "en": "Sleep report copied",
+    "zh-CN": "已复制休眠检查报告",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "7c47379353135cd2": {
+    "en": "Waiting for the camera to wake…",
+    "zh-CN": "正在等待相机就绪…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "1e5833741d0a1fdb": {
+    "en": "Camera not ready. Try again shortly.",
+    "zh-CN": "相机尚未就绪，请稍后重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "150491573bfbcc12": {
+    "en": "Preview did not resume. Hide and show the picture to retry.",
+    "zh-CN": "预览未恢复，请关闭画面后重新打开重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "9f6067edf5647a47": {
+    "en": "Preparing live preview…",
+    "zh-CN": "正在恢复预览…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "9886f8ae4c88b4c8": {
+    "en": "Waiting for camera…",
+    "zh-CN": "正在等待相机就绪…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "6ba35b831ade15a8": {
+    "en": "Starting automatic recording…",
+    "zh-CN": "正在自动开始录像…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "bfcbb44f0d823a83": {
+    "en": "Restoring preview…",
+    "zh-CN": "正在恢复预览…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "a84d2573ee488410": {
+    "en": "Return behaviour settings",
+    "zh-CN": "回车行为设置",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "9ae2b8e51d4dafdd": {
+    "en": "Copy sleep check report",
+    "zh-CN": "复制休眠检查报告",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "b3312878faa58a4b": {
+    "en": "Close floating window",
+    "zh-CN": "关闭悬浮窗",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/FloatingMirrorService.kt"
+    ]
+  },
+  "b55aa60e34092753": {
+    "en": "OpenAVM · tap to restore preview, hold for actions",
+    "zh-CN": "OpenAVM · 点击恢复预览，长按打开菜单",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/PausedMirrorWindow.kt"
+    ]
+  },
+  "e0fff0df6224cb46": {
+    "en": "Releasing camera…",
+    "zh-CN": "等待相机释放",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/PausedMirrorWindow.kt"
+    ]
+  },
+  "da74ab5f158c37a7": {
+    "en": "Camera released",
+    "zh-CN": "相机已释放",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/PausedMirrorWindow.kt"
+    ]
+  },
+  "b970e3d2b4894d26": {
+    "en": "App camera released. {0}",
+    "zh-CN": "本应用相机已释放。{0}",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/PausedMirrorWindow.kt"
+    ]
+  },
+  "b5afa2b2c44300fe": {
+    "en": "App camera release not confirmed. {0}",
+    "zh-CN": "本应用相机释放尚未确认。{0}",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/PausedMirrorWindow.kt"
+    ]
+  },
+  "0476e85def301dae": {
+    "en": "Exit on screen-off",
+    "zh-CN": "熄屏后退出悬浮窗",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "bf68da71d95d5714": {
+    "en": "Show Logo · tap for preview",
+    "zh-CN": "显示 Logo · 点击恢复预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "da5212ef7135fd1b": {
+    "en": "Restore full window · preview only",
+    "zh-CN": "恢复完整悬浮窗 · 仅预览",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "d0f215801c433d77": {
+    "en": "Restore full window · record automatically",
+    "zh-CN": "恢复完整悬浮窗 · 自动录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "43e041473a8423c4": {
+    "en": "When you return",
+    "zh-CN": "回车后的行为",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "6b1b94b0e4db6172": {
+    "en": "Change",
+    "zh-CN": "更改",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "332f3c5f9ff5e48a": {
+    "en": "Ready when you return",
+    "zh-CN": "回车后，按你的习惯恢复",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "4f01606d0114dd46": {
+    "en": "Confirm once after each installation. Change this anytime in Settings.",
+    "zh-CN": "每次安装后确认一次，也可以随时在设置中更改。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "8405572d5dbfda15": {
+    "en": "Applies the next time you leave and return.",
+    "zh-CN": "下次离车再回车时生效。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "ad76e32243364c85": {
+    "en": "Keep a floating entry after screen-off",
+    "zh-CN": "离车熄屏后保留悬浮入口",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "09491ff633f0fdbc": {
+    "en": "Off: reopen OpenAVM when you return.",
+    "zh-CN": "关闭后，回车时需要重新打开 OpenAVM。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "4974816d606e59a4": {
+    "en": "Show on return",
+    "zh-CN": "回车后显示",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "b5ff7374e38d02c9": {
+    "en": "Logo",
+    "zh-CN": "Logo 入口",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "777a72e70ab1e5d4": {
+    "en": "Large OpenAVM logo. Tap to restore preview; long-press for actions.",
+    "zh-CN": "醒目的 OpenAVM 车标，点一下恢复预览，长按打开菜单。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "2733e62afa87be51": {
+    "en": "Full floating window",
+    "zh-CN": "完整悬浮窗",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "1f2c795ac23b4cf3": {
+    "en": "Restore the live picture after the screen turns on and unlocks.",
+    "zh-CN": "亮屏并解锁后，自动恢复实时画面。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "387e05ac5e3270e4": {
+    "en": "Also start recording",
+    "zh-CN": "同时自动开始录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "99e673a4ee548659": {
+    "en": "Surround · Normal recording · your existing storage settings. Off means preview only.",
+    "zh-CN": "环视 · 普通录像 · 沿用当前存储设置。关闭时只预览，不保存视频。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "b768240b2c8300a7": {
+    "en": "Requires camera and overlay permissions with Floating mirror enabled. Saving does not start recording now. If the camera is unavailable, the entry stays so you can retry manually.",
+    "zh-CN": "需要开启“悬浮后视镜”并授予相机和悬浮窗权限。保存不会立即录像；相机未就绪时保留入口，供你手动重试。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "3b3188491e331f80": {
+    "en": "Closing the entry cancels automatic return for that session. Reopen OpenAVM after a head-unit restart.",
+    "zh-CN": "主动关闭入口后，当次不会自动回来；车机重启后需重新打开 OpenAVM。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "1786bd1ed69b2e34": {
+    "en": "Use Logo for now",
+    "zh-CN": "先用 Logo 入口",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "a01ddf9ecf767b93": {
+    "en": "Save settings",
+    "zh-CN": "保存设置",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/MirrorReturnSettingsUi.kt"
+    ]
+  },
+  "0c20082e7cfdf1a3": {
+    "en": "Choose Surround, Cabin or Infrared, then Normal or Time-lapse. Tap Start recording and check the recording status. A live picture marked Preview only is not being saved.\n\nTo finish, tap Stop and wait for saving to complete before removing USB. Recording after you leave depends on vehicle power; it is not guaranteed parking coverage.",
+    "zh-CN": "选择环视、车内或红外，再选择普通或延时。点击“开始录像”并确认录像状态；显示“仅预览”时，画面不会保存为录像。\n\n结束时点击“停止”，等保存完成再拔 U 盘。离车后的录像取决于车辆供电，不保证停车全程覆盖。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "b2b4102240971222": {
+    "en": "Enable Floating mirror in Settings and allow overlay access if the vehicle provides it. The window appears when OpenAVM is in the background. Tap around the car logo for Front/Rear/Left/Right, or its centre for Cabin; the grid button shows four surround views.\n\nDrag the header to move and the lower corner to resize. Use Standard/Fisheye to change the view. The arrow hides the picture; closing the window does not stop recording. Switching to Cabin during recording changes the recording source.",
+    "zh-CN": "在设置中开启“悬浮后视镜”；车机提供权限页时允许悬浮显示。OpenAVM 进入后台后才显示窗口。点击车标四周选择前后左右，点中间切换车内；四宫格按钮显示四路环视。\n\n拖动标题移动，拉下角调整窗口大小，点击标准／鱼眼切换视角。箭头可收起画面；关闭窗口不会停止已开始的录像。录像时切到车内，录像源也会随之切换。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "18304b708f91e09e": {
+    "en": "4 · When you return",
+    "zh-CN": "4 · 回车后自动恢复",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "fc67fc674d149f30": {
+    "en": "In Settings → When you return, choose Logo or Full floating window. Tap the Logo to restore preview; the full window restores it after the screen turns on and unlocks. To record as well, turn on Also start recording.\n\nIf Waiting for camera appears, allow up to 15 seconds. Check the recording status before relying on it. Saving settings does not start recording now, and stopping manually prevents another automatic start during that return.\n\nConfirm your choice again after an installation or update. If the head unit restarts or the system closes OpenAVM, reopen the app.",
+    "zh-CN": "在“设置 → 回车后的行为”选择 Logo 或完整悬浮窗。Logo 点一下恢复预览；完整悬浮窗会在亮屏解锁后自动恢复。想同时录像，再打开“同时自动开始录像”。\n\n看到“正在等待相机就绪”时，可等待最多 15 秒；请以实际录像状态为准。保存设置不会立即录像，手动停止后当次不会再次自动开始。\n\n每次安装或升级后重新确认一次；车机重启或系统关闭 OpenAVM 后，需要重新打开应用。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "1f054df96f3c3efd": {
+    "en": "5 · Keep an important moment",
+    "zh-CN": "5 · 保存重要时刻",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "49c0ad08668c1059": {
+    "en": "6 · Find and manage videos",
+    "zh-CN": "6 · 查找与管理录像",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "9d969552bb7e498d": {
+    "en": "7 · Phone, sounds and help",
+    "zh-CN": "7 · 手机、音效与帮助",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/QuickStartGuide.kt"
+    ]
+  },
+  "d2176d39f40b069d": {
+    "en": "Include Beta releases",
+    "zh-CN": "包含 Beta 测试版",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "dd3fbd1e21effc33": {
+    "en": "Checking releases…",
+    "zh-CN": "正在检查版本…",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "cf9dd55764b92ccc": {
+    "en": "No newer release in this channel.",
+    "zh-CN": "此渠道暂无更新版本。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "0d45d0e630bbb5be": {
+    "en": "Could not check releases. Try again later or open GitHub.",
+    "zh-CN": "无法检查版本，请稍后重试或打开 GitHub。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "8fb9f980f9d24d18": {
+    "en": "Check for updates",
+    "zh-CN": "检查更新",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "1039cccaeb665a33": {
+    "en": "Download opens the official ARM64 car APK in your browser. Install it using the head unit's installer; recordings and settings are retained.",
+    "zh-CN": "下载会在浏览器打开官方 ARM64 车机安装包，请用车机安装器完成更新，录像及设置会保留。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "4d3004ae67b2b092": {
+    "en": "Download APK",
+    "zh-CN": "下载安装包",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/ReleaseCheckSettings.kt"
+    ]
+  },
+  "b965ecbe692b6b6b": {
+    "en": "Videos transfer over your local network. Checking for updates contacts GitHub. This release does not upload diagnostic reports automatically.",
+    "zh-CN": "视频通过本地网络传输；检查更新会连接 GitHub。本版本不会自动上传诊断报告。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "444d5b800df049b0": {
+    "en": "Follow system uses the current head-unit language. The change takes effect immediately.",
+    "zh-CN": "“跟随系统”使用当前车机系统语言，切换后立即生效。",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/ui/product/SettingsScreen.kt"
+    ]
+  },
+  "e54ee09c6ccfdd35": {
+    "en": "Preview unavailable: {0}",
+    "zh-CN": "预览不可用：{0}",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/StandaloneMirrorService.kt"
+    ]
+  },
+  "279fc0e0271e752f": {
+    "en": "Camera release is unconfirmed",
+    "zh-CN": "相机释放尚未确认",
+    "sources": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/mirror/StandaloneMirrorService.kt"
+    ]
   }
 }

@@ -13,14 +13,20 @@ class RecordingThumbnailCache(private val root: File) {
         root.mkdirs()
     }
 
+    /** Cache-only lookup, for callers which cannot schedule extraction. */
     @Synchronized
+    fun loadCached(video: File, layoutKind: RecordingLayoutKind): Bitmap? =
+        runCatching { fileFor(video, layoutKind)?.let { BitmapFactory.decodeFile(it.absolutePath) } }.getOrNull()
+
     fun loadOrCreate(
         video: File,
         layoutKind: RecordingLayoutKind = RecordingLayoutKind.FOUR_LANE_V1,
         laneSizePx: Int = 160,
-    ): Bitmap? {
+    ): Bitmap? = synchronized(extractionLock) { createLocked(video, layoutKind, laneSizePx) }
+
+    private fun createLocked(video: File, layoutKind: RecordingLayoutKind, laneSizePx: Int): Bitmap? {
         if (!video.isFile) return null
-        val target = fileFor(video, layoutKind)
+        val target = fileFor(video, layoutKind) ?: return null
         BitmapFactory.decodeFile(target.absolutePath)?.let { return it }
         if (target.exists()) target.delete()
 
@@ -55,19 +61,30 @@ class RecordingThumbnailCache(private val root: File) {
         }
     }
 
+    companion object {
+        // List covers and segment rails create different cache instances. An instance
+        // monitor did not serialize their native retrievers; this lock does.
+        private val extractionLock = Any()
+    }
+
     @Synchronized
     fun remove(video: File) {
         RecordingLayoutKind.entries.forEach { layout ->
-            runCatching { fileFor(video, layout).delete() }
+            runCatching { fileFor(video, layout)?.delete() }
         }
     }
 
-    private fun fileFor(video: File, layoutKind: RecordingLayoutKind): File {
+    private fun fileFor(video: File, layoutKind: RecordingLayoutKind): File? {
         // Keep the established four-lane identity so upgrading does not force
         // every existing cover to be decoded again. Only single-view covers
         // need a distinct key because their composition differs.
+        val raster = RecordingRasterReader.read(video)
+        if (raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Rejected ||
+            layoutKind == RecordingLayoutKind.SINGLE_V1 &&
+            raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked) return null
         val identity = "${video.absolutePath}|${video.length()}|${video.lastModified()}" +
-            if (layoutKind == RecordingLayoutKind.SINGLE_V1) "|SINGLE_V1" else ""
+            (if (layoutKind == RecordingLayoutKind.SINGLE_V1) "|SINGLE_V1" else "") +
+            (if (raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Original) "" else "|RASTER:$raster")
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(identity.toByteArray())
             .joinToString("") { "%02x".format(it) }

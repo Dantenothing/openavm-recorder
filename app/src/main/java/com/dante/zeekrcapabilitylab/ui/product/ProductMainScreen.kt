@@ -15,6 +15,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.sp
@@ -43,10 +46,21 @@ private val productNavItems = listOf(
  * Product shell for the head unit: four fixed tabs (录像/记录/手机/设置).
  */
 @Composable
-fun ProductMainScreen() {
+fun ProductMainScreen(openReturnSettings: Boolean = false, onReturnSettingsHandled: () -> Unit = {}) {
     // Reading this StateFlow makes every product screen recompose immediately
     // after the user changes language; camera/recorder services are untouched.
     val languageMode by AppLanguage.mode.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val returnSettings = remember(context) { com.dante.zeekrcapabilitylab.mirror.MirrorReturnSettings(context) }
+    var showReturnSetup by remember { mutableStateOf(returnSettings.needsReview) }
+    if (showReturnSetup) {
+        // Do not mount the home page's automatic preview/permission effects behind this decision.
+        MirrorReturnSetupDialog(returnSettings, installationPrompt = true, onDismiss = {},
+            onSaved = { showReturnSetup = false; onReturnSettingsHandled() })
+        return
+    }
+    if (openReturnSettings) MirrorReturnSetupDialog(returnSettings, installationPrompt = false,
+        onDismiss = onReturnSettingsHandled, onSaved = onReturnSettingsHandled)
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "record"

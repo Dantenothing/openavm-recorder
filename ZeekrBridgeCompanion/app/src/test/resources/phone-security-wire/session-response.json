@@ -1,0 +1,7 @@
+{
+  "service": "openavm-transfer",
+  "version": 1,
+  "securityVersion": 2,
+  "phoneDeviceId": "phone-test",
+  "carDeviceId": "car-test"
+}

@@ -58,6 +58,7 @@ object UsbExportRepository {
         target: UsbExportTarget,
     ): Result<String> {
         if (!::appContext.isInitialized) return Result.failure(IllegalStateException("USB export is not initialized"))
+        if (com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.kind == "MULTI") return Result.failure(IllegalStateException("MULTI_RECORDING_ACTIVE"))
         val unique = files.distinctBy { it.absolutePath }
         if (unique.isEmpty()) return Result.failure(IllegalArgumentException("No finalized recording selected"))
         val selectedPaths = unique.mapTo(mutableSetOf(), File::getAbsolutePath)
@@ -192,6 +193,7 @@ object UsbExportRepository {
     }
 
     fun retry(id: String) {
+        if (com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.kind == "MULTI") return
         synchronized(lock) {
             val task = get(id) ?: return
             if (task.state !in setOf(

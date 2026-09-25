@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources><string name="app_name" translatable="false">OpenAVM</string>    <string name="widget_temperature_refresh_description">Update cabin temperature; may briefly run A/C</string>
+</resources>

@@ -1,6 +1,8 @@
 package com.dante.zeekrbridge.core
 
 import kotlin.math.max
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
+import io.github.dantenothing.avmtransfer.protocol.StripRepackContract
 
 enum class MediaExportTarget(val fileSuffix: String) {
     ORIGINAL("360"),
@@ -44,6 +46,8 @@ data class PlannedExportClip(
     val clipStartMs: Long,
     val clipEndMs: Long,
     val crop: PixelCrop?,
+    val raster: StripRepackContract? = null,
+    val sourceLanes: List<IndexedLane> = emptyList(),
 ) {
     val outputDurationMs: Long get() = (clipEndMs - clipStartMs).coerceAtLeast(0L)
 }
@@ -58,6 +62,8 @@ data class MediaExportPlan(
     val requestedEndMs: Long,
     val missingGapCount: Int,
     val missingGapDurationMs: Long,
+    val embeddedMetadata: String? = null,
+    val compositeLanes: List<IndexedLane> = emptyList(),
 ) {
     val outputDurationMs: Long = clips.sumOf { it.outputDurationMs }
     val requiresVideoProcessing: Boolean = target != MediaExportTarget.ORIGINAL
@@ -92,7 +98,16 @@ object MediaExportPlanner {
             compareBy<IndexedMediaSegment> { it.startedAtEpochMs }.thenBy { it.segmentNumber ?: 0 },
         )
         val sourceRole = ordered.first().sourceRole
+        ordered.forEach { segment -> require(ContinuousRasterSupport.error(segment) == null) {
+            ContinuousRasterSupport.error(segment).orEmpty()
+        } }
         require(ordered.all { it.sourceRole == sourceRole }) { "A single export cannot mix camera sources" }
+        require(ordered.all { it.layoutKind == ordered.first().layoutKind && it.raster == ordered.first().raster }) {
+            "A single export cannot mix recording layouts"
+        }
+        if (ordered.first().raster is RecordingRasterMetadata.Repacked) require(ordered.all {
+            it.lanes.sortedBy { lane -> lane.lane } == ordered.first().lanes.sortedBy { lane -> lane.lane }
+        }) { "A single export cannot mix view calibrations" }
         require(target in supportedTargets(ordered)) { "This output is not available for the recording layout" }
         val total = totalDurationMs(ordered)
         require(total > 0L) { "Recording duration is unavailable" }
@@ -116,6 +131,8 @@ object MediaExportPlanner {
                             clipStartMs = overlapStart - segmentStart,
                             clipEndMs = overlapEnd - segmentStart,
                             crop = cropFor(segment, target),
+                            raster = (segment.raster as? RecordingRasterMetadata.Repacked)?.contract,
+                            sourceLanes = segment.lanes.toList(),
                         ),
                     )
                 }
@@ -134,6 +151,9 @@ object MediaExportPlanner {
             requestedEndMs = end,
             missingGapCount = gaps.first,
             missingGapDurationMs = gaps.second,
+            embeddedMetadata = if (target == MediaExportTarget.ORIGINAL)
+                ContinuousRasterSupport.exportDocument(ordered.first(), clips.sumOf { it.outputDurationMs }) else null,
+            compositeLanes = if (target == MediaExportTarget.ORIGINAL) ordered.first().lanes else emptyList(),
         )
     }
 
@@ -181,6 +201,13 @@ object MediaExportPlanner {
             y0 = y0,
             y1 = (y0 + sourceWidth).coerceAtMost(sourceHeight),
         )
+    }
+
+    internal fun validateFrozenInput(clip: PlannedExportClip, current: IndexedMediaSegment) {
+        val raster = clip.raster ?: return
+        require(current.raster == RecordingRasterMetadata.Repacked(raster) &&
+            current.lanes.sortedBy { it.lane } == clip.sourceLanes.sortedBy { it.lane } &&
+            ContinuousRasterSupport.error(current) == null) { "RECORDING_LAYOUT_CHANGED" }
     }
 
     internal fun gapSummary(segments: List<IndexedMediaSegment>): Pair<Int, Long> {

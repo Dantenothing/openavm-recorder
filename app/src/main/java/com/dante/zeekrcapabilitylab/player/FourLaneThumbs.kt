@@ -3,6 +3,10 @@ package com.dante.zeekrcapabilitylab.player
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
+import io.github.dantenothing.avmtransfer.protocol.PixelRectangle
+import io.github.dantenothing.avmtransfer.protocol.StripBitmapDrawing
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import java.io.File
@@ -25,9 +29,14 @@ object FourLaneThumbs {
             val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
                 ?.toIntOrNull()
                 ?: 0
-            if (!isFourLane(width, height)) return null
+            val raster = RecordingRasterReader.read(file)
+            if (raster.trackError(width, height) != null) return null
+            val repack = (raster as? RecordingRasterMetadata.Repacked)?.contract
+            val logicalWidth = repack?.inputWidth ?: width
+            val logicalHeight = repack?.inputHeight ?: height
+            if (!isFourLane(logicalWidth, logicalHeight)) return null
 
-            val sourceLaneSize = minOf(width, height).coerceAtLeast(1)
+            val sourceLaneSize = minOf(logicalWidth, logicalHeight).coerceAtLeast(1)
             val scale = laneSizePx.toFloat() / sourceLaneSize
             val scaledWidth = (width * scale).roundToInt().coerceAtLeast(1)
             val scaledHeight = (height * scale).roundToInt().coerceAtLeast(1)
@@ -48,13 +57,27 @@ object FourLaneThumbs {
 
             try {
                 (1..4).map { lane ->
-                    val window = FourLaneTextureLayout.windowForLane(frame.width, frame.height, lane)
-                    val left = window.sourceLeftPx.roundToInt().coerceIn(0, frame.width - 1)
-                    val top = window.sourceTopPx.roundToInt().coerceIn(0, frame.height - 1)
-                    val cropWidth = window.sourceWidthPx.roundToInt()
+                    val window = FourLaneTextureLayout.windowForLane(logicalWidth, logicalHeight, lane)
+                    if (repack != null) {
+                        return@map Bitmap.createBitmap(laneSizePx, laneSizePx, Bitmap.Config.ARGB_8888).also { output ->
+                            StripBitmapDrawing.drawCrop(Canvas(output), frame, repack,
+                                PixelRectangle(window.sourceLeftPx.roundToInt(), window.sourceTopPx.roundToInt(),
+                                    window.sourceWidthPx.roundToInt(), window.sourceHeightPx.roundToInt()),
+                                RectF(0f, 0f, laneSizePx.toFloat(), laneSizePx.toFloat()),
+                                Paint(Paint.FILTER_BITMAP_FLAG))
+                        }
+                    }
+                    // Derive legacy crop fractions from original track geometry, not a scaled
+                    // bitmap whose rounded size can lose the 4px separators or the Sentry grid.
+                    val scaledWindow = window.copy(sourceLeftPx = window.u * frame.width,
+                        sourceTopPx = window.v * frame.height, sourceWidthPx = window.width * frame.width,
+                        sourceHeightPx = window.height * frame.height)
+                    val left = scaledWindow.sourceLeftPx.roundToInt().coerceIn(0, frame.width - 1)
+                    val top = scaledWindow.sourceTopPx.roundToInt().coerceIn(0, frame.height - 1)
+                    val cropWidth = scaledWindow.sourceWidthPx.roundToInt()
                         .coerceAtLeast(1)
                         .coerceAtMost(frame.width - left)
-                    val cropHeight = window.sourceHeightPx.roundToInt()
+                    val cropHeight = scaledWindow.sourceHeightPx.roundToInt()
                         .coerceAtLeast(1)
                         .coerceAtMost(frame.height - top)
                     Bitmap.createBitmap(frame, left, top, cropWidth, cropHeight).let { crop ->

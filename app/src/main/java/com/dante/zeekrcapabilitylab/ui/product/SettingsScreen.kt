@@ -1,5 +1,15 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -55,8 +65,14 @@ import kotlinx.coroutines.withContext
 fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
     val context = LocalContext.current
     val settings = remember { SettingsStore.get(context) }
+    val mirrorPresentation = remember { com.dante.zeekrcapabilitylab.mirror.MirrorPresentation(context) }
+    var mirrorLeft by remember { mutableStateOf(mirrorPresentation.leftLane) }
+    var mirrorRight by remember { mutableStateOf(mirrorPresentation.rightLane) }
+    var rightHandDrive by remember { mutableStateOf(mirrorPresentation.rightHandDrive) }
     val languageMode by AppLanguage.mode.collectAsState()
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showGuide by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    if (showGuide) QuickStartGuide(onDismiss = { showGuide = false })
 
     var segment by remember { mutableStateOf(settings.segmentSeconds) }
     var storage by remember { mutableStateOf(settings.internalStorageLimitBytes) }
@@ -69,6 +85,35 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
     var safety by remember { mutableStateOf(settings.minFreeBytes) }
     var autoCleanup by remember { mutableStateOf(settings.autoCleanupEnabled) }
     var previewWhileRecording by remember { mutableStateOf(settings.previewWhileRecordingEnabled) }
+    var recordingOverlay by remember { mutableStateOf(settings.recordingOverlayEnabled) }
+    var mirrorEnabled by remember { mutableStateOf(settings.mirrorPreviewEnabled) }
+    var rearLane by remember { mutableStateOf(settings.mirrorRearLane) }
+    var mirrorRotation by remember { mutableStateOf(settings.mirrorRotation) }
+    var mirrorHorizontal by remember { mutableStateOf(settings.mirrorHorizontal) }
+    var externalActionMessage by remember { mutableStateOf("") }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val overlayPermission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        recordingOverlay = Settings.canDrawOverlays(context)
+        settings.setRecordingOverlayEnabled(recordingOverlay)
+        if (!recordingOverlay) externalActionMessage = Utils.t("Overlay permission was not granted.", "尚未获得悬浮窗权限。")
+    }
+    val mirrorPermission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        mirrorEnabled = Settings.canDrawOverlays(context)
+        settings.setMirrorPreviewEnabled(mirrorEnabled)
+        if (!mirrorEnabled) externalActionMessage = Utils.t("Overlay permission was not granted.", "尚未获得悬浮窗权限。")
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !Settings.canDrawOverlays(context)) {
+                recordingOverlay = false
+                settings.setRecordingOverlayEnabled(false)
+                mirrorEnabled = false
+                settings.setMirrorPreviewEnabled(false)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var developerModeEnabled by remember { mutableStateOf(settings.developerModeEnabled) }
     if (developerModeEnabled && showDiagnostics) {
@@ -84,6 +129,10 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
     ) {
         Text(Utils.t("Settings", "设置"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { showGuide = true }) { Text(Utils.t("Quick start & help", "新手教程与帮助")) }
+        Spacer(Modifier.height(8.dp))
+        MirrorReturnSettingsEntry()
+        if (BuildConfig.MIRROR_RETURN_ENABLED) Spacer(Modifier.height(10.dp))
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -104,7 +153,7 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
                 Text(
                     Utils.t(
                         "Follow system uses the current head-unit language. The change takes effect immediately.",
-                        "“跟随车机”使用当前车机系统语言，切换后立即生效。",
+                        "“跟随系统”使用当前车机系统语言，切换后立即生效。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -118,6 +167,7 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
             Column(Modifier.padding(16.dp)) {
                 Text(Utils.t("Recording", "录像参数"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
+                RecordingQualitySettings()
                 OptionRow(
                     label = Utils.t("Segment length", "分段长度"),
                     options = SettingsStore.SEGMENT_OPTIONS.map { Utils.t("{0} min", "{0} 分钟", it / 60) },
@@ -251,6 +301,68 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
                         },
                     )
                 }
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(Utils.t("Floating recording status", "录像悬浮窗"))
+                        Text(Utils.t("Show status, stop and return controls outside OpenAVM. Drag the title to move it.", "离开 OpenAVM 页面时显示状态、停止和返回按钮，可拖动标题移动。"), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(recordingOverlay, { enable ->
+                        externalActionMessage = ""
+                        if (!enable || Settings.canDrawOverlays(context)) {
+                            recordingOverlay = enable
+                            settings.setRecordingOverlayEnabled(enable)
+                        } else runCatching {
+                            overlayPermission.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+                        }.onFailure { externalActionMessage = Utils.t("This head unit does not provide the permission page.", "此车机未提供该权限设置页面。") }
+                    })
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(Utils.t("Floating mirror", "悬浮后视镜"))
+                        Text(Utils.t("Live view with or without surround recording. Start and stop recording directly from the floating window.", "环视录像或不录像时均可看实时画面，也可直接从悬浮窗开始、停止录像。"), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(mirrorEnabled, { enable ->
+                        externalActionMessage = ""
+                        if (!enable || Settings.canDrawOverlays(context)) {
+                            mirrorEnabled = enable; settings.setMirrorPreviewEnabled(enable)
+                            if (!enable) com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.close()
+                        } else runCatching {
+                            mirrorPermission.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+                        }.onFailure { externalActionMessage = Utils.t("This head unit does not provide the permission page.", "此车机未提供该权限设置页面。") }
+                    })
+                }
+                if (mirrorEnabled) {
+                    OutlinedButton(onClick = {
+                        if (!com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.start(context)) {
+                            externalActionMessage = Utils.t("Select the rear view and grant camera/overlay permissions before opening the mirror.", "请先选择后方视角，并确认相机及悬浮窗权限，再开启后视镜。")
+                        }
+                    }) { Text(Utils.t("Open floating mirror", "开启悬浮后视镜")) }
+                    OptionRow(Utils.t("Driver side", "驾驶位"), listOf(Utils.t("Left", "左侧"), Utils.t("Right", "右侧")), if (rightHandDrive) 1 else 0) {
+                        rightHandDrive = it == 1; mirrorPresentation.rightHandDrive = rightHandDrive
+                    }
+                    OptionRow(Utils.t("Left camera view", "左方对应视角"), (1..4).map { it.toString() }, mirrorLeft - 1) {
+                        mirrorLeft = it + 1; mirrorPresentation.leftLane = mirrorLeft
+                    }
+                    OptionRow(Utils.t("Right camera view", "右方对应视角"), (1..4).map { it.toString() }, mirrorRight - 1) {
+                        mirrorRight = it + 1; mirrorPresentation.rightLane = mirrorRight
+                    }
+                    Text(Utils.t("The four-view button changes the preview layout only. Tap a view to enlarge it.", "四宫格按钮只改变预览布局，点击一个视角即可放大。"), style = MaterialTheme.typography.bodySmall)
+                    Text(Utils.t("Use the car logo to select a view. Drag the header to move, pull the lower corner to resize, and use the arrow to hide the picture. Closing the window does not stop recording.", "点击车标选择视角，拖动标题移动，拉下角调整窗口大小，箭头可收起画面。关闭窗口不会停止录像。"), style = MaterialTheme.typography.bodySmall)
+                    Text(Utils.t("While parked, match the camera directions to the real surroundings. These settings change the displayed view only.", "停车时对照真实环境确认摄像头方向。这些设置只改变显示视角。"), style = MaterialTheme.typography.bodySmall)
+                    OptionRow(Utils.t("Rear camera view", "后方对应视角"), (1..4).map { it.toString() }, rearLane - 1) {
+                        rearLane = it + 1; settings.setMirrorRearLane(rearLane)
+                    }
+                    OptionRow(Utils.t("Display rotation", "显示旋转"), listOf("0°", "90°", "180°", "270°"), mirrorRotation / 90) {
+                        mirrorRotation = it * 90; settings.setMirrorRotation(mirrorRotation)
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(Utils.t("Mirror left and right", "左右镜像"), Modifier.weight(1f))
+                        Switch(mirrorHorizontal, { mirrorHorizontal = it; settings.setMirrorHorizontal(it) })
+                    }
+                    PreviewPhotoGallery()
+                    Text(Utils.t("Tap Normal or Time-lapse, then adjust the rate beside Time-lapse. Photos save the original view to USB Pictures/OpenAVM. Screen-off ends preview-only mode.", "点击普通或延时，在延时旁调整倍率。照片按原始视角保存到 USB Pictures/OpenAVM。息屏后结束纯预览。"), style = MaterialTheme.typography.bodySmall)
+                }
+                if (externalActionMessage.isNotEmpty()) Text(externalActionMessage, color = MaterialTheme.colorScheme.error)
                 Text(
                     Utils.t(
                         "Head-unit and USB storage have separate limits. Automatic cleanup removes only this app's recordings and keeps factory Sentry videos.",
@@ -278,10 +390,20 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     Text(Utils.t("Developer tools", "开发者工具"), style = MaterialTheme.typography.titleMedium)
+                    var continuousRecording by remember { mutableStateOf(settings.sharedInputRecordingEnabled) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(Utils.t("Continuous recording", "连续录像"), Modifier.weight(1f))
+                        Switch(continuousRecording, { continuousRecording = it; settings.setSharedInputRecordingEnabled(it) })
+                    }
+                    Text(Utils.t("On by default for supported surround cameras. Keeps recording and preview running between files. Turn off if compatibility problems occur; applies to the next recording start.",
+                        "支持的环视摄像头默认开启，分段时保持录像和预览连续。出现兼容问题时可关闭，下次开始录像生效。"), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = { showDiagnostics = true }) {
                         Text(Utils.t("Recording diagnostics", "录像诊断"))
                     }
+                    if (BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) OutlinedButton(onClick = {
+                        context.startActivity(android.content.Intent(context, com.dante.zeekrcapabilitylab.runtime.ParkingDiagnosticsActivity::class.java))
+                    }) { Text("离车与后台相机诊断 / Parking diagnostics") }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -425,11 +547,15 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
             Column(Modifier.padding(16.dp)) {
                 Text(Utils.t("About & privacy", "关于与隐私"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
-                Text(
+                if (BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) Text(
                     Utils.t(
-                        "This app transfers data only between the head unit and a phone on the same hotspot. It does not access the internet or upload to the cloud.",
-                        "本应用仅在车机本地与同一热点内的手机之间传输数据，不访问互联网、不上传云端。",
+                        "Videos stay on the head unit or USB and transfer over your local network. Online diagnostic upload and remote lab sessions require separate activation in developer tools. Checking releases contacts GitHub.",
+                        "视频保留在车机或 USB，通过本地网络传输。在线诊断上传和远程实验会话需在开发者工具中另行开启；检查版本会连接 GitHub。",
                     ),
+                    style = MaterialTheme.typography.bodyMedium,
+                ) else Text(
+                    Utils.t("Videos transfer over your local network. Checking for updates contacts GitHub. This release does not upload diagnostic reports automatically.",
+                        "视频通过本地网络传输；检查更新会连接 GitHub。本版本不会自动上传诊断报告。"),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(6.dp))
@@ -461,7 +587,15 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
                         }
                     },
                 )
+                OutlinedButton(onClick = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Dantenothing/openavm-recorder/releases/latest")))
+                    }.onFailure { externalActionMessage = Utils.t("No browser is available to open this page.", "没有可用于打开此页面的浏览器。") }
+                }) { Text(Utils.t("Official releases and updates", "官方发布与更新")) }
+                ReleaseCheckSettings()
+                Spacer(Modifier.height(12.dp))
                 if (developerModeEnabled) {
+                    if (BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) ConcurrentRecordingSettings()
                     Spacer(Modifier.height(8.dp))
                     Text(
                         developerModeMessage.ifBlank {

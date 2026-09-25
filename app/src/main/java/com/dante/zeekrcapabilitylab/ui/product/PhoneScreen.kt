@@ -12,9 +12,15 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.dante.zeekrcapabilitylab.transfer.PhoneSoundRelay
 import com.dante.zeekrcapabilitylab.transfer.TransferRepository
+import com.dante.zeekrcapabilitylab.transfer.PhonePairingCandidate
+import com.dante.zeekrcapabilitylab.transfer.phoneFailure
+import com.dante.zeekrcapabilitylab.transfer.phoneSecurityMessage
 import com.dante.zeekrcapabilitylab.transfer.PhoneAddress
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.usbexport.UsbExportVolumeResolver
@@ -23,6 +29,7 @@ import io.github.dantenothing.avmtransfer.protocol.SoundOfferStates
 import io.github.dantenothing.avmtransfer.protocol.TransferTaskState
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PhoneScreen() {
     val context = LocalContext.current
@@ -40,11 +47,48 @@ fun PhoneScreen() {
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
-    var showPairing by remember { mutableStateOf(endpoint == null) }
+    var showPairing by remember { mutableStateOf(endpoint?.securelyPaired != true) }
+    var pendingIdentity by remember { mutableStateOf<PhonePairingCandidate?>(null) }
+    var identityConfirmed by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { if (endpoint != null) TransferRepository.reconnectInBackground() }
     LaunchedEffect(endpoint) {
-        if (endpoint != null) showPairing = false
+        if (endpoint != null) showPairing = !endpoint.securelyPaired
+    }
+
+    pendingIdentity?.let { candidate ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) { pendingIdentity = null; identityConfirmed = false } },
+            title = { Text(Utils.t("Verify phone identity", "核对手机身份")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(Utils.t("Compare all fingerprint groups with the pairing page on your phone. Continue only if they match.", "请与手机配对页逐组核对完整指纹，全部一致后再继续。"))
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Text(candidate.displayFingerprint, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    }
+                    Row {
+                        Checkbox(checked = identityConfirmed, onCheckedChange = { identityConfirmed = it }, enabled = !busy)
+                        Text(Utils.t("I checked every group on both screens.", "我已核对两块屏幕上的每一组指纹。"), modifier = Modifier.padding(top = 12.dp))
+                    }
+                }
+            },
+            confirmButton = {
+                Button(enabled = identityConfirmed && !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        try {
+                            val result = TransferRepository.pair(candidate, code)
+                            message = result.fold(
+                                { Utils.t("Secure pairing complete. Future connections are automatic.", "安全配对完成，以后会自动连接。") },
+                                { phoneSecurityMessage(phoneFailure(it).error) },
+                            )
+                            if (result.isSuccess) { code = ""; PhoneSoundRelay.onForeground() }
+                        } finally { busy = false; pendingIdentity = null; identityConfirmed = false }
+                    }
+                }) { Text(Utils.t("Confirm and pair", "确认并配对")) }
+            },
+            dismissButton = { TextButton(enabled = !busy, onClick = { pendingIdentity = null; identityConfirmed = false }) { Text(Utils.t("Cancel", "取消")) } },
+        )
     }
 
     Column(
@@ -52,11 +96,17 @@ fun PhoneScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text(Utils.t("Phone and vehicle tools", "手机与车机工具"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(Utils.t("The phone app is optional. Recording, playback and sound tools work on the vehicle with USB.", "手机 App 为可选项，车机配合 USB 即可录像、回看和制作音效。"),
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (developerModeEnabled && com.dante.zeekrcapabilitylab.BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) OutlinedButton(onClick = { context.startActivity(Intent(context, com.dante.zeekrcapabilitylab.preflight.PreflightActivity::class.java)) }) {
+            Text(Utils.t("OpenAVM Preflight · hardware and preview baseline", "重构体检 · 硬件能力与预览基线"))
+        }
         OutlinedButton(onClick = { context.startActivity(Intent(context, VehicleSoundEditorActivity::class.java)) }) {
             Text(Utils.t("Make a lock / unlock sound on this vehicle", "在车机制作上锁 / 解锁音效"))
         }
         Text(
             when {
+                endpoint != null && !endpoint.securelyPaired -> phoneSecurityMessage(com.dante.zeekrcapabilitylab.transfer.PhoneSecurityError.SECURE_PAIRING_REQUIRED)
                 connection.connected -> Utils.t("Connected: {0}", "已连接：{0}", endpoint?.phoneName)
                 endpoint != null -> Utils.t("Paired: {0} · currently offline", "已配对：{0} · 当前未连接", endpoint.phoneName)
                 else -> Utils.t("No phone paired", "尚未配对手机")
@@ -68,11 +118,11 @@ fun PhoneScreen() {
                     Text(Utils.t("Paired phone", "已配对手机"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("${endpoint.phoneName} · ${PhoneAddress(endpoint.host, endpoint.port).displayValue}")
                     Text(Utils.t("The six-digit code is only used for first-time pairing. Later, start the hotspot and phone receiver to reconnect automatically.", "六位码只在首次配对时使用。以后打开热点和手机接收服务即可自动重连。"))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
                             busy = true
                             scope.launch {
-                                message = if (TransferRepository.checkConnection()) Utils.t("Connected", "连接正常") else Utils.t("Phone unavailable. Make sure the receiver service is running on the phone.", "手机未连接，请确认手机接收服务正在运行")
+                                message = if (TransferRepository.checkConnection()) Utils.t("Connected", "连接正常") else TransferRepository.connection.value.message
                                 busy = false
                             }
                         }, enabled = !busy) { Text(Utils.t("Reconnect now", "立即重连")) }
@@ -89,19 +139,17 @@ fun PhoneScreen() {
                         OutlinedTextField(host, { host = it }, label = { Text(Utils.t("Phone address (IP or IP:port)", "手机地址（IP 或 IP:端口）")) }, singleLine = true, modifier = Modifier.weight(1f))
                         OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text(Utils.t("Six-digit pairing code", "六位配对码")) }, singleLine = true, modifier = Modifier.weight(1f))
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
                             busy = true
                             scope.launch {
-                                val result = TransferRepository.pair(host, code)
-                                message = result.fold({ Utils.t("Paired successfully. You will not need to enter the code again.", "配对成功，以后无需再次输入六位码") }, { Utils.t("Pairing failed. Check the address and pairing code.", "配对失败，请检查地址和配对码") })
-                                if (result.isSuccess) {
-                                    code = ""
-                                    PhoneSoundRelay.onForeground()
-                                }
-                                busy = false
+                                try {
+                                    val result = TransferRepository.inspectPairing(host)
+                                    result.onSuccess { pendingIdentity = it; identityConfirmed = false }
+                                        .onFailure { message = phoneSecurityMessage(phoneFailure(it).error) }
+                                } finally { busy = false }
                             }
-                        }, enabled = !busy && host.isNotBlank() && code.length == 6) { Text(Utils.t("Pair", "配对")) }
+                        }, enabled = !busy && host.isNotBlank() && code.length == 6) { Text(Utils.t("Verify and pair", "核对并配对")) }
                         OutlinedButton(onClick = {
                             busy = true
                             scope.launch {
@@ -120,12 +168,13 @@ fun PhoneScreen() {
                     }
                 }
                 if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.primary)
+                else if (connection.securityError != null) Text(phoneSecurityMessage(connection.securityError!!), color = MaterialTheme.colorScheme.error)
             }
         }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(Utils.t("Phone sound relay", "手机音效中继"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
                     mountedUsb = UsbExportVolumeResolver.mountedTargets(com.dante.zeekrcapabilitylab.ZeekrApp.appContext)
                     PhoneSoundRelay.onStorageChanged()
@@ -145,8 +194,8 @@ fun PhoneScreen() {
         }
         Text(
             Utils.t(
-                "Phone offers are downloaded with pairing authentication, validated locally, then installed only into /Lock Status Tones/ and /解闭锁音效/. No recording directory is writable here.",
-                "手机任务会经过配对认证下载和本机校验，只写入 /Lock Status Tones/ 与 /解闭锁音效/；此功能不会写入任何录像目录。",
+                "Sounds sent from the phone are checked and saved to the vehicle USB. Select the new sound in the vehicle settings after transfer.",
+                "手机发来的音效会经过校验并保存到车机 USB，传输完成后请到原车设置选择新音效。",
             ),
             style = MaterialTheme.typography.bodySmall,
         )
@@ -165,7 +214,7 @@ fun PhoneScreen() {
                     )
                     if (task.state == SoundOfferStates.WAITING_FOR_USB_SELECTION) {
                         Text(Utils.t("Choose USB", "选择 USB"), fontWeight = FontWeight.SemiBold)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             mountedUsb.forEach { usb ->
                                 OutlinedButton(onClick = { PhoneSoundRelay.selectUsb(task.offer.offerId, usb.storageUuid) }) {
                                     Text("${usb.description} · ${usb.storageUuid}")
@@ -176,7 +225,7 @@ fun PhoneScreen() {
                     task.directories.forEach { directory ->
                         Text("/${directory.directoryName}/ · ${if (directory.finalVerified) "SHA ✓" else directory.error ?: "pending"}", style = MaterialTheme.typography.bodySmall)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (task.state == SoundOfferStates.FAILED_RECOVERABLE || task.state == SoundOfferStates.WAITING_FOR_USB) {
                             OutlinedButton(onClick = { PhoneSoundRelay.retry(task.offer.offerId) }) { Text(Utils.t("Retry", "重试")) }
                         }
@@ -205,7 +254,7 @@ fun PhoneScreen() {
                     if (task.totalChunks > 0 && task.state !in TransferRepository.TERMINAL) {
                         LinearProgressIndicator(progress = { task.uploadedChunks.toFloat() / task.totalChunks }, modifier = Modifier.fillMaxWidth())
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (task.state !in TransferRepository.TERMINAL && task.state != TransferTaskState.CANCEL_PENDING) {
                             OutlinedButton(onClick = { TransferRepository.cancel(task.id) }) { Text(Utils.t("Cancel transfer", "取消传输")) }
                         }
@@ -216,7 +265,7 @@ fun PhoneScreen() {
                 }
             }
         }
-        Text(Utils.t("Security: Transfers use pairing-authenticated, unencrypted HTTP. Only use a trusted phone hotspot or private local network. The service continues while either app is in the background, and interrupted transfers can resume.", "安全说明：传输采用带配对认证的明文 HTTP，只应在可信手机热点或私人局域网使用。手机或车机进入后台时服务会继续运行；网络中断后可续传。"), style = MaterialTheme.typography.bodySmall)
+        Text(Utils.t("Phone transfers use encrypted connections tied to the phone identity you confirmed. Update both apps and complete secure pairing once; interrupted transfers can resume.", "手机传输通过加密连接进行，并绑定您确认的手机身份。请更新两端应用并完成一次安全配对；中断后可续传。"), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -239,8 +288,8 @@ private fun soundStateLabel(state: String, message: String?): String = when (sta
     SoundOfferStates.WAITING_FOR_USB_SELECTION -> Utils.t("Multiple USB drives found; choose one", "发现多个 USB，请选择一个")
     SoundOfferStates.INSTALLING -> Utils.t("Installing to both sound folders", "正在写入中英文双目录")
     SoundOfferStates.COMPLETED -> Utils.t(
-        "Installed and verified in both folders. Open Vehicle settings and select the new custom lock/unlock sound. If it is missing, leave and reopen that page or restart the display.",
-        "中英文双目录写入并校验完成。请打开车辆设置并选择新的自定义解闭锁音效；如果暂未显示，请退出后重新进入该页面或重启车机屏幕。",
+        "Saved to USB. Select it in vehicle settings; the sound list may refresh after leaving and returning, or reconnecting USB once file operations finish.",
+        "已保存到 USB，请到原车设置选择；列表可能需要离车再回车，或等文件操作结束后重新连接 USB 才刷新。",
     )
     SoundOfferStates.CANCELLED -> Utils.t("Cancelled", "已取消")
     else -> Utils.t("{0}: {1}", "{0}：{1}", state, message.orEmpty())

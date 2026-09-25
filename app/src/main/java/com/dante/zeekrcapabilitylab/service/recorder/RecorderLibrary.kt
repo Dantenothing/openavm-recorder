@@ -299,14 +299,18 @@ object RecorderLibrary {
 
 /** In-process playback pin, serialized with storage selection and deletion. */
 object PlaybackPinRegistry {
-    private val paths = mutableSetOf<String>()
+    // Playback and browser downloads may hold independent leases on the same file.
+    private val paths = mutableMapOf<String, Int>()
 
     fun acquire(file: File) = synchronized(RecorderStorageLock.lock) {
-        paths += stablePath(file)
+        val path = stablePath(file)
+        paths[path] = (paths[path] ?: 0) + 1
     }
 
     fun release(file: File) = synchronized(RecorderStorageLock.lock) {
-        paths -= stablePath(file)
+        val path = stablePath(file)
+        val remaining = (paths[path] ?: 0) - 1
+        if (remaining > 0) paths[path] = remaining else paths.remove(path)
     }
 
     fun isPinned(file: File): Boolean = isPinned(file.absolutePath)

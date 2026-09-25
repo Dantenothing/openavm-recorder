@@ -56,7 +56,7 @@ object ReliableUploadStore {
         cleanupOrphans()
     }
 
-    fun create(request: V2CreateRequest, authenticatedCarId: String): V2CreateResponse? {
+    fun create(request: V2CreateRequest, authenticatedCarId: String, authorize: (() -> Unit) -> Boolean = { it(); true }): V2CreateResponse? {
         if (request.carId != authenticatedCarId || !ProtocolValidation.validIdentity(request.carId)) return null
         if (!ProtocolValidation.validIdentity(request.clientTransferId)) return null
         val name = ProtocolValidation.cleanFileName(request.fileName) ?: return null
@@ -82,7 +82,7 @@ object ReliableUploadStore {
             chunkSize = TransferProtocol.CHUNK_SIZE,
             totalChunks = total,
         )
-        writeMetadata(uploadDir(id).apply { mkdirs() }, stored)
+        if (!authorize { writeMetadata(uploadDir(id).apply { mkdirs() }, stored) }) return null
         return V2CreateResponse(id, stored.chunkSize, stored.totalChunks)
     }
 
@@ -105,7 +105,7 @@ object ReliableUploadStore {
         session.request.clientTransferId.startsWith("legacy-")
     }
 
-    fun storeChunk(uploadId: String, carId: String, index: Int, bytes: ByteArray): Boolean =
+    fun storeChunk(uploadId: String, carId: String, index: Int, bytes: ByteArray, authorize: (() -> Unit) -> Boolean = { it(); true }): Boolean =
         synchronized(lock(uploadId)) {
             val session = load(uploadId) ?: return false
             if (session.request.carId != carId || session.status != "UPLOADING") return false
@@ -123,8 +123,10 @@ object ReliableUploadStore {
                 out.write(bytes)
                 out.fd.sync()
             }
-            moveReplacing(partial, final)
-            writeMetadata(dir, session.copy(updatedAt = System.currentTimeMillis()))
+            if (!authorize {
+                moveReplacing(partial, final)
+                writeMetadata(dir, session.copy(updatedAt = System.currentTimeMillis()))
+            }) { partial.delete(); return false }
             true
         }
 
@@ -133,6 +135,7 @@ object ReliableUploadStore {
         carId: String,
         requestedSha: String,
         requestedName: String,
+        authorize: (() -> Unit) -> Boolean = { it(); true },
     ): ReliableCommitResult = synchronized(lock(uploadId)) {
         var session = load(uploadId) ?: return ReliableCommitResult.Rejected(404, "unknown upload")
         if (session.request.carId != carId) return ReliableCommitResult.Rejected(403, "forbidden")
@@ -162,7 +165,7 @@ object ReliableUploadStore {
                 updatedAt = System.currentTimeMillis(),
                 completedFileName = uniqueTarget(cleanName).name,
             )
-            writeMetadata(uploadDir(uploadId), session)
+            if (!authorize { writeMetadata(uploadDir(uploadId), session) }) return ReliableCommitResult.Rejected(401, "unauthorized")
         }
         val targetName = session.completedFileName
             ?: return ReliableCommitResult.Rejected(500, "commit target missing")
@@ -184,35 +187,39 @@ object ReliableUploadStore {
                     partial.delete()
                     return ReliableCommitResult.Rejected(409, "hash mismatch")
                 }
-                session.request.sidecarJson?.let { sidecar ->
-                    val sidecarTarget = File(target.parentFile, target.nameWithoutExtension + ".json")
-                    val sidecarTmp = File(sidecarTarget.absolutePath + ".partial")
-                    sidecarTmp.writeText(sidecar)
-                    moveReplacing(sidecarTmp, sidecarTarget)
-                }
-                moveWithoutReplace(partial, target)
+                if (!authorize {
+                    session.request.sidecarJson?.let { sidecar ->
+                        val sidecarTarget = File(target.parentFile, target.nameWithoutExtension + ".json")
+                        val sidecarTmp = File(sidecarTarget.absolutePath + ".partial")
+                        sidecarTmp.writeText(sidecar)
+                        moveReplacing(sidecarTmp, sidecarTarget)
+                    }
+                    moveWithoutReplace(partial, target)
+                }) { partial.delete(); return ReliableCommitResult.Rejected(401, "unauthorized") }
             }
             if (target.length() != session.request.sizeBytes || sha256(target) != sha) {
                 return ReliableCommitResult.Rejected(500, "reserved target verification failed")
             }
-            writeMetadata(
-                uploadDir(uploadId),
-                session.copy(
-                    status = "COMPLETED",
-                    updatedAt = System.currentTimeMillis(),
-                    completedFileName = target.name,
-                ),
-            )
-            cleanupCompletedChunks(uploadDir(uploadId))
+            if (!authorize {
+                writeMetadata(
+                    uploadDir(uploadId),
+                    session.copy(
+                        status = "COMPLETED",
+                        updatedAt = System.currentTimeMillis(),
+                        completedFileName = target.name,
+                    ),
+                )
+                cleanupCompletedChunks(uploadDir(uploadId))
+            }) return ReliableCommitResult.Rejected(401, "unauthorized")
             ReliableCommitResult.Success(V2CompleteResponse(uploadId, true, sha, target.name))
         } catch (t: Throwable) {
             partial.delete()
-            ReliableCommitResult.Rejected(500, t.message ?: "commit failed")
+            ReliableCommitResult.Rejected(500, "commit failed")
         }
     }
 
     /** Returns false when ownership differs or the final commit already won the race. */
-    fun cancel(uploadId: String, carId: String): Boolean = synchronized(lock(uploadId)) {
+    fun cancel(uploadId: String, carId: String, authorize: (() -> Unit) -> Boolean = { it(); true }): Boolean = synchronized(lock(uploadId)) {
         val session = load(uploadId) ?: return true
         if (session.request.carId != carId || session.status == "COMPLETED") return false
         if (session.status == "COMMITTING") {
@@ -222,20 +229,22 @@ object ReliableUploadStore {
                 target.length() == session.request.sizeBytes &&
                 sha256(target) == session.request.sha256
             ) {
-                writeMetadata(
-                    uploadDir(uploadId),
-                    session.copy(status = "COMPLETED", updatedAt = System.currentTimeMillis()),
-                )
-                cleanupCompletedChunks(uploadDir(uploadId))
+                authorize {
+                    writeMetadata(
+                        uploadDir(uploadId),
+                        session.copy(status = "COMPLETED", updatedAt = System.currentTimeMillis()),
+                    )
+                    cleanupCompletedChunks(uploadDir(uploadId))
+                }
                 return false
             }
-            target?.let {
+            if (!authorize { target?.let {
                 File(it.absolutePath + ".partial").delete()
                 File(it.parentFile, it.nameWithoutExtension + ".json.partial").delete()
                 File(it.parentFile, it.nameWithoutExtension + ".json").delete()
-            }
+            } }) return false
         }
-        uploadDir(uploadId).deleteRecursively()
+        if (!authorize { uploadDir(uploadId).deleteRecursively() }) return false
         true
     }
 

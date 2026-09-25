@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+**/build/
+dist/*.apk
+local.properties
+*.jks
+*.keystore
+*secrets*.json
+*credentials*.json
+config/private/
+!app/src/androidTest/assets/synthetic-unified.mp4
+!app/src/androidTest/assets/synthetic-continuous.mp4
+__pycache__/

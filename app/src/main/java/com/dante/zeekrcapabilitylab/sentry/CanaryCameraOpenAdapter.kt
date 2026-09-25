@@ -17,6 +17,11 @@ object CanaryCameraOpenAdapter {
     fun open(manager: CameraManager, id: String, callback: CameraDevice.StateCallback, destination: Handler?) {
         val token = Any()
         check(CanaryCameraInterlock.beginNormalOpen(token, id)) { "CAMERA_RELEASE_PENDING" }
+        openReserved(manager, id, token, callback, destination)
+    }
+    @SuppressLint("MissingPermission")
+    fun openReserved(manager: CameraManager, id: String, token: Any, callback: CameraDevice.StateCallback, destination: Handler?) {
+        check(CanaryCameraInterlock.ownsNormalReservation(token, id)) { "CAMERA_RESERVATION_MISSING" }
         val target = destination ?: Handler(Looper.getMainLooper())
         val proxy = object : CameraDevice.StateCallback() {
             private fun dispatch(camera: CameraDevice, action: () -> Unit) {

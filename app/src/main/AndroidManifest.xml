@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -11,6 +12,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -43,6 +45,10 @@
             android:name=".service.CameraRecordingService"
             android:exported="false"
             android:foregroundServiceType="camera" />
+        <service android:name=".mirror.StandaloneMirrorService" android:exported="false" android:foregroundServiceType="camera" />
+        <service android:name=".mirror.FloatingMirrorService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled floating rear-view controls; no camera or encoder owned by this service. A user-selected Logo entry can remain across screen-off without a wake lock. A stable unlocked screen may restore preview or recording only under a user-selected return setting confirmed for this installation; otherwise an explicit tap is required." />
+        </service>
 
         <activity android:name=".sound.VehicleSoundEditorActivity"
             android:exported="false" android:launchMode="singleTask"

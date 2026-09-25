@@ -14,14 +14,25 @@ import com.dante.zeekrbridge.ui.PhoneLanguage
 class BridgeApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        PhoneLanguage.init(this)
-        ServerLog.init(this)
-        PairingManager.init(this)
-        ReceivedStore.init(this)
-        SavedMediaStore.init(this)
+        OpenAvmRuntime.initialize(this)
+    }
+}
+
+/** Reused by the standalone companion and the unified phone host. Does not start a receiver. */
+object OpenAvmRuntime {
+    @Volatile private var initialized = false
+    @Synchronized fun initialize(context: android.content.Context) {
+        if (initialized) return
+        val app = context.applicationContext
+        PhoneLanguage.init(app)
+        ServerLog.init(app)
+        PairingManager.init(app)
+        ReceivedStore.init(app)
+        SavedMediaStore.init(app)
         ReceivedSentryRegistrar.reconcile(ReceivedStore.files.value)
-        TrashStore.init(this)
-        LocalMediaMaintenance.schedule(this)
-        OutboundOfferStore.init(this)
+        TrashStore.init(app)
+        LocalMediaMaintenance.schedule(app)
+        OutboundOfferStore.init(app)
+        initialized = true
     }
 }

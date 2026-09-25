@@ -9,22 +9,28 @@ import io.github.dantenothing.avmtransfer.protocol.TransferProtocol
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 data class HttpResult(val code: Int, val body: String)
 
 object TransferHttp {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val client = OkHttpClient.Builder().connectTimeout(8, TimeUnit.SECONDS).readTimeout(90, TimeUnit.SECONDS).writeTimeout(90, TimeUnit.SECONDS).build()
     private val active = ConcurrentHashMap<String, Call>()
 
     fun cancel(taskId: String) { active[taskId]?.cancel() }
+
+    fun health(taskId: String, endpoint: PhoneEndpoint): io.github.dantenothing.avmtransfer.protocol.HealthResponse {
+        val response = execute(taskId, endpoint, "/health", "GET", null)
+        check(response.code in 200..299) { "Phone capability check failed (${response.code})" }
+        return json.decodeFromString(io.github.dantenothing.avmtransfer.protocol.HealthResponse.serializer(), response.body).also {
+            if (it.phoneDeviceId != endpoint.phoneId || it.service != TransferProtocol.SERVICE) {
+                throw PhoneSecurityException(PhoneSecurityError.PHONE_IDENTITY_CHANGED)
+            }
+        }
+    }
 
     fun create(taskId: String, endpoint: PhoneEndpoint, request: UploadCreateRequest): UploadCreateResponse {
         val payload = json.encodeToString(UploadCreateRequest.serializer(), request)
@@ -56,13 +62,13 @@ object TransferHttp {
     fun delete(taskId: String, endpoint: PhoneEndpoint, uploadId: String): HttpResult = execute(taskId, endpoint, "/api/uploads/$uploadId", "DELETE", null)
 
     private fun execute(taskId: String, endpoint: PhoneEndpoint, path: String, method: String, body: okhttp3.RequestBody?): HttpResult {
-        val request = Request.Builder().url("http://${endpoint.host}:${endpoint.port}$path")
-            .header(TransferProtocol.HTTP_HEADER, TransferProtocol.HTTP_HEADER_VALUE)
-            .header("Authorization", "Bearer ${endpoint.token}").method(method, body).build()
-        val call = client.newCall(request)
+        val transport = PhoneConnectionStore.transportFor(endpoint)
+        val call = transport.newCall(path, method, body, authenticated = path != "/health")
         active[taskId] = call
         return try {
-            call.execute().use { HttpResult(it.code, it.body?.string().orEmpty()) }
+            call.execute().use { HttpResult(it.code, it.limitedText()) }
+        } catch (t: Exception) {
+            throw PhoneConnectionStore.reportFailure(transport.endpoint, t, transport)
         } finally { active.remove(taskId, call) }
     }
 

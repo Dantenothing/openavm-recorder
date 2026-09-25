@@ -6,6 +6,38 @@ import org.junit.Test
 
 class VehicleHomePolicyTest {
 
+    @Test fun recentAuthenticatedHttpActivityIsVisibleWithoutAWebSocket() {
+        val result = VehicleHomePolicy.resolve(
+            listOf(PairedVehicleSummary("car", "Recorder", 95000)), false, true, emptyList(),
+            receiverStartedAtEpochMs = 90000, nowEpochMs = 100000,
+        )
+        assertEquals(VehicleConnectionStatus.RECENT, result.status)
+    }
+
+    @Test fun oldOrFutureActivityDoesNotClaimAConnection() {
+        for (seen in listOf(0L, 999L, 100001L)) {
+            val result = VehicleHomePolicy.resolve(
+                listOf(PairedVehicleSummary("car", "Recorder", seen)), false, true, emptyList(),
+                receiverStartedAtEpochMs = 1000, nowEpochMs = 100000,
+            )
+            assertEquals(VehicleConnectionStatus.OFFLINE, result.status)
+        }
+        val expired = VehicleHomePolicy.resolve(
+            listOf(PairedVehicleSummary("car", "Recorder", 2000)), false, true, emptyList(),
+            receiverStartedAtEpochMs = 1000, nowEpochMs = 100000,
+        )
+        assertEquals(VehicleConnectionStatus.OFFLINE, expired.status)
+    }
+
+    @Test fun stoppedReceiverCannotKeepAStaleOnlineFlag() {
+        val result = VehicleHomePolicy.resolve(
+            listOf(PairedVehicleSummary("car", "Recorder", 95000)), true, false, emptyList(),
+            receiverStartedAtEpochMs = 90000, nowEpochMs = 100000,
+        )
+        assertEquals(VehicleConnectionStatus.OFFLINE, result.status)
+        assertEquals(false, result.receiverReady)
+    }
+
     @Test
     fun noPairedVehicleIsUnpairedEvenWhenReceiverServiceRuns() {
         val result = VehicleHomePolicy.resolve(

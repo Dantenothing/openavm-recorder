@@ -1,0 +1,75 @@
+{
+  "syntheticOnly": true,
+  "source": "Audited official 1.6.6 th.f / oj.h; not yet an account integration test",
+  "appVectors": [
+    {
+      "method": "GET",
+      "url": "https://sea-snc-tsp-api-gw.zeekrlife.com/ms-vehicle-status/api/v1.0/vehicle/status/latest?latest=false&target=new",
+      "headers": {
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-API-SIGNATURE-NONCE": "synthetic-nonce",
+        "X-TIMESTAMP": "1789797600000",
+        "X-API-SIGNATURE-VERSION": "2.0",
+        "X-APP-ID": "ZEEKRCNCH001M0001",
+        "X-PROJECT-ID": "ZEEKR_SEA",
+        "authorization": "synthetic-bearer",
+        "accept-language": "en-AU",
+        "x-device-id": "synthetic-device",
+        "x-platform": "APP",
+        "x-vin": "synthetic-encrypted-vin",
+        "ignored-header": "ignored-value"
+      },
+      "body": null,
+      "signature": "vU585vZU4DRfhzBT4V4Y94rd/kXykCcdRIZdI8Lbthk="
+    },
+    {
+      "method": "POST",
+      "url": "https://sea-snc-tsp-api-gw.zeekrlife.com/ms-user-auth/v1.0/auth/login",
+      "headers": {
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-API-SIGNATURE-NONCE": "synthetic-nonce",
+        "X-TIMESTAMP": "1789797600000",
+        "X-API-SIGNATURE-VERSION": "2.0",
+        "X-APP-ID": "ZEEKRCNCH001M0001",
+        "X-PROJECT-ID": "ZEEKR_SEA",
+        "authorization": "synthetic-bearer",
+        "accept-language": "en-AU",
+        "x-device-id": "synthetic-device",
+        "x-platform": "APP",
+        "x-vin": "synthetic-encrypted-vin",
+        "ignored-header": "ignored-value",
+        "Content-Length": "47"
+      },
+      "body": "{\"z\":\"\u6fb3\u6d32 \ud83d\ude00\",\"a\":{\"z\":true,\"a\":[0,\"\\n\"]}}",
+      "signature": "iY7mUASRFxv45aSSd/Uy0EwbCRLRoJY20URaqdh3/OE="
+    },
+    {
+      "method": "GET",
+      "url": "https://sea-snc-tsp-api-gw.zeekrlife.com/test?b=space%20x&a=%252F&z=*&empty=&a=ignored",
+      "headers": {
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-API-SIGNATURE-NONCE": "synthetic-nonce",
+        "X-TIMESTAMP": "1789797600000",
+        "X-API-SIGNATURE-VERSION": "2.0",
+        "X-APP-ID": "ZEEKRCNCH001M0001",
+        "X-PROJECT-ID": "ZEEKR_SEA",
+        "authorization": "synthetic-bearer",
+        "accept-language": "en-AU",
+        "x-device-id": "synthetic-device",
+        "x-platform": "APP",
+        "x-vin": "synthetic-encrypted-vin",
+        "ignored-header": "ignored-value"
+      },
+      "body": null,
+      "signature": "yk86grKx0ISIA2ep1YlPiEbq08DmDZQq0uTM1RjIi1s="
+    }
+  ],
+  "authBody": "{\"email\":\"synthetic@example.invalid\",\"checkType\":\"1\"}",
+  "authHeaders": {
+    "X-HMAC-ALGORITHM": "hmac-sha256",
+    "X-HMAC-SIGNATURE": "i7hsaroLBSW6HZX4xVzOhSU5aP6oaqwy4N8HSNSyyIQ=",
+    "X-HMAC-ACCESS-KEY": "synthetic-access-for-unit-tests",
+    "X-DATE": "Saturday, 19 Sep 2026 06:00:00 GMT",
+    "X-HMAC-DIGEST": "imu1LenxduIcs/oePMHsZy+SrbeBrluG3g9RmFVTbEg="
+  }
+}

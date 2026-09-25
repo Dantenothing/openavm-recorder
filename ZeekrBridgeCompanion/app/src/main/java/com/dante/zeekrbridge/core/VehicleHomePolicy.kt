@@ -4,6 +4,7 @@ enum class VehicleConnectionStatus {
     UNPAIRED,
     OFFLINE,
     CONNECTED,
+    RECENT,
 }
 
 data class PairedVehicleSummary(
@@ -25,10 +26,15 @@ object VehicleHomePolicy {
         carOnline: Boolean,
         serviceRunning: Boolean,
         endpointCandidates: List<String>,
+        receiverStartedAtEpochMs: Long = 0,
+        nowEpochMs: Long = System.currentTimeMillis(),
     ): VehicleHomeSnapshot {
         val currentVehicle = pairedVehicles.maxByOrNull { it.lastSeenEpochMs }
         val status = when {
-            carOnline -> VehicleConnectionStatus.CONNECTED
+            serviceRunning && carOnline -> VehicleConnectionStatus.CONNECTED
+            serviceRunning && receiverStartedAtEpochMs > 0 && currentVehicle != null &&
+                currentVehicle.lastSeenEpochMs >= receiverStartedAtEpochMs &&
+                nowEpochMs - currentVehicle.lastSeenEpochMs in 0..60_000 -> VehicleConnectionStatus.RECENT
             currentVehicle != null -> VehicleConnectionStatus.OFFLINE
             else -> VehicleConnectionStatus.UNPAIRED
         }

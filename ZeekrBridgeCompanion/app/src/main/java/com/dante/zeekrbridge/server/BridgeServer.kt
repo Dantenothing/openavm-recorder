@@ -37,6 +37,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
@@ -45,6 +46,15 @@ import java.io.FileInputStream
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
+import io.github.dantenothing.avmtransfer.protocol.PhoneSecurityProtocol
+import io.github.dantenothing.avmtransfer.protocol.PhoneSecurityIdentity
+import io.github.dantenothing.avmtransfer.protocol.PhoneSecuritySession
+import io.github.dantenothing.avmtransfer.protocol.SecurePhonePairResponse
+import com.dante.zeekrbridge.core.PairedDevice
+import kotlinx.serialization.json.JsonArray
 
 data class BridgeServerState(
     val running: Boolean = false,
@@ -58,6 +68,10 @@ data class BridgeServerState(
     val lastUpload: String? = null,
     val lastUploadSpeedBps: Long = 0,
     val endpointCandidates: List<LanEndpointCandidate> = emptyList(),
+    val startedAtEpochMs: Long = 0,
+    val startFailure: String? = null,
+    val identityFingerprint: String = "",
+    val tlsPort: Int = PhoneSecurityProtocol.TLS_PORT,
 )
 
 object BridgeServer {
@@ -67,6 +81,11 @@ object BridgeServer {
     val state: StateFlow<BridgeServerState> = _state.asStateFlow()
 
     private var serverSocket: ServerSocket? = null
+    private var tlsSocket: SSLServerSocket? = null
+    private var tlsMaterial: PhoneTlsMaterial? = null
+    private val socketSlots = Semaphore(16)
+    private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val authenticatedSockets = ConcurrentHashMap<Socket, PairedDevice>()
     private var udpSocket: DatagramSocket? = null
     private var acceptThread: Thread? = null
     private var udpThread: Thread? = null
@@ -77,7 +96,7 @@ object BridgeServer {
 
     private val wsConnections = ConcurrentHashMap.newKeySet<WsConnection>()
 
-    fun start(context: Context) {
+    @Synchronized fun start(context: Context) {
         if (_state.value.running) return
         this.context = context.applicationContext
         ReliableUploadStore.init(context.applicationContext)
@@ -85,9 +104,37 @@ object BridgeServer {
         val endpoints = findIpv4Candidates()
         val ip = endpoints.firstOrNull()?.ipv4.orEmpty()
         serverSocket = try {
-            ServerSocket(Protocol.PORT)
+            ServerSocket().apply {
+                reuseAddress = true
+                try { bind(InetSocketAddress(Protocol.PORT)) } catch (e: Exception) { close(); throw e }
+            }
         } catch (t: Throwable) {
             ServerLog.log("TCP_SERVER_START_FAILED ${t.message}")
+            _state.value = _state.value.copy(running = false, startedAtEpochMs = 0,
+                startFailure = "TCP_BIND_FAILED")
+            return
+        }
+        try {
+            val material = PhoneTlsIdentity.load(context.applicationContext)
+            tlsMaterial = material
+            tlsSocket = (material.context.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
+                reuseAddress = true
+                enabledProtocols = supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }.toTypedArray()
+                needClientAuth = false
+                try { bind(InetSocketAddress(PhoneSecurityProtocol.TLS_PORT)) } catch (e: Exception) { close(); throw e }
+            }
+            PairingManager.bindServerIdentity(material.fingerprint)
+            PairingManager.closePairingWindow()
+            PairingManager.onSessionInvalidated = { carId ->
+                authenticatedSockets.entries.filter { it.value.carDeviceId == carId }.forEach { runCatching { it.key.close() } }
+                wsConnections.filter { it.carDeviceId() == carId }.forEach { it.close() }
+            }
+        } catch (_: Exception) {
+            runCatching { serverSocket?.close() }
+            runCatching { tlsSocket?.close() }
+            serverSocket = null; tlsSocket = null; tlsMaterial = null
+            _state.value = _state.value.copy(running = false, startedAtEpochMs = 0, startFailure = "TLS_START_FAILED", identityFingerprint = "")
+            ServerLog.log("TLS_SERVER_START_FAILED")
             return
         }
         udpSocket = try {
@@ -101,20 +148,13 @@ object BridgeServer {
             ip = ip,
             port = Protocol.PORT,
             endpointCandidates = endpoints,
+            startedAtEpochMs = System.currentTimeMillis(),
+            startFailure = null,
+            identityFingerprint = tlsMaterial!!.fingerprint,
         )
-        PairingManager.newPairingCode()
 
-        acceptThread = Thread {
-            val ss = serverSocket
-            while (ss != null && !ss.isClosed) {
-                val socket = try {
-                    ss.accept()
-                } catch (t: Throwable) {
-                    break
-                }
-                Thread { handleSocket(socket) }.apply { isDaemon = true }.start()
-            }
-        }.apply { isDaemon = true; start() }
+        acceptThread = acceptConnections(serverSocket!!, secure = false)
+        acceptConnections(tlsSocket!!, secure = true)
 
         udpThread = Thread {
             val udp = udpSocket
@@ -133,7 +173,7 @@ object BridgeServer {
                                 deviceName = android.os.Build.MODEL,
                                 ip = _state.value.ip,
                             )
-                            json.encodeToString(io.github.dantenothing.avmtransfer.protocol.DiscoveryReply.serializer(), reply)
+                            advertiseSecurity(json.encodeToString(io.github.dantenothing.avmtransfer.protocol.DiscoveryReply.serializer(), reply))
                         } else {
                             val reply = com.dante.zeekrbridge.core.DiscoveryReply(
                                 service = Protocol.SERVICE_NAME,
@@ -141,9 +181,9 @@ object BridgeServer {
                                 deviceName = android.os.Build.MODEL,
                                 ip = _state.value.ip,
                                 port = Protocol.PORT,
-                                pairingId = PairingManager.currentCode(),
+                                pairingId = "",
                             )
-                            json.encodeToString(com.dante.zeekrbridge.core.DiscoveryReply.serializer(), reply)
+                            advertiseSecurity(json.encodeToString(com.dante.zeekrbridge.core.DiscoveryReply.serializer(), reply))
                         }
                         val bytes = replyText.toByteArray(Charsets.UTF_8)
                         udp.send(DatagramPacket(bytes, bytes.size, packet.address, packet.port))
@@ -156,10 +196,10 @@ object BridgeServer {
         }.apply { isDaemon = true; start() }
 
         registerNsd(context)
-        ServerLog.log("SERVER_STARTED ip=$ip port=${Protocol.PORT} code=${PairingManager.currentCode()}")
+        ServerLog.log("SERVER_STARTED ip=$ip port=${Protocol.PORT}")
     }
 
-    fun stop(context: Context) {
+    @Synchronized fun stop(context: Context) {
         try {
             serverSocket?.close()
         } catch (t: Throwable) {
@@ -170,12 +210,19 @@ object BridgeServer {
         } catch (t: Throwable) {
             // Ignore.
         }
+        runCatching { tlsSocket?.close() }
+        tlsSocket = null
+        tlsMaterial = null
+        PairingManager.closePairingWindow()
+        activeSockets.forEach { runCatching { it.close() } }
+        authenticatedSockets.clear()
         serverSocket = null
         udpSocket = null
         wsConnections.forEach { it.close() }
         wsConnections.clear()
         unregisterNsd(context)
-        _state.value = _state.value.copy(running = false, connectedCars = 0)
+        _state.value = _state.value.copy(running = false, connectedCars = 0, startedAtEpochMs = 0, identityFingerprint = "")
+        com.dante.zeekrbridge.core.CarCatalogStore.setOnline(false)
         ServerLog.log("SERVER_STOPPED")
     }
 
@@ -204,9 +251,32 @@ object BridgeServer {
 
     fun connectedCars(): Int = wsConnections.size
 
-    private fun handleSocket(socket: Socket) {
+    private fun advertiseSecurity(body: String): String {
+        val fields = json.parseToJsonElement(body) as JsonObject
+        return JsonObject(fields + mapOf(
+            "securityVersions" to JsonArray(listOf(JsonPrimitive(PhoneSecurityProtocol.VERSION))),
+            "tlsPort" to JsonPrimitive(PhoneSecurityProtocol.TLS_PORT),
+        )).toString()
+    }
+
+    private fun acceptConnections(listener: ServerSocket, secure: Boolean): Thread = Thread {
+        while (!listener.isClosed) {
+            val socket = try { listener.accept() } catch (_: Exception) { break }
+            if (listener.isClosed) { socket.close(); break }
+            if (!socketSlots.tryAcquire()) { socket.close(); continue }
+            activeSockets += socket
+            if (listener.isClosed) { socket.close(); activeSockets.remove(socket); socketSlots.release(); break }
+            Thread {
+                try { handleSocket(socket, secure) }
+                finally { activeSockets.remove(socket); authenticatedSockets.remove(socket); socketSlots.release() }
+            }.apply { isDaemon = true; name = "OpenAVM-request"; start() }
+        }
+    }.apply { isDaemon = true; name = "OpenAVM-listener"; start() }
+
+    private fun handleSocket(socket: Socket, secure: Boolean) {
         try {
             socket.soTimeout = 15_000
+            if (secure) (socket as SSLSocket).startHandshake()
             _state.value = _state.value.copy(
                 requestCount = _state.value.requestCount + 1,
                 lastClientIp = socket.inetAddress?.hostAddress,
@@ -231,8 +301,29 @@ object BridgeServer {
             lines.drop(1).forEach { line ->
                 if (line.isNotBlank()) {
                 val idx = line.indexOf(':')
-                if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
+                if (idx <= 0) throw IllegalArgumentException("Invalid header")
+                val name = line.substring(0, idx).trim().lowercase()
+                if (headers.put(name, line.substring(idx + 1).trim()) != null) throw IllegalArgumentException("Duplicate header")
                 }
+            }
+            val path = target.substringBefore('?')
+            if (!secure && !PhoneTransportPolicy.publicRequest(method, path)) {
+                respond(socket.getOutputStream(), 403, "application/json", """{"error":"SECURE_TRANSPORT_REQUIRED"}""")
+                return
+            }
+            if (headers.containsKey("transfer-encoding") || (headers.containsKey("content-length") && headers["content-length"]?.toLongOrNull() == null)) {
+                respond(socket.getOutputStream(), 400, "application/json", """{"error":"invalid framing"}""")
+                return
+            }
+            val needsAuth = secure && !PhoneTransportPolicy.publicRequest(method, path) && !(method == "POST" && path == "/api/pair")
+            val principal = if (needsAuth) PairingManager.authenticate(headers["authorization"]) else null
+            if (needsAuth && principal == null) {
+                respond(socket.getOutputStream(), 401, "application/json", """{"error":"unauthorized"}""")
+                return
+            }
+            if (principal != null) {
+                authenticatedSockets[socket] = principal
+                if (!PairingManager.isCurrent(principal)) return
             }
             if (target == "/control" && headers["upgrade"]?.equals("websocket", true) == true) {
                 val ws = WsConnection(socket, headers)
@@ -252,6 +343,10 @@ object BridgeServer {
                 respond(socket.getOutputStream(), 413, "application/json", """{"error":"body too large"}""")
                 return
             }
+            if (path == "/api/pair" && (contentLength ?: 0L) > 4096) {
+                respond(socket.getOutputStream(), 413, "application/json", """{"error":"body too large"}""")
+                return
+            }
             val body = if (contentLength != null && contentLength > 0) {
                 if (contentLength > Int.MAX_VALUE) {
                     respond(socket.getOutputStream(), 413, "application/json", """{"error":"body too large"}""")
@@ -265,9 +360,13 @@ object BridgeServer {
             } else {
                 ByteArray(0)
             }
-            handleHttp(socket.getOutputStream(), method, target, headers, body)
+            if (principal != null && !PairingManager.isCurrent(principal)) {
+                respond(socket.getOutputStream(), 401, "application/json", """{"error":"unauthorized"}""")
+                return
+            }
+            handleHttp(socket.getOutputStream(), method, target, headers, body, socket.inetAddress.hostAddress.orEmpty())
         } catch (t: Throwable) {
-            ServerLog.log("SOCKET_ERROR ${t.message}")
+            ServerLog.log("SOCKET_ERROR ${t.javaClass.simpleName}")
         } finally {
             try {
                 socket.close()
@@ -302,25 +401,39 @@ object BridgeServer {
         return HeaderRead.Block(buffer.toByteArray())
     }
 
-    private fun handleHttp(out: OutputStream, method: String, target: String, headers: Map<String, String>, body: ByteArray) {
+    private fun handleHttp(out: OutputStream, method: String, target: String, headers: Map<String, String>, body: ByteArray, source: String) {
         try {
             val path = target.substringBefore('?')
             val auth = headers["authorization"]
             when {
+                method == "GET" && path == PhoneSecurityProtocol.IDENTITY_PATH -> {
+                    val cert = tlsMaterial?.certificate ?: error("Receiver stopped")
+                    val identity = PhoneSecurityIdentity(PhoneSecurityProtocol.VERSION, PairingManager.phoneDeviceId.value,
+                        PhoneSecurityProtocol.TLS_PORT, Base64.getEncoder().encodeToString(cert.encoded))
+                    respond(out, 200, "application/json", json.encodeToString(PhoneSecurityIdentity.serializer(), identity))
+                }
+                method == "GET" && path == PhoneSecurityProtocol.SESSION_PATH -> {
+                    val device = PairingManager.authenticate(auth)
+                    if (device == null) { respond(out, 401, "application/json", """{"error":"unauthorized"}"""); return }
+                    val session = PhoneSecuritySession(TransferProtocol.SERVICE, TransferProtocol.VERSION,
+                        PhoneSecurityProtocol.VERSION, PairingManager.phoneDeviceId.value, device.carDeviceId)
+                    respond(out, 200, "application/json", json.encodeToString(PhoneSecuritySession.serializer(), session))
+                }
                 method == "GET" && path == "/health" -> {
                     if (headers[TransferProtocol.HTTP_HEADER.lowercase()] == TransferProtocol.HTTP_HEADER_VALUE) {
                         val response = io.github.dantenothing.avmtransfer.protocol.HealthResponse(
                             deviceName = android.os.Build.MODEL,
                             phoneDeviceId = PairingManager.phoneDeviceId.value,
+                            recordingRasterLayouts = listOf(io.github.dantenothing.avmtransfer.protocol.StripRepackContract.TRANSFER_CAPABILITY),
                         )
                         respond(
                             out,
                             200,
                             "application/json",
-                            json.encodeToString(io.github.dantenothing.avmtransfer.protocol.HealthResponse.serializer(), response),
+                            advertiseSecurity(json.encodeToString(io.github.dantenothing.avmtransfer.protocol.HealthResponse.serializer(), response)),
                         )
                     } else {
-                        respond(out, 200, "application/json", """{"status":"OK","service":"${Protocol.SERVICE_NAME}"}""")
+                        respond(out, 200, "application/json", advertiseSecurity("""{"status":"OK","service":"${Protocol.SERVICE_NAME}"}"""))
                     }
                 }
                 method == "GET" && path == "/api/outbound" -> {
@@ -333,10 +446,14 @@ object BridgeServer {
                     handleOutboundStatus(out, path, headers, body)
                 }
                 method == "POST" && path == "/api/pair" -> {
-                    val request = json.decodeFromString(com.dante.zeekrbridge.core.PairRequest.serializer(), String(body, Charsets.UTF_8))
-                    val response = PairingManager.pair(request)
-                    if (response == null) respond(out, 401, "application/json", """{"error":"invalid code"}""")
-                    else respond(out, 200, "application/json", json.encodeToString(com.dante.zeekrbridge.core.PairResponse.serializer(), response))
+                    val request = runCatching {
+                        json.decodeFromString(com.dante.zeekrbridge.core.PairRequest.serializer(), String(body, Charsets.UTF_8))
+                    }.getOrElse { com.dante.zeekrbridge.core.PairRequest("", "", "") }
+                    val result = PairingManager.pairSecure(request, source)
+                    val response = result.response
+                    if (response == null) respond(out, result.status, "application/json",
+                        if (result.status == 429) """{"error":"PAIR_RATE_LIMITED"}""" else """{"error":"invalid code"}""")
+                    else respond(out, 200, "application/json", json.encodeToString(SecurePhonePairResponse.serializer(), response))
                 }
                 path == "/api/uploads" && method == "POST" -> {
                     val device = PairingManager.authenticate(auth)
@@ -351,7 +468,7 @@ object BridgeServer {
                     )
                     val request = adapted.request
                     lastChunkAtMs = 0L
-                    val session = ReliableUploadStore.create(request, device.carDeviceId)
+                    val session = ReliableUploadStore.create(request, device.carDeviceId) { PairingManager.withCurrent(device, it) }
                     if (session == null) {
                         respond(out, 400, "application/json", """{"error":"invalid upload"}""")
                         return
@@ -371,8 +488,8 @@ object BridgeServer {
                 else -> respond(out, 404, "text/plain", "not found")
             }
         } catch (t: Throwable) {
-            ServerLog.log("HTTP_ERROR ${t.message}")
-            respond(out, 500, "application/json", """{"error":"${t.message ?: "server error"}"}""")
+            ServerLog.log("HTTP_ERROR ${t.javaClass.simpleName}")
+            respond(out, 400, "application/json", """{"error":"invalid request"}""")
         }
     }
 
@@ -400,7 +517,10 @@ object BridgeServer {
             respond(out, 400, "application/json", """{"error":"invalid status"}""")
             return
         }
-        val offer = OutboundOfferStore.updateStatus(device.carDeviceId, offerId, update)
+        var offer: OutboundOffer? = null
+        if (!PairingManager.withCurrent(device) { offer = OutboundOfferStore.updateStatus(device.carDeviceId, offerId, update) }) {
+            respond(out, 401, "application/json", """{"error":"unauthorized"}"""); return
+        }
         if (offer == null) respond(out, 404, "application/json", """{"error":"unknown offer"}""")
         else respond(out, 200, "application/json", """{"ok":true}""")
     }
@@ -523,7 +643,7 @@ object BridgeServer {
                     respond(out, 400, "application/json", """{"error":"bad chunk index"}""")
                     return
                 }
-                if (!ReliableUploadStore.storeChunk(uploadId, device.carDeviceId, index, body)) {
+                if (!ReliableUploadStore.storeChunk(uploadId, device.carDeviceId, index, body) { PairingManager.withCurrent(device, it) }) {
                     respond(out, 400, "application/json", """{"error":"chunk rejected"}""")
                     return
                 }
@@ -550,6 +670,7 @@ object BridgeServer {
                         device.carDeviceId,
                         request.sha256,
                         request.fileName,
+                        authorize = { PairingManager.withCurrent(device, it) },
                     )
                 ) {
                     is ReliableCommitResult.Rejected -> {
@@ -582,7 +703,7 @@ object BridgeServer {
                 }
             }
             method == "DELETE" && parts.size == 1 -> {
-                val cancelled = ReliableUploadStore.cancel(uploadId, device.carDeviceId)
+                val cancelled = ReliableUploadStore.cancel(uploadId, device.carDeviceId) { PairingManager.withCurrent(device, it) }
                 if (cancelled) {
                     respond(out, 200, "application/json", """{"ok":true}""")
                 } else {
@@ -604,6 +725,7 @@ object BridgeServer {
             409 -> "Conflict"
             410 -> "Gone"
             413 -> "Payload Too Large"
+            429 -> "Too Many Requests"
             500 -> "Internal Server Error"
             else -> "Error"
         }
@@ -698,6 +820,7 @@ class WsConnection(
     private var device: com.dante.zeekrbridge.core.PairedDevice? = null
 
     fun handshake(): Boolean {
+        if (socket !is SSLSocket) return false
         val key = headers["sec-websocket-key"] ?: return false
         // Authenticate the Bearer token BEFORE sending 101: an unauthenticated
         // upgrade is rejected as plain HTTP, never as a live WebSocket.
@@ -735,7 +858,9 @@ class WsConnection(
     fun run() {
         try {
             while (true) {
+                if (device?.let(PairingManager::isCurrent) != true) break
                 val frame = WsCodec.readFrame(socket.getInputStream()) ?: break
+                if (device?.let(PairingManager::isCurrent) != true) break
                 when (frame.opcode) {
                     0x8 -> break
                     0x9 -> writer.write(WsCodec.encodePong(frame.payload))
@@ -760,7 +885,7 @@ class WsConnection(
                                     // Connection liveness is tracked by socket state.
                                 }
                                 com.dante.zeekrbridge.core.WsType.CAR_CONTROL -> {
-                                    ServerLog.log("CAR_CONTROL ${text.take(200)}")
+                                    ServerLog.log("CAR_CONTROL_RECEIVED")
                                 }
                                 com.dante.zeekrbridge.core.WsType.RECORDING_CATALOG ->
                                     com.dante.zeekrbridge.core.CarCatalogStore.onCatalog(envelope.payload)
@@ -778,7 +903,7 @@ class WsConnection(
                 }
             }
         } catch (t: Throwable) {
-            ServerLog.log("WEBSOCKET_ERROR ${t.message}")
+            ServerLog.log("WEBSOCKET_ERROR ${t.javaClass.simpleName}")
         } finally {
             try {
                 writer.write(WsCodec.encodeClose(1000))
@@ -792,6 +917,7 @@ class WsConnection(
     fun carDeviceId(): String? = device?.carDeviceId
 
     fun sendText(text: String) {
+        if (device?.let(PairingManager::isCurrent) != true) { close(); return }
         try {
             writer.write(WsCodec.encodeText(text))
         } catch (t: Throwable) {
