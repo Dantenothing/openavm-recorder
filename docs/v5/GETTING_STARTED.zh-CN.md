@@ -1,5 +1,7 @@
 # OpenAVM V5 安装与使用指南
 
+> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+
 [返回介绍](../../README.zh-CN.md) · [English](GETTING_STARTED.md)
 
 只用车机录像，完成第 1 节即可；只用手机车控，从第 2 节开始；需要传录像，再完成第 3 节。

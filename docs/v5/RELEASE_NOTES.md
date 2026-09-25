@@ -1,4 +1,6 @@
-# OpenAVM V5 - Recorder and Android Companion
+# OpenAVM V5 - Recorder
+
+> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
 
 V5 brings improved recording and floating-mirror controls to the vehicle app, plus an expanded Android companion for recordings, vehicle status and everyday controls. It is available as a **public testing release** for compatible ZEEKR vehicles.
 
@@ -7,10 +9,9 @@ V5 brings improved recording and floating-mirror controls to the vehicle app, pl
 | File | Install on | Version |
 | --- | --- | --- |
 | [OpenAVM-Recorder-5.0.0-arm64-v8a.apk](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) | Vehicle head unit | 5.0.0 / 102 |
-| [OpenAVM-Phone-5.0.0.apk](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Phone-5.0.0.apk) | Android phone | 5.0.0 / 51 |
-| [SHA256SUMS.txt](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/SHA256SUMS.txt) | Checksums for both APKs | |
+| [SHA256SUMS.txt](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/SHA256SUMS.txt) | Checksum for the vehicle APK | |
 
-**Recorder works without a phone.** Add the phone app when you want to receive, play or export recordings. Phone cloud vehicle controls also work independently of Recorder. No private server is required.
+**Recorder works without a phone.** Only the vehicle APK is currently offered for download. The phone features below describe existing V5 installations; they do not indicate that a replacement phone package is available.
 
 [Setup and upgrade guide](https://github.com/Dantenothing/openavm-recorder/blob/main/docs/v5/GETTING_STARTED.md) · [Project overview](https://github.com/Dantenothing/openavm-recorder)
 
@@ -23,7 +24,7 @@ V5 brings improved recording and floating-mirror controls to the vehicle app, pl
 - **Secure phone transfer:** encrypted local connections and pairing that requires comparing the full phone identity fingerprint.
 - **Setup help:** revised tutorials and six interface languages, including English.
 
-## Android companion
+## Android companion — public download paused
 
 - **Recordings:** receive, play, export and share vehicle recordings. V5 improves seeking across legacy video segments and brings recording management into the same app as vehicle controls.
 - **Vehicle status and widgets:** battery, range, cabin temperature, location and data timestamps; 2×2, 4×1, 4×2 and 4×3 widgets with direct actions and progress feedback.
@@ -39,7 +40,7 @@ V5 brings improved recording and floating-mirror controls to the vehicle app, pl
 1. **Install over the existing app; do not uninstall first.** Use the official matching-signature APK. Early standalone-assistant users should follow the setup guide before changing installations.
 2. **Check camera directions while parked.** The first V5 launch applies the right-hand-drive preset once: Front 1, Rear 2, Left 3, Right 4; Cabin 1, Infrared 0. Later manual adjustments are retained.
 3. **Choose your return behaviour again.** Confirm Logo, full preview or the additional automatic-recording option after installing or updating.
-4. **Update both apps and pair again once when moving from V4.** Compare the complete fingerprint on both screens during secure pairing. Use the matching V5 APKs above.
+4. **Recording transfer requires compatible V5 apps on both ends.** The V4 phone APK is not a substitute for the withdrawn V5 phone build. Existing V5 installations should compare the complete fingerprint when pairing.
 5. **Moving to a new phone?** Pause scheduled departures and Sentry automation on the old phone before enabling them on the new one.
 
 ## Compatibility and practical limits
