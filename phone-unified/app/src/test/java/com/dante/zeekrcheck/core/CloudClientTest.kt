@@ -242,7 +242,7 @@ class CloudClientTest {
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
                 .body(body(request).toResponseBody("application/json".toMediaType())).build()
         }.build()
-        return CloudClient(Fixture.config(), ReadOnlyTransport(http), restoredSession = restoredSession, sessionChanged = sessionChanged)
+        return CloudClient(Fixture.config(), Fixture.transport(http), restoredSession = restoredSession, sessionChanged = sessionChanged)
     }
     private fun envelope(request: Request): String = when (request.url.encodedPath) {
         "/overseas-app/region/url" -> """{"success":true,"data":[{"countryCode":"AU","regionCode":"SEA","url":{"userCenterUrl":"${RequestPolicy.USER_BASE}"}}]}"""

@@ -18,6 +18,7 @@ class VehicleApplication : Application(), ViewModelStoreOwner {
     override val viewModelStore = ViewModelStore()
     override fun onCreate() {
         super.onCreate()
+        CloudAccess.initialize(this)
         com.dante.zeekrbridge.ui.PhoneLanguage.limitTo(setOf(
             io.github.dantenothing.openavm.i18n.UiLanguage.ENGLISH,
             io.github.dantenothing.openavm.i18n.UiLanguage.SIMPLIFIED_CHINESE))

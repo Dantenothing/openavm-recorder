@@ -45,11 +45,11 @@ Check the emergency-events library. Protection prevents automatic cleanup, but i
 
 ### Sign in
 
-The V5 phone APK is currently withdrawn. For an existing V5 installation, open **OpenAVM**, then **More → Account & connection**. Sign in with an authorised ZEEKR account and select your vehicle. Guest access requires permission from the owner.
+The public Phone 5.0.0 APK remains withdrawn. The Phone 5.0.1 source candidate uses [optional cloud configuration](CLOUD_SETUP.md): open **Home → Set up cloud** or **More → Account & connection**, import your independently prepared six-field JSON, then sign in with your authorised ZEEKR account and select the correct vehicle. Guest access requires permission from the owner.
 
-Refresh once and check the vehicle and data time. **Success means the correct vehicle is selected and status is readable.** The current Australian connection configuration is included; no protocol JSON is required. The current cloud-control baseline is Australian 7X / AU 1.6.6, not a claim of compatibility with every region.
+No manufacturer connection parameters are bundled or automatically downloaded. Importing a configuration only checks and saves it locally; it does not query or control the car. Refresh after login and check the vehicle and data time. The current cloud-control baseline is Australian 7X / AU 1.6.6, not a claim of compatibility with every region.
 
-The login session is encrypted on this phone and reused. Expired sessions, permission changes or a new phone may require another sign-in. You can skip the ZEEKR account if you only want local recordings.
+The imported configuration and login session are encrypted on this phone and reused. An upgrade from the old format requires one new import and sign-in; cloud automation stays disabled until you enable it again. Recordings and Recorder pairing are retained. You can skip cloud setup entirely to use local recordings.
 
 ### Set home and Sentry rules
 

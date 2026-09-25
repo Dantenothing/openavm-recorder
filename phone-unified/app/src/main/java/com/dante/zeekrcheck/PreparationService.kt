@@ -22,7 +22,7 @@ class PreparationService : Service() {
         val key = intent?.getStringExtra("vehicleKey") ?: run { stopSelf(); return START_NOT_STICKY }
         val prefs = runCatching { ComfortPreferences.parse(Json.parseToJsonElement(intent.getStringExtra("preferences")!!)) }.getOrNull()
             ?: run { stopSelf(); return START_NOT_STICKY }
-        val model = ViewModelProvider(application as VehicleApplication, ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java]
+        val model by lazy { ViewModelProvider(application as VehicleApplication, ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java] }
         val store = AssistantStore.get(this)
         val resume = intent.getBooleanExtra("observeOnly",false)
         val expectedStarted=intent.getLongExtra("started",0)
@@ -36,6 +36,8 @@ class PreparationService : Service() {
         notifyState(if (resume) "正在恢复备车进度" else "正在读取车温并准备")
         worker = scope.launch {
             try {
+                CloudAccess.loaded(this@PreparationService)
+                if (!CloudAccess.accepts(intent)) return@launch
                 val departureAt=intent.getLongExtra("departureAt",0).takeIf { it>0 }
                 if(!resume && !model.prepareFromService(key, prefs,departureAt,intent.getStringExtra("appointmentId"))) return@launch
                 val session = store.state.value.activePreparation ?: return@launch
@@ -80,12 +82,12 @@ class PreparationService : Service() {
         fun start(context: Context, key: String, prefs: ComfortPreferences, departureAt: Long? = null, appointmentId: String? = null) {
             ContextCompat.startForegroundService(context, Intent(context, PreparationService::class.java)
                 .putExtra("vehicleKey", key).putExtra("preferences", prefs.json().toString())
-                .putExtra("departureAt",departureAt ?: 0).putExtra("appointmentId",appointmentId))
+                .putExtra("departureAt",departureAt ?: 0).putExtra("appointmentId",appointmentId).also { CloudAccess.stamp(context, it) })
         }
         fun resume(context:Context,session:PreparationSession) {
             ContextCompat.startForegroundService(context,Intent(context,PreparationService::class.java)
                 .putExtra("vehicleKey",session.vehicleKey).putExtra("preferences",session.preferences.json().toString())
-                .putExtra("observeOnly",true).putExtra("started",session.started))
+                .putExtra("observeOnly",true).putExtra("started",session.started).also { CloudAccess.stamp(context, it) })
         }
     }
 }

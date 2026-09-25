@@ -15,6 +15,7 @@ import android.util.SizeF
 import android.widget.RemoteViews
 import com.dante.zeekrcheck.core.*
 import java.time.Instant
+import kotlinx.coroutines.*
 
 class CompactVehicleWidgetProvider : VehicleWidgetProvider()
 
@@ -39,7 +40,11 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
         if (expected != null && expected != store.state.value.vehicleKey) return
         val widget = intent.getIntExtra("originWidget", 0)
         if (widget != 0 && AppearanceStore.get(context).state.value.widgets[widget]?.vehicleKey != expected) return
-        WidgetRefreshService.request(context, interactive = true)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.Main).launch {
+            try { CloudAccess.loaded(context); if (CloudAccess.accepts(intent)) WidgetRefreshService.request(context, interactive = true) }
+            finally { pending.finish() }
+        }
     }
     companion object {
         val providers = listOf(VehicleWidgetProvider::class.java, CompactVehicleWidgetProvider::class.java, SquareVehicleWidgetProvider::class.java, StripVehicleWidgetProvider::class.java)
@@ -49,7 +54,7 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
         internal fun refreshIntent(context: Context, key: String?, widget: Int) =
             Intent(context, VehicleWidgetProvider::class.java).setAction(REFRESH)
                 .setData(android.net.Uri.parse("openavm://status-refresh/$widget"))
-                .putExtra("vehicleKey", key).putExtra("originWidget", widget)
+                .putExtra("vehicleKey", key).putExtra("originWidget", widget).also { CloudAccess.stamp(context, it) }
         internal fun refreshPending(context: Context, key: String?, widget: Int): PendingIntent =
             PendingIntent.getBroadcast(context, widget, refreshIntent(context, key, widget),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -81,9 +86,10 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
             val overview = OverviewStore.get(context).state.value
             val appearances = AppearanceStore.get(context)
             val binding = runCatching { appearances.binding(id, overview.vehicleKey, overview.nickname) }.getOrNull()
-            val selected = binding?.canControl(overview.vehicleKey) == true
+            val selected = binding?.canControl(overview.vehicleKey) == true && CloudAccess.authorized
             val displayed = if (selected) overview else VehicleOverview(vehicleKey = binding?.vehicleKey,
-                nickname = appearances.state.value.names[binding?.vehicleKey] ?: "未绑定车辆", message = "请在 App 切换到此车辆后操作")
+                nickname = appearances.state.value.names[binding?.vehicleKey] ?: "OpenAVM",
+                message = if (!CloudAccess.authorized) "设置云端连接" else "请在 App 切换到此车辆后操作")
             val provider = manager.getAppWidgetInfo(id)?.provider?.className
             if (provider in setOf(SquareVehicleWidgetProvider::class.java.name, StripVehicleWidgetProvider::class.java.name)) {
                 manager.updateAppWidget(id, SmallVehicleWidget.views(context, displayed, provider == StripVehicleWidgetProvider::class.java.name,
@@ -99,7 +105,7 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
                 if (appearances.appearance(binding?.vehicleKey) == appearance) updateAll(context)
             }
             fun layout(small: Boolean, strip: Boolean = false): RemoteViews = views(context, displayed, small,
-                locationLabel = if (selected) label else "车辆未选中 · 请先切换", strip = strip,
+                locationLabel = if (!CloudAccess.authorized) "设置云端连接" else if (selected) label else "车辆未选中 · 请先切换", strip = strip,
                 widgetId = id, binding = binding, controlsEnabled = selected,
                 preparation=assistant.activePreparation?.takeIf { selected && it.vehicleKey==displayed.vehicleKey },
                 guardPaused=selected && assistant.parkingGuard.manualPaused,
@@ -142,7 +148,9 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
             views.setUiText(R.id.widget_source, overview.temperatureTimeLabel(now))
             views.setUiText(R.id.widget_location, locationLabel ?: "车辆位置待核实 · 点开查看")
             mapOf(R.id.widget_lock to "lock", R.id.widget_guard to "guard", R.id.widget_trunk to "trunk", R.id.widget_port to "port").forEach { (id, action) ->
-                views.setUiText(id, controlLabel(action, overview))
+                val label = if (controlsEnabled) controlLabel(action, overview)
+                    else mapOf("lock" to "车锁", "guard" to "哨兵", "trunk" to "尾门", "port" to "充电口").getValue(action)
+                views.setUiText(id, label)
                 if (!strip) views.setTextViewCompoundDrawables(id, 0, stateIcon(action, overview, now), 0, 0)
                 val observed = overview.readings[CardControl.field(action)]
                 views.setUiDescription(id, "${controlLabel(action, overview)} · 最近上报 · ${observed?.timeLabel(now) ?: "状态未知"} · ${CardControl.target(action, observed?.value)?.title ?: "点按读取状态"}")
@@ -216,6 +224,7 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
             PendingIntent.getForegroundService(context, viewId, CardActionService.intent(context, action, vehicleKey, shown, widgetId)
                 .setData(android.net.Uri.parse("zeekr-widget://$widgetId/$action" + if(action=="prepare") "?intent=${android.net.Uri.encode(shown)}" else "")), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         internal fun openAppIntent(context:Context,widgetId:Int)=Intent(context,MainActivity::class.java)
+            .putExtra("cloudSetup", !CloudAccess.authorized)
             .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             .setData(android.net.Uri.parse("zeekr-widget://$widgetId/open-app"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -253,6 +262,6 @@ open class VehicleWidgetProvider : AppWidgetProvider() {
         }
         fun actionIntent(context: Context, action: String) = Intent(context, WidgetActionActivity::class.java)
             .setAction("com.dante.zeekrcheck.widget.$action").putExtra("widgetAction", action)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK).also { CloudAccess.stamp(context, it) }
     }
 }

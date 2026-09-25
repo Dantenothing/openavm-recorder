@@ -45,7 +45,7 @@ class RecorderGuideUiTest {
                     compose.onNodeWithTag("guide_next").assertIsDisplayed()
                     if(step < 6) compose.onNodeWithTag("guide_next").performClick()
                 }
-                compose.onNodeWithText(if(language == PhoneLanguageMode.ENGLISH) "3 · Compare identity, then pair" else "3 · 先核对指纹，再输入配对码").performScrollTo().assertIsDisplayed()
+                compose.onNodeWithText(if(language == PhoneLanguageMode.ENGLISH) "3 · Enter the code, then verify identity" else "3 · 填写配对码，再核对手机身份").performScrollTo().assertIsDisplayed()
                 compose.onNodeWithTag("guide_recorder").performScrollTo().assertIsDisplayed()
                 compose.runOnIdle { guide=false }
                 compose.onNodeWithTag("recorder_pair_details").performScrollTo().performClick()

@@ -18,6 +18,8 @@ class AwayGuardService : JobService() {
             var confirmAgain = false
             var confirmJourney = false
             try {
+                CloudAccess.loaded(this@AwayGuardService)
+                if (!CloudAccess.accepts(params.extras.getString("cloudActionId"))) return@launch
                 val model = ViewModelProvider(application as VehicleApplication,
                     ViewModelProvider.AndroidViewModelFactory.getInstance(application))[CheckViewModel::class.java]
                 val reason = runCatching { SyncReason.valueOf(params.extras.getString("reason") ?: "PERIODIC") }.getOrDefault(SyncReason.PERIODIC)
@@ -51,6 +53,7 @@ class AwayGuardService : JobService() {
                 .any { manager.getAppWidgetIds(ComponentName(context, it)).isNotEmpty() }
         }
         fun needed(context: Context): Boolean {
+            if (!CloudAccess.authorized) return false
             val state = AssistantStore.get(context).state.value
             return SyncPolicy.needsPeriodic(OverviewStore.get(context).state.value.vehicleKey != null,
                 hasWidgets(context), state.widgetSyncEnabled, (state.guardEnabled || state.homeGuardEnabled) && !state.paused && state.home?.verified == true)
@@ -63,6 +66,7 @@ class AwayGuardService : JobService() {
             if (!needed(context)) { manager.cancel(PERIODIC_JOB); manager.cancel(EVENT_JOB); manager.cancel(HOME_CONFIRM_JOB); manager.cancel(JOURNEY_CONFIRM_JOB); return }
             if (manager.getPendingJob(PERIODIC_JOB) != null) return
             manager.schedule(JobInfo.Builder(PERIODIC_JOB, ComponentName(context, AwayGuardService::class.java))
+                .setExtras(PersistableBundle().apply { putString("cloudActionId", CloudAccess.actionId()) })
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(SyncPolicy.PERIOD_MS).setPersisted(true).build())
         }
         fun trigger(context: Context, reason: SyncReason) {
@@ -71,21 +75,23 @@ class AwayGuardService : JobService() {
             if (manager.getPendingJob(EVENT_JOB) != null) return
             manager.schedule(JobInfo.Builder(EVENT_JOB, ComponentName(context, AwayGuardService::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setMinimumLatency(0)
-                .setExtras(PersistableBundle().apply { putString("reason", reason.name) }).build())
+                .setExtras(PersistableBundle().apply { putString("reason", reason.name); putString("cloudActionId", CloudAccess.actionId()) }).build())
         }
         private fun scheduleHomeConfirmation(context: Context) {
+            if (!CloudAccess.authorized) return
             val manager = context.getSystemService(JobScheduler::class.java)
             if (manager.getPendingJob(HOME_CONFIRM_JOB) != null || !AssistantStore.get(context).claimHomeFollowUp()) return
             manager.schedule(JobInfo.Builder(HOME_CONFIRM_JOB, ComponentName(context, AwayGuardService::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setMinimumLatency(HomeSentryGuard.FOLLOW_UP_DELAY_MS)
-                .setExtras(PersistableBundle().apply { putString("reason", "HOME_CONFIRM") }).build())
+                .setExtras(PersistableBundle().apply { putString("reason", "HOME_CONFIRM"); putString("cloudActionId", CloudAccess.actionId()) }).build())
         }
         private fun scheduleJourneyConfirmation(context: Context) {
+            if (!CloudAccess.authorized) return
             val manager = context.getSystemService(JobScheduler::class.java)
             if (manager.getPendingJob(JOURNEY_CONFIRM_JOB) != null || !AssistantStore.get(context).claimJourneyFollowUp()) return
             manager.schedule(JobInfo.Builder(JOURNEY_CONFIRM_JOB, ComponentName(context, AwayGuardService::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setMinimumLatency(ParkingJourney.FOLLOW_UP_DELAY_MS)
-                .setExtras(PersistableBundle().apply { putString("reason", SyncReason.JOURNEY_CONFIRM.name) }).build())
+                .setExtras(PersistableBundle().apply { putString("reason", SyncReason.JOURNEY_CONFIRM.name); putString("cloudActionId", CloudAccess.actionId()) }).build())
         }
     }
 }

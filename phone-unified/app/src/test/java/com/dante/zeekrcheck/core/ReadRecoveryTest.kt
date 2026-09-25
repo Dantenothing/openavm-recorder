@@ -19,7 +19,7 @@ class ReadRecoveryTest {
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(statusCode).message("OK")
                 .body(body(chain.request()).toResponseBody("application/json".toMediaType())).build()
         }.build()
-        return CloudClient(Fixture.config(),ReadOnlyTransport(client),restoredSession=SavedSession("synthetic-user","synthetic-access",
+        return CloudClient(Fixture.config(),Fixture.transport(client),restoredSession=SavedSession("synthetic-user","synthetic-access",
             "d294932f-f97e-4b6d-a63c-41bfa80d83ca",Fixture.config().fingerprint()))
     }
     private val vehicle=Vehicle("L6T00000000000001",emptyList())

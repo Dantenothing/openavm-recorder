@@ -52,7 +52,7 @@ import com.dante.zeekrbridge.ui.PhoneLanguageMode
 }
 
 internal object BeginnerGuide {
-    const val VERSION = 4
+    const val VERSION = 5
     const val STEPS = 7
     fun preferences(context: Context) = context.getSharedPreferences("openavm_beginner", Context.MODE_PRIVATE)
     fun complete(context: Context) = preferences(context).edit().putInt("completed", VERSION).apply()
@@ -85,13 +85,16 @@ internal object BeginnerGuide {
             AssistantCard { when (step) {
             0 -> {
                 UiText("看车况、提前备车、停车守护，把每天用车的几件事放在一起。")
-                UiText("先连接极氪账号。想接收车机录像，再配对 OpenAVM Recorder。两个连接可以分开设置。")
+                UiText("先用影像，云端连接可稍后设置")
+                UiText("未配置不影响车机配对、录像传输、播放和导出。")
+                Button(onClick = { onNavigate("connection") }, modifier = Modifier.fillMaxWidth()) { UiText("连接车机录像（可选）") }
                 UiText("不必一次完成。进度会自动保存，随时在「更多 → 新手指南」继续。", color = AssistantMuted)
                 FeatureRow("语言 / Language", "简体中文 / English") { onNavigate("language") }
             }
             1 -> {
                 UiText(if (connected) "已经可以读取车况，直接下一步即可。" else "登录极氪账号 → 选择车辆。guest 账号需要主账号已授予车辆权限。")
-                UiText("已内置澳洲版本的连接适配，直接登录即可，无需准备配置文件。")
+                UiText("使用云端车况和控制前，请导入你自行准备且有权使用的连接配置，再登录自己的极氪账号。OpenAVM 不内置或下载厂商连接参数。")
+                UiText("未配置不影响车机配对、录像传输、播放和导出。")
                 UiText("登录加密保存在这台手机；换手机时需要重新登录，不会随安装包带过来。", color = AssistantMuted)
                 Button(onClick = { onNavigate("account") }, modifier = Modifier.fillMaxWidth()) { UiText(if (connected) "查看连接" else "去连接车辆") }
             }

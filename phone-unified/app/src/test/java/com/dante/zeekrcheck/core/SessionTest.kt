@@ -25,7 +25,7 @@ class SessionTest {
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("synthetic")
                 .body(body.toResponseBody("application/json".toMediaType())).build()
         }.build()
-        return CloudClient(Fixture.config(), ReadOnlyTransport(http), restoredSession = session, sessionChanged = changed,
+        return CloudClient(Fixture.config(), Fixture.transport(http), restoredSession = session, sessionChanged = changed,
             persistentSession = shared, persistenceEpoch = shared?.current())
     }
     private fun exchangeResponse(request: Request): Pair<Int, String> = 200 to when (request.url.encodedPath) {

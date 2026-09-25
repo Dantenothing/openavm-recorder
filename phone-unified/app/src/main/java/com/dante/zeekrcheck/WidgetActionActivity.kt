@@ -1,6 +1,7 @@
 package com.dante.zeekrcheck
 
 import android.os.Bundle
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -31,15 +32,16 @@ class WidgetActionActivity : ComponentActivity() {
         setContent {
             val model = assistantModel()
             val account by model.state.collectAsStateWithLifecycle()
+            val access by CloudAccess.state.collectAsStateWithLifecycle()
             val store = remember { OverviewStore.get(this) }; val overview by store.state.collectAsStateWithLifecycle()
             val appearances by AppearanceStore.get(this).state.collectAsStateWithLifecycle()
-            val targetMatches = widgetId == 0 || (expectedKey != null && overview.vehicleKey == expectedKey && appearances.widgets[widgetId]?.vehicleKey == expectedKey)
+            val targetMatches = CloudAccess.accepts(intent) && (widgetId == 0 || (expectedKey != null && overview.vehicleKey == expectedKey && appearances.widgets[widgetId]?.vehicleKey == expectedKey))
             val assistant by model.assistant.state.collectAsStateWithLifecycle()
             var preferences by remember { mutableStateOf(action == "temperature") }
             var initialActionConsumed by rememberSaveable { mutableStateOf(savedInstanceState != null || !intent.getBooleanExtra("executeOnOpen", true)) }
             AssistantSessionEffects(model)
-            LaunchedEffect(account.connected, account.busy, targetMatches) {
-                if (!targetMatches) initialActionConsumed = true
+            LaunchedEffect(account.connected, account.busy, targetMatches, access) {
+                if (!targetMatches && !access.checking) initialActionConsumed = true
                 if (targetMatches && !initialActionConsumed && account.connected && !account.busy && System.currentTimeMillis() - entered < 10_000) {
                     initialActionConsumed = true
                     if (action == "find") model.bodyAction(BodyAction.HORN)
@@ -51,11 +53,12 @@ class WidgetActionActivity : ComponentActivity() {
                     UiText(mapOf("prepare" to "本次备车", "find" to "找车鸣笛", "lock" to "车辆门锁", "guard" to "原厂哨兵", "trunk" to "尾门", "port" to "充电口",
                         "windows" to "车窗", "climate" to "车内舒适", "temperature" to "备车偏好", "temperature_update" to "更新车温", "location" to "车辆位置")[action] ?: "车辆操作", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                     if (!account.connected) {
-                        UiText(if (account.busy) account.stage else "车辆未连接，请恢复保存的登录。", fontSize = 13.sp)
+                        UiText(if (account.busy) account.stage else if (!account.configReady) "极氪云端尚未配置" else "车辆未连接，请恢复保存的登录。", fontSize = 13.sp)
                         if (account.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                         else if (account.sessionSaved) Button(onClick = model::reconnect) { UiText("恢复登录") }
+                        else Button(onClick = { startActivity(Intent(this@WidgetActionActivity, MainActivity::class.java).putExtra("cloudSetup", true)); finish() }) { UiText("设置云端连接") }
                     }
-                    if (!targetMatches) UiText("这张卡片绑定的是另一辆车，请先在 App 选择对应车辆。未发送任何操作。")
+                    if (!targetMatches) UiText("此操作已过期或车辆未连接；未发送操作，请回到最新卡片重试。")
                     else when (action) {
                         "prepare" -> PreparationPanel(model) { preferences = true }
                         "climate" -> ComfortControlPanel(model)

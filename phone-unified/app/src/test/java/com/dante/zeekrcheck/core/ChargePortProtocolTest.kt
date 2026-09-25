@@ -37,7 +37,7 @@ class ChargePortProtocolTest {
                 .body("""{"success":true,"data":$data}""".toResponseBody("application/json".toMediaType())).build()
         }.build()
         val config=Fixture.config()
-        val client=CloudClient(config,ReadOnlyTransport(http),clock=Clock.fixed(now,ZoneOffset.UTC),
+        val client=CloudClient(config,Fixture.transport(http),clock=Clock.fixed(now,ZoneOffset.UTC),
             restoredSession=SavedSession("synthetic-user","synthetic-access","d294932f-f97e-4b6d-a63c-41bfa80d83ca",config.fingerprint()))
         val vehicle=Vehicle("L6T00000000000001",emptyList())
         val shown=if(initiallyOpen) "打开" else "关闭"

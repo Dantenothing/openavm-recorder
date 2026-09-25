@@ -2026,6 +2026,8 @@ OpenAVM · 车辆刷新	OpenAVM · Vehicle refresh
 避免两台手机重复执行	Avoid duplicate actions from two phones
 配对车机录像	Pair Recorder
 配置与登录会加密保存在这台手机	Configuration and sign-in are encrypted on this phone
+澳洲原厂 App 1.6.6 · guest 共享账号	Australian protocol 1.6.6 · Authorised guest accounts
+连接配置和登录状态加密保存在本机，重开 App 自动恢复。密码不会保存，服务端让会话失效时仍可能需要重新登录。	Your configuration and session are encrypted on this phone and restored when you reopen the app. Your password is not saved. Sign in again if your session expires.
 配置需与你使用的版本匹配	Configuration must match your version
 重新设置偏好	Set your preferences again
 重新连接与旧手机设置	Reconnecting and old phone settings
@@ -2134,3 +2136,85 @@ OpenAVM · 更新车温	OpenAVM · Temperature update
 5 分钟内已读取车温时，不会重复开启空调。	A/C is not restarted if temperature was read in the last 5 minutes.
 分钟内已读取车温时	When temperature was read in the last few minutes
 不会重复开启空调	A/C will not be restarted
+极氪云端	Zeekr cloud
+极氪云端（可选）	Zeekr cloud · Optional setup
+请重新导入连接配置并登录	Import your configuration and sign in again
+录像和车机配对已保留	Recordings and Recorder pairing are kept
+云端自动化已暂停	Cloud automation is paused
+导入自己的连接配置并登录后	After importing your configuration and signing in
+可使用车况	Vehicle status becomes available
+备车和车辆控制	Preconditioning and vehicle controls
+设置云端连接	Set up cloud
+先用影像	Start with recordings
+云端连接可稍后设置	Set up cloud later
+请打开	Open
+极氪云端尚未配置	Zeekr cloud is not configured
+本机连接配置无法读取	The saved configuration could not be read
+请重新导入	Please import it again
+兼容性尚未验证	Compatibility has not been verified
+请登录继续	Sign in to continue
+未发送车辆操作	No vehicle command was sent
+配置未能保存	Configuration could not be saved
+影像功能仍可使用	Recordings are still available
+正在退出云端连接	Disconnecting cloud access
+已退出云端连接并暂停自动化	Signed out of cloud; automation is paused
+云端连接已暂停	Cloud access is paused
+清理未完成	Cleanup is incomplete
+请重启应用后重试	Restart the app and try again
+云端尚未配置	Cloud is not configured
+云端设置已暂停	Cloud setup is paused
+先前车辆操作的结果未核实	The previous vehicle action has not been verified
+重新登录后请确认并启用	Review and enable after signing in again
+云端连接变更	Cloud connection changed
+云端规则已暂停	Cloud rules are paused
+请在登录后重新开启	Enable them again after signing in
+配置内容过长	Configuration is too large
+请精简文件后重试	Use a smaller configuration file
+请选择不超过	Choose a file no larger than
+配置文件	Configuration file
+配置必须是包含六个文本字段的	Configuration must contain exactly six string fields in a
+对象	Object
+配置含有额外字段	Configuration contains unexpected fields
+请选择六字段连接配置	Choose a six-field connection configuration
+不要使用账号导出文件	Do not use an account export
+配置含有重复字段	Configuration contains duplicate fields
+配置必须包含全部六个字段	Configuration must include all six fields
+云端尚未连接	Cloud is not connected
+预约已暂停	Schedules are paused
+已导入	Imported
+尚未配置	Not configured
+使用云端车况和控制前	Before using cloud status and controls
+请导入你自行准备且有权使用的连接配置	Import a configuration you have prepared and are entitled to use
+再登录自己的极氪账号	Then sign in with your own Zeekr account
+不内置或下载厂商连接参数	Does not include or download manufacturer connection parameters
+未配置不影响车机配对	Recorder pairing works without cloud setup
+录像传输	Video transfer
+播放和导出	Playback and export
+更换连接配置	Replace configuration
+导入连接配置	Import configuration
+收起说明	Hide details
+配置文件说明	About configuration files
+选择不超过	Choose a file no larger than
+只接受六个文本字段	Only six string fields are accepted
+不要导入账号令牌或账号导出文件	Do not import account tokens or account exports
+格式通过不代表来源或兼容性已验证	A valid file format does not verify its source or compatibility
+移除云端配置并退出登录	Remove cloud configuration and sign out
+此操作已过期或车辆未连接	This action has expired or the vehicle is not connected
+请回到最新卡片重试	Try again from the updated widget
+稍后设置	Set up later
+稍后设置，返回 OpenAVM	Set up later · Back to OpenAVM
+使用云端车况和控制前，请导入你自行准备且有权使用的连接配置，再登录自己的极氪账号。OpenAVM 不内置或下载厂商连接参数。	To use vehicle status and cloud controls, import a configuration you have prepared and are entitled to use, then sign in with your own Zeekr account. OpenAVM does not include or download manufacturer connection parameters.
+未配置不影响车机配对、录像传输、播放和导出。	Recorder pairing, video transfer, playback and export work without cloud setup.
+请重新导入连接配置并登录；录像和车机配对已保留，云端自动化已暂停。	Import your configuration and sign in again. Your recordings and Recorder pairing are kept. Cloud automation is paused until you enable it again.
+导入自己的连接配置并登录后，可使用车况、备车和车辆控制。	Import your configuration and sign in to use vehicle status, preconditioning and cloud controls.
+先用影像，云端连接可稍后设置	Start with recordings. Cloud setup can wait.
+选择不超过 64 KB 的 JSON 文件，只接受六个文本字段；不要导入账号令牌或账号导出文件。格式通过不代表来源或兼容性已验证。	Choose a JSON file up to 64 KB with exactly six string fields. Do not import account tokens or account exports. A valid format does not verify the source or compatibility.
+配置已加密保存在本机。兼容性尚未验证，请登录继续；未发送车辆操作。	Configuration saved securely on this phone. Compatibility has not been verified. Sign in to continue. No vehicle command was sent.
+请选择不超过 64 KB 的 UTF-8 配置文件	Choose a UTF-8 configuration file up to 64 KB.
+配置必须是包含六个文本字段的 JSON 对象	Configuration must be a JSON object containing exactly six string fields.
+本机连接配置无法读取，请重新导入	The saved configuration could not be read. Please import it again.
+请打开 App 设置云端连接；未发送操作	Open the app to set up cloud access. No action was sent.
+云端设置已暂停；先前车辆操作的结果未核实	Cloud access is paused. The previous vehicle action has not been verified.
+配置未能保存，请重新导入；影像功能仍可使用。	Configuration could not be saved. Import it again; recordings are still available.
+已退出云端连接并暂停自动化；录像和车机配对已保留。	Signed out of cloud and paused automation. Recordings and Recorder pairing are kept.
+此操作已过期或车辆未连接；未发送操作，请回到最新卡片重试。	This action has expired or the vehicle is disconnected. No action was sent. Try again from the updated widget.

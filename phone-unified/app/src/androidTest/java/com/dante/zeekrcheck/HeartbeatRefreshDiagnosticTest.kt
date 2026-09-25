@@ -57,6 +57,7 @@ class HeartbeatRefreshDiagnosticTest {
     @Test fun compareIdleReadsWithBoundedOnlinePresence() = runBlocking {
         assumeTrue(InstrumentationRegistry.getArguments().getString("liveOnlinePresence") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        CloudAccess.loaded(context)
         val config = ProtocolConfig.parse(SecureConfigStore(context).load() ?: error("Configuration unavailable"))
         val saved = SecureSessionStore(context).load() ?: error("Saved session unavailable")
         check(saved.matches(config))
@@ -109,7 +110,7 @@ class HeartbeatRefreshDiagnosticTest {
                 chain.proceed(request)
             }.build()
         // No persistence callback and no allowed credential exchange; this probe cannot replace login.
-        val client = CloudClient(config, ReadOnlyTransport(http), restoredSession = saved)
+        val client = CloudClient(config, ReadOnlyTransport(http, CloudAccess.permit()), restoredSession = saved)
         suspend fun heartbeat(type: Int): Boolean {
             val at = System.currentTimeMillis()
             val body = buildJsonObject {

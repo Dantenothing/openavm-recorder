@@ -63,7 +63,8 @@ class MainActivity : ComponentActivity() {
         acceptNavigation(intent)
     }
     private fun acceptNavigation(intent: android.content.Intent) {
-        openAvmDestination = intent.getStringExtra(com.dante.zeekrbridge.OpenAvmHost.DESTINATION)?.takeIf { it in setOf("media","connection") }
+        openAvmDestination = if (intent.getBooleanExtra("cloudSetup", false)) "cloud" else
+            intent.getStringExtra(com.dante.zeekrbridge.OpenAvmHost.DESTINATION)?.takeIf { it in setOf("media","connection") }
         ++navigationRequest
     }
 }
@@ -119,7 +120,7 @@ fun CheckApp(model: CheckViewModel = viewModel(), setupOnly: Boolean = false) {
                             require(bytes.size() + count <= 65_536)
                             bytes.write(buffer, 0, count)
                         }
-                        bytes.toString("UTF-8")
+                        ProtocolFile.utf8(bytes.toByteArray())
                     } ?: error("unreadable")
                 }
                 password = ""; email = ""
@@ -155,7 +156,7 @@ fun CheckApp(model: CheckViewModel = viewModel(), setupOnly: Boolean = false) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     UiText(if (setupOnly) "OPENAVM" else "OPENAVM / DIAGNOSTICS", color = Forest, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    UiText(if (setupOnly) "连接你的车辆" else "本车能力检查", fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 5.dp))
+                    UiText(if (setupOnly) "极氪云端（可选）" else "本车能力检查", fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 5.dp))
                     UiText("澳洲原厂 App 1.6.6 · guest 共享账号", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 5.dp))
                     UiText("手机直连极氪云端 · 不需要私人服务器", style = MaterialTheme.typography.bodySmall, color = Forest, modifier = Modifier.padding(top = 5.dp))
                 }
@@ -169,26 +170,28 @@ fun CheckApp(model: CheckViewModel = viewModel(), setupOnly: Boolean = false) {
                     Panel {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             UiText("01  连接准备", fontWeight = FontWeight.Bold)
-                            BadgeText(if (state.configReady) "已就绪" else if (state.busy) "准备中" else "需要检查", if (state.configReady) Forest else Amber)
+                            BadgeText(if (state.configReady) "已导入" else if (state.busy) "准备中" else "尚未配置", Forest)
                         }
-                        UiText("已内置澳洲版本的连接适配，直接登录即可，无需准备配置文件。", style = MaterialTheme.typography.bodySmall)
+                        UiText("使用云端车况和控制前，请导入你自行准备且有权使用的连接配置，再登录自己的极氪账号。OpenAVM 不内置或下载厂商连接参数。", style = MaterialTheme.typography.bodySmall)
+                        UiText("未配置不影响车机配对、录像传输、播放和导出。", style = MaterialTheme.typography.bodySmall)
                         UiText("连接配置和登录状态加密保存在本机，重开 App 自动恢复。密码不会保存，服务端让会话失效时仍可能需要重新登录。", style = MaterialTheme.typography.bodySmall)
+                        Button(onClick = { import.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
+                            enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("import_config")) { UiText(if (state.configReady) "更换连接配置" else "导入连接配置") }
                         if (debugUsb && !setupOnly) UiText("USB 测试版会在本应用私有目录保存已脱敏的连接进度和报告，供电脑核对；不包含登录凭据、VIN 或精确位置。", style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { details = !details }, modifier = Modifier.testTag("config_help")) {
-                            UiText(if (details) "收起高级设置" else "高级连接设置")
+                            UiText(if (details) "收起说明" else "配置文件说明")
                         }
                         if (details) {
-                            UiText("通常无需更换连接配置。只有在排查兼容问题时，才使用手动导入或恢复默认。", style = MaterialTheme.typography.bodySmall)
+                            UiText("选择不超过 64 KB 的 JSON 文件，只接受六个文本字段；不要导入账号令牌或账号导出文件。格式通过不代表来源或兼容性已验证。", style = MaterialTheme.typography.bodySmall)
+                            UiText(ProtocolFile.fields.joinToString("\n"), raw = true, style = MaterialTheme.typography.bodySmall)
                             UiText("当前接入适配澳洲原厂 App 1.6.6。配置需与你使用的版本匹配，车辆权限以你的账号实际授权为准。", style = MaterialTheme.typography.bodySmall)
                             UiText("连接车辆需要网络。家的位置、蓝牙触发和后台自动化会在使用对应功能时申请权限。文件由系统选择器授权。", style = MaterialTheme.typography.bodySmall)
-                            OutlinedButton(onClick = { import.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
-                                enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("import_config")) { UiText("手动导入连接配置") }
                             TextButton(onClick = { password = ""; email = ""; model.forgetConfig() }, enabled = !state.busy,
-                                modifier = Modifier.testTag("forget_config")) { UiText("恢复默认配置并退出登录") }
+                                modifier = Modifier.testTag("forget_config")) { UiText("移除云端配置并退出登录") }
                         }
                     }
                 }
-                item {
+                if (state.configReady) item {
                     Panel {
                         UiText("02  账号与车辆", fontWeight = FontWeight.Bold)
                         if (state.sessionSaved) BadgeText("保持登录 · 本机加密", Forest)

@@ -21,7 +21,7 @@ internal object SmallVehicleWidget {
         val progress = PreparationProgress.message(preparation, overview.message, now.toEpochMilli())
         val source = overview.readings["cabin_temperature"]
         val message = when {
-            !controlsEnabled -> "请在 App 选择绑定车辆"
+            !controlsEnabled -> overview.message ?: "请在 App 选择绑定车辆"
             overview.refreshing(now) -> overview.refreshMessage()
             overview.refreshingAt != null -> "读取未完成 · 点刷新重试"
             progress != null -> progress

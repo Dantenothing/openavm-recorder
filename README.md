@@ -4,7 +4,7 @@
 
 **Surround-camera recording and a floating live mirror for compatible ZEEKR head units, with an optional Android companion.**
 
-OpenAVM is an independent, unofficial project for compatible ZEEKR vehicles. Use Recorder on its own to record, review clips and keep a floating camera view on screen. Add the Android phone app to receive and manage recordings. The phone app also offers vehicle status, preconditioning, factory Sentry automation and widgets for currently supported cloud accounts.
+OpenAVM is an independent, unofficial project for compatible ZEEKR vehicles. Use Recorder on its own to record, review clips and keep a floating camera view on screen. Add the Android phone app to receive and manage recordings. The phone source candidate also offers optional vehicle status, preconditioning, factory Sentry automation and widgets after [importing a user-supplied configuration](docs/v5/CLOUD_SETUP.md) and signing in with a supported, authorised cloud account.
 
 [Downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.0) · [Setup guide](docs/v5/GETTING_STARTED.md) · [Report an issue](https://github.com/Dantenothing/openavm-recorder/issues)
 
