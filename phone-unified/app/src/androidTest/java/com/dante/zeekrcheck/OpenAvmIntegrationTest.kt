@@ -18,6 +18,8 @@ import com.dante.zeekrbridge.OpenAvmHost
 import com.dante.zeekrbridge.core.*
 import com.dante.zeekrbridge.server.BridgeServer
 import com.dante.zeekrbridge.service.BridgeService
+import com.dante.zeekrbridge.ui.PhoneLanguage
+import com.dante.zeekrbridge.ui.PhoneLanguageMode
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import io.github.dantenothing.avmtransfer.protocol.HealthResponse
@@ -26,6 +28,8 @@ import org.junit.Assert.*
 import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -37,19 +41,29 @@ class OpenAvmIntegrationTest {
     @get:Rule val compose = createComposeRule()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
+    private var originalLanguage = PhoneLanguageMode.SYSTEM
+    @Before fun useKnownFixtureLanguage() {
+        check(context.packageName.endsWith(".freshqa"))
+        OpenAvmIntegration.initialize(context)
+        originalLanguage = PhoneLanguage.mode
+        instrumentation.runOnMainSync { PhoneLanguage.selectMode(PhoneLanguageMode.SIMPLIFIED_CHINESE) }
+    }
+    @After fun restoreLanguage() { instrumentation.runOnMainSync { PhoneLanguage.selectMode(originalLanguage) } }
 
     @Test fun notificationsAndManifestUseOneHostAndKeepServicesPrivate() {
         val media = OpenAvmHost.openIntent(context, "media")
         val connection = OpenAvmHost.openIntent(context, "connection")
-        assertEquals(ComponentName(context, MainActivity::class.java), media.component)
+        val pm = context.packageManager
+        val host = pm.getActivityInfo(requireNotNull(media.component), 0)
+        assertEquals(MainActivity::class.java.name, host.targetActivity ?: host.name)
         assertEquals(media.component, connection.component)
         assertFalse("PendingIntent routes must stay distinct", media.filterEquals(connection))
         assertEquals("media", media.getStringExtra(OpenAvmHost.DESTINATION))
-        val pm = context.packageManager
         val launchers = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             .setPackage(context.packageName), 0)
         assertEquals(1, launchers.size)
-        assertEquals(MainActivity::class.java.name, launchers.single().activityInfo.name)
+        val launcher = launchers.single().activityInfo
+        assertEquals(MainActivity::class.java.name, launcher.targetActivity ?: launcher.name)
         for (name in listOf("com.dante.zeekrbridge.service.BridgeService", "com.dante.zeekrbridge.service.MediaExportService")) {
             assertFalse(pm.getServiceInfo(ComponentName(context, name), 0).exported)
         }
@@ -67,7 +81,8 @@ class OpenAvmIntegrationTest {
         }
         assertEquals(authority, FileProvider.getUriForFile(context, authority, File(context.cacheDir, "sound-export/synthetic.wav")).authority)
         for (privateFile in listOf(File(context.filesDir,"pairing.json"), File(context.filesDir,"diagnostic-state.json"),
-            File(context.noBackupFilesDir,"session.sealed"), File(context.noBackupFilesDir,"protocol.sealed"))) {
+            File(context.noBackupFilesDir,"session.sealed"), File(context.noBackupFilesDir,"protocol.sealed"),
+            File(context.noBackupFilesDir,"connection-profile.sealed"))) {
             try {
                 FileProvider.getUriForFile(context, authority, privateFile)
                 fail("Private records must not be shareable")

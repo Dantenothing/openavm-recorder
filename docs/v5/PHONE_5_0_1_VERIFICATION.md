@@ -1,6 +1,6 @@
-# Phone 5.0.1 candidate verification
+# Phone 5.0.1 verification
 
-Date: 2026-09-26. Local candidate only; no GitHub release or asset was changed by this work.
+Date: 2026-09-26. Verification record for the Phone 5.0.1 public testing release. The exact APK checked below is unchanged from the locally verified candidate.
 
 ## Artifact
 
@@ -31,6 +31,7 @@ The empty template is intentionally nonfunctional. Format validation does not es
 
 - Phone release unit tests: **335 passed**, 0 failed or skipped.
 - Companion release unit tests: **236 passed**, 0 failed or skipped.
+- Shared transfer-protocol unit tests before publication: **42 passed**, 0 failed or skipped. All three suites were rerun for this publication check: **613 tests passed**.
 - Release build and Android lint completed successfully. Lint reports **0 errors and 95 warnings**; this is not a warning-free release. Warnings include dependency updates, layouts, existing context retention and the LAN cleartext base configuration. Cloud hosts remain HTTPS-only under both network policy and the request allowlist. The departure receiver warning concerns action validation delegated to its helper; the receiver is not exported.
 - **13 distinct Android emulator checks passed**, including the legacy seeding phase. Tests used an offline emulator and generated synthetic account/configuration data, never a real cloud login or vehicle operation.
 
@@ -47,8 +48,16 @@ Android coverage:
 
 The upgrade check also passed on the final candidate after another process start. Pairing JSON is compared by content because local media initialization normally rewrites whitespace and field order. This test uses a synthetic media marker, not an end-to-end video transfer or playback session.
 
-## Remaining owner trial
+## Recorder compatibility before publication
 
-The owner should test their independently prepared configuration and authorised account on the intended phone: import, sign in, select the vehicle, and deliberately re-enable desired rules. Ordinary cloud login/control and real Recorder transfer were not repeated against the actual vehicle in this change.
+The production Recorder transport sources `PhoneSecurity.kt` and `VerifiedPhoneTransport.kt` were compared with the Android interop-test snapshots: both are byte-identical. Recorder transfer code, shared protocol code and the Companion media implementation have no changes from the published `v5.0.0` tag.
 
-Do not re-publish the withdrawn Phone 5.0.0. Review this candidate and its user-facing setup instructions before publishing Phone 5.0.1. Keep the vehicle Recorder release and the public project in place.
+The exact signed, non-debuggable Phone APK listed above was installed on an Android emulator and passed the V5 transport interop test without cloud configuration or login. This covered full-fingerprint verification, TLS pairing, session validation, authenticated WebSocket messaging, a real synthetic MP4 upload, receiver restart and resumed upload, SHA-256 equality, media-library indexing and rejection after revoking the pairing. The cloud request trace remained empty.
+
+The isolated Android QA build also passed **17 media/security checks**: the interop flow, 11 receiver security tests and 5 app/media integration tests. These include discovery without exposing a pairing code, encrypted sessions, certificate mismatch rejection, transfer ownership and hashes, revoke/re-pair, receiver-port conflicts and restart, private file-sharing boundaries, a single launcher and video playback in the actual embedded player. The same transport check additionally passed against the final release APK, rather than only the QA variant.
+
+## Physical-device trial and publication scope
+
+These checks ran in an emulator; the owner's physical vehicle and phone were not connected. Actual camera behaviour, the vehicle's Wi-Fi/hotspot environment and optional Zeekr cloud login/control were not re-tested against the vehicle in this change. Users enabling cloud controls must import their independently prepared configuration, sign in, select the correct vehicle and deliberately enable the rules they want.
+
+The owner authorised publication after checking the OpenAVM connection path. Publish Phone 5.0.1 and retain the unchanged Recorder 5.0.0. The withdrawn Phone 5.0.0 must not be re-uploaded. The public release notes distinguish cloud setup from local recording features and state the emulator verification scope.

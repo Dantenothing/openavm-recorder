@@ -1,6 +1,6 @@
 # OpenAVM V5
 
-> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+> **手机版已恢复下载：5.0.1。** 车机配对、录像传输和播放不需要极氪账号或云端配置。可选车控功能需自行导入配置后登录；旧的内置参数手机包 5.0.0 不再提供。
 
 **车机负责录像，手机负责日常用车；需要时，把录像带到手机。**
 
@@ -8,7 +8,7 @@ OpenAVM 是面向兼容极氪车辆的独立、非官方应用。车机版提供
 
 [English](README.md) · [下载与更新](https://github.com/Dantenothing/openavm-recorder/releases) · [安装与使用指南](docs/v5/GETTING_STARTED.zh-CN.md) · [反馈问题](https://github.com/Dantenothing/openavm-recorder/issues)
 
-**V5 下载：**[车机安装包](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [更新说明](docs/v5/RELEASE_NOTES.md)
+**V5 下载：**[车机 5.0.0](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.1/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [手机 5.0.1](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.1/OpenAVM-Phone-5.0.1.apk) · [更新说明](docs/v5/RELEASE_NOTES.md)
 
 ## 我应该装哪个？
 
@@ -55,7 +55,7 @@ OpenAVM 是面向兼容极氪车辆的独立、非官方应用。车机版提供
 | 车辆账号 | 需要已有车辆授权；guest 共享账号的功能以主账号授予的权限为限 |
 | 界面语言 | 车机：英语、简体中文、繁体中文、泰语、越南语、阿拉伯语；手机：简体中文、英语 |
 
-5.0.1 手机候选版不内置或自动下载厂商连接参数。云端功能需要用户自行导入配置，本地影像无需配置即可使用。登录后选择车辆，再按需要设置家的位置、备车偏好、桌面卡片和自动化。
+5.0.1 手机版不内置或自动下载厂商连接参数。云端功能需要用户自行导入配置，本地影像无需配置即可使用。登录后选择车辆，再按需要设置家的位置、备车偏好、桌面卡片和自动化。覆盖升级会保留录像与车机配对；旧版云端配置与登录需重新设置，自动化需主动重新开启。车机已是 5.0.0 的用户只更新手机即可。
 
 两端使用配套 V5 版本传输录像。首次安全配对需要核对完整指纹；从旧 V4 连接迁移时重新配对一次。已收到的录像可以离线播放。
 

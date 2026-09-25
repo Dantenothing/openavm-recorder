@@ -1,11 +1,19 @@
 package com.dante.zeekrcapabilitylab.transfer
 
 import androidx.test.platform.app.InstrumentationRegistry
+import android.os.Build
 import com.dante.zeekrcheck.OpenAvmIntegration
+import com.dante.zeekrcheck.CloudAccess
+import com.dante.zeekrcheck.core.NetworkTrace
 import com.dante.zeekrbridge.core.PairingManager
+import com.dante.zeekrbridge.core.ReceivedStore
+import com.dante.zeekrbridge.core.MediaIndexStore
 import com.dante.zeekrbridge.server.BridgeServer
 import io.github.dantenothing.avmtransfer.protocol.*
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -20,13 +28,17 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** Runs a hashed snapshot of RC2's real transport, not a substitute permissive TLS client. */
+/** Snapshot is byte-identical to V5 Recorder's production transport. No cloud configuration/account. */
 class CarPhoneSecurityInteropTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val json = Json { ignoreUnknownKeys = true }
 
-    @Test fun rc2TransportPairsTransfersAndReconnectsToTheActualAndroidReceiver() {
-        check(context.packageName.endsWith(".freshqa"))
+    @Test fun v5TransportPairsTransfersAndReconnectsToTheActualAndroidReceiverWithoutCloudSetup() {
+        val releaseEmulator = context.packageName == "com.dante.zeekrbridge" && Build.HARDWARE in setOf("ranchu", "goldfish") &&
+            InstrumentationRegistry.getArguments().getString("allowReleaseEmulator") == "true"
+        check(context.packageName.endsWith(".freshqa") || releaseEmulator)
+        runBlocking { CloudAccess.loaded(context) }
+        assertFalse(CloudAccess.ready || CloudAccess.authorized)
         OpenAvmIntegration.initialize(context)
         val car = "interop-${UUID.randomUUID()}"
         var uploadId: String? = null
@@ -42,7 +54,7 @@ class CarPhoneSecurityInteropTest {
             var endpoint = PhoneEndpoint("127.0.0.1", 8766, "", "Phone fixture", identity.phoneDeviceId, 2, identity.tlsPort, pin, 1)
             PairingManager.newPairingCode()
             VerifiedPhoneTransport(endpoint) { true }.use { pairing ->
-                val body = json.encodeToString(PairRequest.serializer(), PairRequest(PairingManager.currentCode(), "RC2 fixture", car))
+                val body = json.encodeToString(PairRequest.serializer(), PairRequest(PairingManager.currentCode(), "V5 fixture", car))
                 val response = pairing.newCall("/api/pair", "POST", body.toRequestBody("application/json".toMediaType()), authenticated = false)
                     .execute().use { assertEquals(200, it.code); json.decodeFromString(SecurePhonePairResponse.serializer(), it.body!!.string()) }
                 assertEquals(2, response.securityVersion)
@@ -66,7 +78,7 @@ class CarPhoneSecurityInteropTest {
                     BridgeServer.sendToCars("HEARTBEAT", emptyMap())
                     assertTrue(message.await(5, TimeUnit.SECONDS))
                 } finally { ws.cancel() }
-                val bytes = "synthetic interop media bytes".toByteArray()
+                val bytes = InstrumentationRegistry.getInstrumentation().context.assets.open("synthetic-unified.mp4").use { it.readBytes() }
                 val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
                 val create = UploadCreateRequest(UUID.randomUUID().toString(), name, "video/mp4", bytes.size.toLong(), sha, car)
                 uploadId = transport.newCall("/api/uploads", "POST", json.encodeToString(UploadCreateRequest.serializer(), create)
@@ -83,13 +95,21 @@ class CarPhoneSecurityInteropTest {
                 transport.newCall("/api/uploads/$uploadId/complete", "POST", complete.toRequestBody("application/json".toMediaType())).execute().use {
                     assertEquals(200, it.code); assertTrue(json.decodeFromString(UploadCompleteResponse.serializer(), it.body!!.string()).ok)
                 }
+                val received = File(ReceivedStore.receivedDir(), name)
+                assertTrue(received.isFile)
+                assertEquals(sha, ReceivedStore.sha256(received))
+                runBlocking { MediaIndexStore.refresh(ReceivedStore.files.value, force = true) }
+                assertTrue(MediaIndexStore.snapshot.value.sessions.any { session -> session.segments.any { it.fileName == name } })
                 PairingManager.revoke(car)
-                try { transport.verifySession(car); fail("Revoked authorization must fail in the real RC2 client") }
+                try { transport.verifySession(car); fail("Revoked authorization must fail in the real V5 client") }
                 catch (e: PhoneSecurityException) { assertEquals(PhoneSecurityError.AUTH_REVOKED, e.error) }
             }
+            assertFalse(CloudAccess.ready || CloudAccess.authorized)
+            assertTrue(Json.parseToJsonElement(NetworkTrace.export()).jsonObject.getValue("events").jsonArray.isEmpty())
         } finally {
             BridgeServer.stop(context); PairingManager.revoke(car)
             File(context.filesDir, "received/$name").delete()
+            ReceivedStore.refresh()
             uploadId?.let { id ->
                 require(id.matches(Regex("[a-f0-9-]{36}")))
                 val root = File(context.filesDir, "uploads").canonicalFile

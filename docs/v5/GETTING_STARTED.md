@@ -1,8 +1,8 @@
 # OpenAVM V5 setup guide
 
-> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+Use **Recorder 5.0.0** on the head unit and **Phone 5.0.1** on Android. Phone downloads have resumed with user-supplied cloud configuration; local Recorder pairing, transfer and playback need no ZEEKR account or configuration file.
 
-[Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.0)
+[Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1)
 
 For vehicle recording, start at section 1. For phone vehicle controls, start at section 2. Add section 3 only when you want to transfer recordings.
 
@@ -45,7 +45,7 @@ Check the emergency-events library. Protection prevents automatic cleanup, but i
 
 ### Sign in
 
-The public Phone 5.0.0 APK remains withdrawn. The Phone 5.0.1 source candidate uses [optional cloud configuration](CLOUD_SETUP.md): open **Home → Set up cloud** or **More → Account & connection**, import your independently prepared six-field JSON, then sign in with your authorised ZEEKR account and select the correct vehicle. Guest access requires permission from the owner.
+Phone 5.0.1 uses [optional cloud configuration](CLOUD_SETUP.md): open **Home → Set up cloud** or **More → Account & connection**, import your independently prepared six-field JSON, then sign in with your authorised ZEEKR account and select the correct vehicle. Guest access requires permission from the owner. The older Phone 5.0.0 APK remains withdrawn.
 
 No manufacturer connection parameters are bundled or automatically downloaded. Importing a configuration only checks and saves it locally; it does not query or control the car. Refresh after login and check the vehicle and data time. The current cloud-control baseline is Australian 7X / AU 1.6.6, not a claim of compatibility with every region.
 
@@ -122,7 +122,8 @@ Update both apps and pair again once when migrating from V4. Do not uninstall to
 | Existing project Recorder or original OpenAVM phone app | Install a matching-signature update in place |
 | Early standalone capability-check/assistant app | This has a different package identity; ask for its migration path rather than uninstalling |
 | Signature mismatch or upgrade rejection | Keep the existing app and data; report the old version and new APK filename |
-| New phone | Sign in again, set home and preferences, add widgets, and pair for recordings if needed |
+| Phone 5.0.0 or older cloud configuration | Install Phone 5.0.1 in place; import your configuration and sign in again if using cloud features. Recorder pairing and recordings remain; review and re-enable cloud automation |
+| New phone | Pair for local recordings; optionally import cloud configuration, sign in, set home/preferences and add widgets |
 | Keeping both phones | Pause departures, away guard and arrival deactivation on the old phone before enabling them on the new one |
 
 An in-place update is not cross-phone data migration. An APK does not carry your account, home, widgets or received recordings. Back up important media separately.

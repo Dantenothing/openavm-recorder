@@ -1,6 +1,6 @@
 # Optional Zeekr cloud setup
 
-These instructions cover the Phone 5.0.1 source candidate. They do not announce a public download. The previous Phone 5.0.0 APK remains withdrawn.
+These instructions cover [Phone 5.0.1](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1), the replacement public testing build. The previous bundled Phone 5.0.0 APK remains withdrawn.
 
 OpenAVM is a complete phone client. **Recorder pairing, recording transfer, playback and export work without a Zeekr account or connection configuration.** Use the Media tab or the recording card on Home to start there.
 

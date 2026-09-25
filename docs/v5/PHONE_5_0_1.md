@@ -1,4 +1,4 @@
-# Phone 5.0.1 candidate
+# Phone 5.0.1
 
 This is a complete OpenAVM phone client with optional, user-configured Zeekr cloud access. Manufacturer connection parameters are no longer included or automatically downloaded. Local Recorder pairing, recording transfer, playback and export remain available without cloud setup.
 
@@ -11,4 +11,4 @@ Package identity remains com.dante.zeekrbridge, version code 52. The vehicle Rec
 
 See [cloud setup](CLOUD_SETUP.md) and the [empty template](connection-config.template.json). The template contains no working parameters.
 
-This file is a candidate release description. It does not mean the APK has been published or that every compatibility scenario has passed. Record final verification separately before publishing.
+Download the [V5.0.1 public testing release](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1). The exact signed phone APK was checked with Recorder 5.0.0 transport code for secure pairing, reconnecting and MP4 transfer on an Android emulator. See [verification scope and limits](PHONE_5_0_1_VERIFICATION.md); this is not a claim that every physical vehicle/phone combination has been tested.
