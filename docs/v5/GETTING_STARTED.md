@@ -1,5 +1,7 @@
 # OpenAVM V5 setup guide
 
+> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+
 [Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.0)
 
 For vehicle recording, start at section 1. For phone vehicle controls, start at section 2. Add section 3 only when you want to transfer recordings.
@@ -43,7 +45,7 @@ Check the emergency-events library. Protection prevents automatic cleanup, but i
 
 ### Sign in
 
-Install the V5 `OpenAVM-Phone-` APK on Android, updating the original OpenAVM app in place. Open **OpenAVM**, then **More → Account & connection**. Sign in with an authorised ZEEKR account and select your vehicle. Guest access requires permission from the owner.
+The V5 phone APK is currently withdrawn. For an existing V5 installation, open **OpenAVM**, then **More → Account & connection**. Sign in with an authorised ZEEKR account and select your vehicle. Guest access requires permission from the owner.
 
 Refresh once and check the vehicle and data time. **Success means the correct vehicle is selected and status is readable.** The current Australian connection configuration is included; no protocol JSON is required. The current cloud-control baseline is Australian 7X / AU 1.6.6, not a claim of compatibility with every region.
 

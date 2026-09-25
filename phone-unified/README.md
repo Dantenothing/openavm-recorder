@@ -1,5 +1,7 @@
 # OpenAVM Phone V5
 
+> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+
 This is the current Android phone application: vehicle status and controls, preconditioning, factory Sentry rules, home-screen widgets, and the OpenAVM recording library.
 
 Version: **5.0.0 / 51**. The normal `openavm` variant uses `com.dante.zeekrbridge`, preserving the original OpenAVM phone upgrade identity. The separate `assistantUpgrade` variant is only for the early standalone assistant and is not a normal public download.
@@ -18,7 +20,7 @@ Cloud vehicle login and Recorder pairing are independent. Normal refresh only re
 
 Use JDK 17 or newer compatible with the checked-in Gradle wrapper and Android SDK 36. Set your local SDK path in `local.properties`.
 
-The signed distribution includes an AU connection profile. Source builds require a locally supplied app-level profile, passed as `-PzeekrProtocolFile=<local-file>` or placed at `config/private/zeekr-au-166.json`. The build accepts exactly the six expected app-protocol fields and rejects account exports. Never commit this private file, account data or signing material. Ordinary APK users do not need it.
+The withdrawn V5 phone APK included an AU connection profile. Public phone distribution is paused while this delivery approach is reviewed. Source builds require a locally supplied app-level profile, passed as `-PzeekrProtocolFile=<local-file>` or placed at `config/private/zeekr-au-166.json`. The build accepts exactly the six expected app-protocol fields and rejects account exports. Never commit this private file, account data or signing material. Ordinary APK users do not need it.
 
 From this directory:
 

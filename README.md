@@ -1,22 +1,24 @@
 # OpenAVM V5
 
+> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+
 **Surround-camera recording and a floating live mirror for compatible ZEEKR head units, with an optional Android companion.**
 
 OpenAVM is an independent, unofficial project for compatible ZEEKR vehicles. Use Recorder on its own to record, review clips and keep a floating camera view on screen. Add the Android phone app to receive and manage recordings. The phone app also offers vehicle status, preconditioning, factory Sentry automation and widgets for currently supported cloud accounts.
 
 [Downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.0) · [Setup guide](docs/v5/GETTING_STARTED.md) · [Report an issue](https://github.com/Dantenothing/openavm-recorder/issues)
 
-**V5 downloads:** [Vehicle APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [Android phone APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Phone-5.0.0.apk) · [Release notes](docs/v5/RELEASE_NOTES.md)
+**V5 downloads:** [Vehicle APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [Release notes](docs/v5/RELEASE_NOTES.md)
 
 ## Which app do I need?
 
 | What you want to do | Download | Install on |
 | --- | --- | --- |
 | Record, play recordings or use the floating mirror | **OpenAVM Recorder**, filename starting with `OpenAVM-Recorder-` | Vehicle head unit |
-| Check status, precondition, automate Sentry or use widgets | **OpenAVM Phone**, filename starting with `OpenAVM-Phone-` | Android phone |
-| Transfer vehicle recordings to your phone | Both apps, then pair them | Both devices |
+| Check status, precondition, automate Sentry or use widgets | **Phone download paused**; existing V5 installations are documented below | Android phone |
+| Transfer vehicle recordings to your phone | Requires an existing compatible phone installation; the V5 phone download is paused | Both devices |
 
-Choose the matching **V5** assets on the release page. The old V4 phone APK is not the V5 companion.
+Only the **V5 vehicle APK** is currently available on the release page. The old V4 phone APK is not a substitute for the V5 companion.
 
 **A phone is optional for vehicle recording. Phone vehicle controls do not require Recorder on the head unit.** No private server is needed: vehicle controls connect to ZEEKR's cloud, while recording transfers use shared Wi-Fi or a phone hotspot.
 
@@ -55,7 +57,7 @@ Phone automation controls the vehicle's factory Sentry feature. It is separate f
 
 The Australian baseline applies to phone cloud vehicle controls, not local recording transfer. You can use the phone's recording library without a ZEEKR account.
 
-The phone app includes the current Australian connection configuration. Normal setup does not require a protocol JSON file. For cloud controls, sign in, select the vehicle, then configure home, comfort preferences, widgets and automation as needed.
+The withdrawn V5 phone build includes Australian connection configuration. Its public distribution is under review; the setup description below applies to existing installations. For cloud controls, sign in, select the vehicle, then configure home, comfort preferences, widgets and automation as needed.
 
 Use matching V5 apps for recording transfer. Compare the complete fingerprint during initial secure pairing. Connections migrating from V4 need to be paired again once. Received recordings can be played offline.
 

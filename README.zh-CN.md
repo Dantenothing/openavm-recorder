@@ -1,12 +1,14 @@
 # OpenAVM V5
 
+> **Phone download temporarily paused:** The V5 phone APK has been withdrawn while we review distribution of its bundled third-party connection configuration. Vehicle Recorder remains available. A replacement phone package is not available yet. Phone instructions below apply to existing V5 installations.
+
 **车机负责录像，手机负责日常用车；需要时，把录像带到手机。**
 
 OpenAVM 是面向兼容极氪车辆的独立、非官方应用。车机版提供录像与悬浮后视镜，Android 手机版把车况、备车、原厂哨兵自动化和录像管理放在一起。
 
 [English](README.md) · [下载与更新](https://github.com/Dantenothing/openavm-recorder/releases) · [安装与使用指南](docs/v5/GETTING_STARTED.zh-CN.md) · [反馈问题](https://github.com/Dantenothing/openavm-recorder/issues)
 
-**V5 下载：**[车机安装包](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [Android 手机安装包](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Phone-5.0.0.apk) · [更新说明](docs/v5/RELEASE_NOTES.md)
+**V5 下载：**[车机安装包](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [更新说明](docs/v5/RELEASE_NOTES.md)
 
 ## 我应该装哪个？
 
