@@ -16,6 +16,52 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecorderConfigTest {
+    @Test fun rawRecorderConfigRequiresExplicitContinuousBackendAndKnownSurroundSource() {
+        assertFalse(config().sharedInputRecordingEnabled)
+        val lanes = com.dante.zeekrcapabilitylab.service.recorder.SegmentLaneLayoutFactory.forProfile(1280, 5140,
+            listOf("1", "2", "3", "4"), listOf(1, 2, 3, 4), listOf(0, 0, 0, 0))
+        val valid = config().let { it.copy(sharedInputRecordingEnabled = true, source = it.source.copy(laneLayout = lanes)) }
+        assertTrue(valid.validate().isEmpty())
+        assertFalse(valid.copy(source = valid.source.copy(laneLayout = null)).validate().isEmpty())
+        assertFalse(valid.copy(source = valid.source.copy(sourceRole = RecordingSourceRole.CABIN)).validate().isEmpty())
+        for (multiple in TimeLapsePolicy.MULTIPLIERS) {
+            val lapse = valid.copy(recordingMode = RecordingMode.TIME_LAPSE, timeLapseMultiplier = multiple)
+            assertTrue(lapse.validate().isEmpty())
+            assertEquals(com.dante.zeekrcapabilitylab.service.recorder.CaptureSubmissionMode.REPEATING_ENCODER,
+                com.dante.zeekrcapabilitylab.service.recorder.ContinuousVideoTiming.capturePlan(lapse).submissionMode)
+            assertEquals(com.dante.zeekrcapabilitylab.service.recorder.CaptureSubmissionMode.PACED_SINGLE_ENCODER,
+                com.dante.zeekrcapabilitylab.service.recorder.ContinuousVideoTiming.capturePlan(lapse.copy(sharedInputRecordingEnabled = false)).submissionMode)
+        }
+        assertFalse(valid.copy(source = valid.source.copy(profile = valid.profile.copy(size = ProfileSize(3840, 1728)))).validate().isEmpty())
+    }
+
+    @Test fun productDefaultOnlyAppliesToTheSupportedSurroundLayout() {
+        val lanes = com.dante.zeekrcapabilitylab.service.recorder.SegmentLaneLayoutFactory.forProfile(1280, 5140,
+            listOf("1", "2", "3", "4"), listOf(1, 2, 3, 4), listOf(0, 0, 0, 0))
+        val source = config().source.copy(laneLayout = lanes)
+        fun supported(value: SessionSourceSnapshot) =
+            com.dante.zeekrcapabilitylab.service.recorder.ProductContinuousPolicy.supportsSource(value)
+        assertTrue(supported(source))
+        assertFalse(supported(source.copy(laneLayout = null)))
+        assertFalse(supported(source.copy(layoutKind = RecordingLayoutKind.SINGLE_V1)))
+        assertFalse(supported(source.copy(profile = source.profile.copy(size = ProfileSize(1920, 7710)))))
+        for (role in listOf(RecordingSourceRole.CABIN, RecordingSourceRole.IR)) {
+            assertFalse(supported(source.copy(sourceRole = role)))
+        }
+    }
+
+    @Test fun mirrorAcceptsSurroundAndSingleCabinButNotIrOrInconsistentLayouts() {
+        assertFalse(config().mirrorPreviewEnabled)
+        assertTrue(config().copy(mirrorPreviewEnabled = true).validate().isEmpty())
+        for (role in listOf(RecordingSourceRole.CABIN, RecordingSourceRole.IR)) {
+            assertTrue(config(sourceRole = role, layoutKind = RecordingLayoutKind.SINGLE_V1).validate().isEmpty())
+            assertEquals(role == RecordingSourceRole.CABIN, config(sourceRole = role, layoutKind = RecordingLayoutKind.SINGLE_V1)
+                .copy(mirrorPreviewEnabled = true).validate().isEmpty())
+        }
+        assertTrue(config(recordingMode = RecordingMode.TIME_LAPSE, timeLapseMultiplier = TimeLapsePolicy.DEFAULT_MULTIPLIER)
+            .copy(mirrorPreviewEnabled = true).validate().isEmpty())
+        assertFalse(config(layoutKind = RecordingLayoutKind.SINGLE_V1).copy(mirrorPreviewEnabled = true).validate().isEmpty())
+    }
 
     private val gb = 1024L * 1024L * 1024L
 

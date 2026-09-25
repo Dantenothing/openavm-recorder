@@ -1,6 +1,8 @@
 package com.dante.zeekrbridge.core
 
 import java.io.File
+import io.github.dantenothing.avmtransfer.protocol.RecordingMetadataReader
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -105,6 +107,7 @@ data class IndexedMediaSegment(
     val measuredMultiplier: Double? = null,
     val timeLapseAccuracy: IndexedTimeLapseAccuracy? = null,
     val mediaOrigin: IndexedMediaOrigin = IndexedMediaOrigin.OPENAVM_RECORDING,
+    val raster: RecordingRasterMetadata = RecordingRasterMetadata.Original,
 ) {
     val file: File get() = File(filePath)
     val playbackLabels: List<String>
@@ -190,8 +193,9 @@ object MediaIndexScanner {
 
     internal fun readSegment(file: File): IndexedMediaSegment {
         val sidecar = sidecarCandidates(file).firstOrNull(File::isFile)
-        val obj = sidecar?.let {
-            runCatching { json.parseToJsonElement(it.readText()).jsonObject }.getOrNull()
+        val metadata = RecordingMetadataReader.read(file, sidecarCandidates(file))
+        val obj = metadata.text?.let {
+            runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
         }
         val source = resolveSource(obj)
         val layout = resolveLayout(obj, source)
@@ -248,11 +252,13 @@ object MediaIndexScanner {
                 obj.string("timeLapseAccuracy")?.uppercase()?.let(IndexedTimeLapseAccuracy::valueOf)
             }.getOrNull(),
             mediaOrigin = mediaOrigin,
+            raster = metadata.raster,
         )
     }
 
     fun sidecarCandidates(file: File): List<File> = listOf(
         File(file.absolutePath + ".sidecar.json"),
+        File(file.parentFile, file.nameWithoutExtension + ".sidecar.json"),
         File(file.parentFile, file.nameWithoutExtension + ".json"),
     ).distinctBy { it.absolutePath }
 
@@ -322,11 +328,11 @@ object MediaIndexScanner {
         stop?.let { (it - start).coerceAtLeast(0L) }
 
     private fun JsonObject?.string(key: String): String? =
-        this?.get(key)?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        (this?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
 
-    private fun JsonObject?.long(key: String): Long? = this?.get(key)?.jsonPrimitive?.longOrNull
-    private fun JsonObject?.double(key: String): Double? = this?.get(key)?.jsonPrimitive?.doubleOrNull
-    private fun JsonObject?.bool(key: String): Boolean? = this?.get(key)?.jsonPrimitive?.booleanOrNull
+    private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.longOrNull
+    private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.doubleOrNull
+    private fun JsonObject?.bool(key: String): Boolean? = (this?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull
     private fun JsonObject?.obj(key: String): JsonObject? = runCatching { this?.get(key)?.jsonObject }.getOrNull()
 }
 

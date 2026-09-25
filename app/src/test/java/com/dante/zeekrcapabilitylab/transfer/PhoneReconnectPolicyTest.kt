@@ -12,7 +12,7 @@ class PhoneReconnectPolicyTest {
         port = 8766,
         token = "long-term-secret",
         phoneName = "Old name",
-        phoneId = "phone-1",
+        phoneId = "phone-1", securityVersion = 2, tlsPort = 8767, publicKeySha256 = "a".repeat(64),
     )
 
     @Test
@@ -21,6 +21,8 @@ class PhoneReconnectPolicyTest {
             saved = saved,
             discovery = DiscoveryReply(deviceName = "My phone", ip = "192.0.0.2", port = 8766),
             health = HealthResponse(deviceName = "My phone", phoneDeviceId = "phone-1"),
+            verified = VerifiedPhoneSession(saved.copy(host = "192.0.0.2"),
+                io.github.dantenothing.avmtransfer.protocol.PhoneSecuritySession("openavm-transfer", 1, 2, "phone-1", "car-1")),
         )
 
         assertEquals("192.0.0.2", migrated?.host)

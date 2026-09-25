@@ -1,57 +1,85 @@
-# OpenAVM V4
+# OpenAVM V5
 
-[简体中文](README.zh-CN.md) · [Download V4](https://github.com/Dantenothing/openavm-recorder/releases/tag/v4.0.0) · **[Technical explanation](PLATFORM_NOTES.md)** · [User guide](USER_GUIDE.md) · [Release notes](GITHUB_RELEASE_V4.md)
+**Record on the vehicle. Manage everyday vehicle tasks on your phone. Bring recordings with you when you need them.**
 
-Record, browse and transfer video on compatible Zeekr App Lab head units. V4 includes **OpenAVM Recorder** for the vehicle and an **optional OpenAVM Companion** app for Android phones.
+OpenAVM is an independent, unofficial project for compatible ZEEKR vehicles. The vehicle app provides recording and a floating live mirror. The Android phone app combines vehicle status, preconditioning, factory Sentry automation and recording management.
 
-## Downloads
+[简体中文](README.zh-CN.md) · [Downloads](https://github.com/Dantenothing/openavm-recorder/releases) · [Setup guide](docs/v5/GETTING_STARTED.md) · [Report an issue](https://github.com/Dantenothing/openavm-recorder/issues)
 
-| App | Install on | Version | Download |
-| --- | --- | --- | --- |
-| OpenAVM Recorder | Compatible ARM64 vehicle head unit | 4.0.0 (57) | [Vehicle APK — 2.24 MB](https://github.com/Dantenothing/openavm-recorder/releases/download/v4.0.0/OpenAVM-Recorder-V4-arm64-v8a.apk) |
-| OpenAVM Companion | Android phone, Android 8.0 or later | 4.0.0 (29) | [Optional phone APK — 3.15 MB](https://github.com/Dantenothing/openavm-recorder/releases/download/v4.0.0/OpenAVM-Companion-V4.apk) |
+**V5 downloads:** [Vehicle APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Recorder-5.0.0-arm64-v8a.apk) · [Android phone APK](https://github.com/Dantenothing/openavm-recorder/releases/download/v5.0.0/OpenAVM-Phone-5.0.0.apk) · [Release notes](docs/v5/RELEASE_NOTES.md)
 
-The vehicle app also requires Android 8.0 or later and compatible App Lab camera/storage access; the Android version alone does not establish compatibility. Signed APKs and SHA-256 checksums are attached to the release. Use the vehicle's available App Lab installation flow. Existing installations with the same application ID and signing key can be updated in place.
+## Which app do I need?
 
-**The phone APK is not required.** The vehicle app and a USB drive cover recording, video viewing/management and lock/unlock sound creation. The phone app adds wireless transfer and phone-side playback, trimming and individual-view export.
+| What you want to do | Download | Install on |
+| --- | --- | --- |
+| Record, play recordings or use the floating mirror | **OpenAVM Recorder**, filename starting with `OpenAVM-Recorder-` | Vehicle head unit |
+| Check status, precondition, automate Sentry or use widgets | **OpenAVM Phone**, filename starting with `OpenAVM-Phone-` | Android phone |
+| Transfer vehicle recordings to your phone | Both apps, then pair them | Both devices |
 
-## How recording works
+Choose the matching **V5** assets on the release page. The old V4 phone APK is not the V5 companion.
 
-For surround-view recording on the tested vehicle, OpenAVM uses Android Camera2 to request one processed `1280×5140` video stream containing four approximately `1280×1280` front, rear, left and right views. The app arranges these views into a 2×2 preview and records the combined stream through Android media APIs. It uses the camera access exposed by App Lab, without requiring root or modifying vehicle firmware.
+**A phone is optional for vehicle recording. Phone vehicle controls do not require Recorder on the head unit.** No private server is needed: vehicle controls connect to ZEEKR's cloud, while recording transfers use shared Wi-Fi or a phone hotspot.
 
-The upstream camera pipeline and its resource sharing with other vehicle systems have not been fully established. Camera temperatures have not been specifically measured, and dedicated thermal testing has not been completed.
+## Vehicle app
 
-The **[detailed technical explanation](PLATFORM_NOTES.md)** covers camera access, CPU/GPU/RAM and storage questions, road-test observations, camera ownership, and known limitations. It preserves the technical material previously shown on the project homepage, with dated observations and current V4 notes.
+- **Surround recording:** normal and time-lapse modes. Supported configurations keep capture running across normal segment boundaries. Cabin and infrared availability depends on firmware.
+- **Floating live mirror:** preview without recording, directional views, a four-view grid, Cabin selection, positioning and resizing.
+- **Return recovery:** retain a Logo entry, restore full preview, or explicitly enable recording on return. Confirm your preference after each installation or update.
+- **Recording library:** date filters, grouped segments, emergency-video marking and protection for important clips.
+- **Transfer and sound tools:** send existing recordings to your phone, or create vehicle sound WAV files from local audio or video.
 
-## What V4 includes
+A retained window is not continuous parking recording. Return recovery requires the app to remain running. Reopen it after a head-unit restart or system termination.
 
-- **Direct USB recording:** video writes straight to the selected writable USB drive, without first recording the video to internal storage. Small settings, metadata and diagnostics still use internal storage; an unavailable USB can cause a bounded internal-storage fallback when recording remains appropriate.
-- **Recording choices:** four-view surround recording, selectable Cabin and IR sources, and time-lapse. The 2×, 5× and 10× settings have received targeted owner testing. Camera availability and declared resolutions depend on the vehicle.
-- **A clearer library:** categories, session grouping of one-minute files, selected-segment transfer, internal-to-USB export and bulk deletion of OpenAVM-owned recordings. Factory Sentry recordings can be viewed and transferred; factory `/SentryMode/` remains read-only.
-- **Optional Android Companion:** local hotspot/LAN pairing, video transfer, immediate playback in the detail page, correct square-video proportions, trimming and individual-camera export. A USB drive can also be connected directly to the phone.
-- **Sound tools on both apps:** import supported music/video, trim audio, make vehicle-compatible WAV files and save to USB. The vehicle toolbox can browse, preview and delete existing USB sound files.
-- **Six language choices:** English, Simplified Chinese, Traditional Chinese, Thai, Vietnamese and Arabic, plus follow system. Both apps use the same icon; advanced vehicle diagnostics are hidden by default.
+## Android phone app
 
-## A few things to know
+- **Vehicle status:** cabin temperature, battery, range, location and vehicle state, with data timestamps.
+- **Preconditioning:** choose a target temperature, maximum duration and seat preferences. Tap to start, tap again to stop, or schedule a departure.
+- **Factory Sentry automation:** enable a rule to turn Sentry on after parking away from home, and optionally turn it off after a confirmed arrival home. Turning it off in OpenAVM pauses automatic activation for that parking session.
+- **Four widget sizes:** 2×2, 4×1, 4×2 and 4×3, with direct actions, progress feedback and an app entry.
+- **Climate and seats:** use temperature, seat ventilation and heating controls supported by your vehicle and account.
+- **Recordings and appearance:** receive, play, export and share recordings; customise the vehicle nickname, appearance and plate style.
 
-- On the owner's car, normal recording usually continues for around five minutes after leaving, which can help cover part of the gap before factory Sentry starts. This is **observed vehicle behaviour**, not a fixed timer or guaranteed handover. V4 does not start or control factory Sentry.
-- New lock/unlock sounds may not appear in the vehicle's sound list immediately. In testing, leaving and returning to the car, or reconnecting the USB drive, sometimes refreshed the list. OpenAVM cannot identify which sound the vehicle currently has selected.
-- **Custom parking Sentry and automatic recording on return are not included.** Those experiments are paused because reliable camera access and wake-up across vehicle sleep have not been established. Factory Sentry video browsing remains available. See the [research status](research/sentry/README_V4_ARCHIVE.md).
-- Testing has mainly used the owner's car and Android devices. Other vehicle models, firmware and phones may behave differently. Earlier development builds experienced a persistent third-party camera-feed stall requiring a head-unit restart; the owner reports no recurrence in current V4 testing. This is not proof that it cannot recur.
+**Normal refresh only reads vehicle status.** The separate button next to cabin temperature updates that reading and may briefly start climate control, then request that this temporary session stop. Progress is shown. A successful refresh does not mean the vehicle took a new measurement; check the data timestamp.
 
-OpenAVM is independent, unofficial software and is not affiliated with or endorsed by Zeekr. It is not a replacement for a factory safety system or a guaranteed parking recorder. Operate its controls while parked. See [the technical explanation and limitations](PLATFORM_NOTES.md) and [security reporting](SECURITY.md).
+Phone automation controls the vehicle's factory Sentry feature. It is separate from Recorder capture and does not remotely start Recorder or stream live vehicle cameras to the phone.
 
-## Guides and development
+## Compatibility
 
-- [Setup, phone pairing, USB, sound tools and troubleshooting](USER_GUIDE.md)
-- [中文使用说明](USER_GUIDE.zh-CN.md)
-- [V4 release notes](GITHUB_RELEASE_V4.md) and [changelog](CHANGELOG.md)
-- [Build instructions and release verification](DEVELOPMENT.md)
-- [Detailed technical explanation and test observations](PLATFORM_NOTES.md)
-- [Paused Sentry research](research/sentry/README_V4_ARCHIVE.md)
+| Area | Current scope |
+| --- | --- |
+| Vehicle | Android 8.0+, ARM64, with firmware that permits installation and exposes compatible App Lab camera and storage access |
+| Phone | Android 8.0+; no iOS app in this release |
+| Cloud vehicle controls | Current baseline: Australian ZEEKR 7X / AU 1.6.6 integration; other regions, vehicles and firmware are not generally verified |
+| Account | Existing vehicle authorisation is required; guest accounts retain the permissions granted by the owner |
+| Languages | Vehicle: English, Simplified Chinese, Traditional Chinese, Thai, Vietnamese and Arabic. Phone: Simplified Chinese and English |
+
+The phone app includes the current Australian connection configuration. Normal setup does not require a protocol JSON file. Sign in, select the vehicle, then configure home, comfort preferences, widgets and automation as needed.
+
+Use matching V5 apps for recording transfer. Compare the complete fingerprint during initial secure pairing. Connections migrating from V4 need to be paired again once. Received recordings can be played offline.
+
+## Upgrading and practical limits
+
+- Install over the existing app using a package with the same signing identity. **Do not uninstall first.** Early standalone-assistant users should follow the setup guide.
+- The first V5 vehicle launch applies the direction preset once: right-hand drive; Front 1, Rear 2, Left 3, Right 4; Cabin 1, Infrared 0. Check it while parked. Later manual adjustments are retained.
+- Check the actual recording destination and wait for saving to finish before removing USB. Back up important recordings.
+- Phone battery restrictions, network conditions and vehicle sleep can delay updates and automation. Widgets are not continuously live.
+- Camera, power and storage problems can interrupt recording. Continuous parking coverage and recovery after system termination are not guaranteed.
+
+See the [setup guide](docs/v5/GETTING_STARTED.md) for instructions and troubleshooting.
+
+## Data and permissions
+
+Login sessions and pairing credentials are encrypted on the phone. The APK does not contain a user's account, vehicle or home location. Vehicle controls contact ZEEKR's cloud; address matching uses the phone's system geocoding service. This is not an entirely local-data workflow.
+
+Recordings are stored on the selected vehicle storage or receiving phone. Paired recording transfers use an encrypted local connection without a private OpenAVM server. Playing received recordings does not require a ZEEKR account.
+
+Grant permissions for the features you use, such as camera, storage, overlay display, notifications and background operation. Configure the vehicle app while parked.
+
+## Feedback
+
+[Report an issue](https://github.com/Dantenothing/openavm-recorder/issues) with the affected app, both app versions, vehicle and firmware, time, steps and exact message. Hide account details, plates, locations and pairing information in screenshots.
 
 ## Source availability and licence status
-
 
 Copyright © 2026 Dantenothing. All rights reserved.
 

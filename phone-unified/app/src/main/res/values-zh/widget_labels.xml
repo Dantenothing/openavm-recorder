@@ -1,0 +1,4 @@
+<resources>
+    <string name="widget_label_full">车辆卡片 · 4×3</string>
+    <string name="widget_label_compact">快捷卡片 · 4×2</string>
+</resources>

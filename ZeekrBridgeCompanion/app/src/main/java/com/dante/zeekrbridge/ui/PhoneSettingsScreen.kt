@@ -33,7 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dante.zeekrbridge.BuildConfig
+import com.dante.zeekrbridge.OpenAvmHost
 import com.dante.zeekrbridge.core.LocalMediaMaintenance
 import com.dante.zeekrbridge.core.PairingManager
 import com.dante.zeekrbridge.core.ReceivedStore
@@ -41,7 +41,7 @@ import com.dante.zeekrbridge.core.TrashStore
 import com.dante.zeekrbridge.core.VehicleIdentityPolicy
 
 @Composable
-fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
+fun PhoneSettingsScreen(onOpenLab: () -> Unit, languageTitle: String? = null, showLanguage: Boolean = true) {
     val context = LocalContext.current
     val devices by PairingManager.devices.collectAsState()
     val received by ReceivedStore.files.collectAsState()
@@ -55,6 +55,7 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
     var showTrash by remember { mutableStateOf(false) }
     var versionTaps by remember { mutableStateOf(0) }
     var lastTapAt by remember { mutableStateOf(0L) }
+    androidx.activity.compose.BackHandler(showTrash) { showTrash = false }
 
     if (showTrash) {
         TrashScreen(onBack = { showTrash = false })
@@ -70,9 +71,9 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
         Text(t("Settings", "设置"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
 
-        Card(Modifier.fillMaxWidth()) {
+        if (showLanguage) Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp)) {
-                Text(t("Language", "语言"), style = MaterialTheme.typography.titleMedium)
+                Text(languageTitle ?: t("Language", "语言"), style = MaterialTheme.typography.titleMedium)
                 var languageMenu by remember { mutableStateOf(false) }
                 Box {
                     OutlinedButton(onClick = { languageMenu = true }) { Text(PhoneLanguage.label(PhoneLanguage.mode) + " ▾") }
@@ -190,15 +191,15 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
                 )
                 Text(
                     t(
-                        "Help: enable the phone hotspot → connect the car → scan the pairing QR from Vehicle → the paired car can reconnect and transfer files.",
-                        "帮助：开启手机热点 → 车机加入热点 → 在“车辆”页面扫描配对二维码 → 已配对车机即可重连并传输文件。",
+                        "Help: update both apps → join the same network → open secure pairing → compare the full fingerprint on both screens → enter the six-digit code on the car. Later reconnects are automatic.",
+                        "帮助：更新两端 → 连到同一网络 → 开启安全配对 → 核对两端完整指纹 → 在车机输入六位码。以后自动重连。",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(t("Version", "版本") + " ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                    Text(t("Version", "版本") + " ${OpenAvmHost.version(context)}")
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = {
                         val nowMs = System.currentTimeMillis()
@@ -218,7 +219,7 @@ fun PhoneSettingsScreen(onOpenLab: () -> Unit) {
         AlertDialog(
             onDismissRequest = { revokeCar = null },
             title = { Text(t("Unpair?", "解除配对？")) },
-            text = { Text(t("The car must scan the pairing code again.", "解除后该车机需要重新扫码配对。")) },
+            text = { Text(t("The car will need secure pairing again. Current connections will close.", "解除后立即断开该车机，需要重新安全配对才能连接。")) },
             confirmButton = {
                 TextButton(onClick = {
                     PairingManager.revoke(carId)

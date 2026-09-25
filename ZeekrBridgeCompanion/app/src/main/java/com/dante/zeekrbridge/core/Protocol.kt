@@ -30,14 +30,18 @@ data class PairRequest(
     val code: String,
     val deviceName: String,
     val carDeviceId: String,
-)
+) {
+    override fun toString() = "PairRequest(code=<redacted>)"
+}
 
 @Serializable
 data class PairResponse(
     val token: String,
     val phoneDeviceId: String,
     val deviceName: String,
-)
+) {
+    override fun toString() = "PairResponse(token=<redacted>)"
+}
 
 @Serializable
 data class UploadCreateRequest(

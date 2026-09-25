@@ -105,6 +105,8 @@ object EventLogger {
             errorMessage = errorMessage,
         )
         enqueueForDisk(event)
+        // Passive diagnostics must never affect the caller's camera/control work.
+        runCatching { com.dante.zeekrcapabilitylab.diagnostic.AwayJournal.observe(event) }
         _events.value = (_events.value + event).takeLast(MAX_MEMORY_EVENTS)
         if (severity == Severity.ERROR || errorType != null) {
             _lastError.value = "${event.category}/${event.eventName}: ${errorMessage ?: event.errorMessage ?: "unknown error"}"

@@ -67,9 +67,11 @@ class TransferService : Service() {
                     TransferRepository.finish(task, TransferTaskState.CANCELLED)
                     continue
                 }
-                val endpoint = PhoneConnectionStore.saved()
-                if (endpoint == null) {
-                    TransferRepository.update(task.copy(state = TransferTaskState.WAITING_RETRY, reason = "Phone is not paired"))
+                val endpoint = try { PhoneConnectionStore.requireConnected() } catch (t: Exception) {
+                    val failure = phoneFailure(t)
+                    val message = phoneSecurityMessage(failure.error)
+                    TransferRepository.update(task.copy(state = if (task.state == TransferTaskState.CANCEL_PENDING) task.state else TransferTaskState.WAITING_RETRY, reason = message))
+                    PhoneConnectionStore.saved()?.let { TransferRepository.markConnected(it, false, message) }
                     break
                 }
                 try {
@@ -82,6 +84,13 @@ class TransferService : Service() {
                     TransferRepository.markConnected(endpoint, true, "Connected to ${endpoint.phoneName}")
                     if (step == QueueStep.PAUSE) break
                 } catch (t: Throwable) {
+                    if (t is PhoneSecurityException) {
+                        val latest = TransferRepository.get(task.id) ?: break
+                        val message = phoneSecurityMessage(t.error)
+                        TransferRepository.update(latest.copy(state = if (latest.state == TransferTaskState.CANCEL_PENDING) latest.state else TransferTaskState.WAITING_RETRY, reason = message))
+                        TransferRepository.markConnected(endpoint, false, message)
+                        break
+                    }
                     val latest = TransferRepository.get(task.id) ?: continue
                     if (latest.sourceKind == TransferSourceKind.FACTORY_SENTRY_USB) {
                         when (val source = resolveFactorySentry(latest)) {
@@ -158,6 +167,16 @@ class TransferService : Service() {
 
     private fun upload(initial: TransferTask, endpoint: PhoneEndpoint): QueueStep {
         var task = TransferRepository.get(initial.id) ?: return QueueStep.CONTINUE
+        val raster = io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(task.sidecarJson)
+        val capabilities = if (raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
+            TransferHttp.health(task.id, endpoint).recordingRasterLayouts else emptyList()
+        raster.receiverError(capabilities)?.let { reason ->
+            TransferRepository.finish(task, TransferTaskState.FAILED,
+                if (reason == "RECEIVER_RASTER_UPGRADE_REQUIRED")
+                    Utils.t("Update the phone app before sending this recording.", "请先更新手机版，再发送这段录像。")
+                else Utils.t("Recording layout metadata is invalid.", "录像布局信息无效。"))
+            return QueueStep.CONTINUE
+        }
         if (task.uploadId != null) {
             val remote = TransferHttp.status(task.id, endpoint, task.uploadId!!)
             if (remote.status == "COMPLETED") {

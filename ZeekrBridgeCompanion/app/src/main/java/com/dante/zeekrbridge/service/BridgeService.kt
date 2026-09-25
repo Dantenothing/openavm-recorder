@@ -9,7 +9,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import com.dante.zeekrbridge.MainActivity
+import com.dante.zeekrbridge.OpenAvmHost
+import com.dante.zeekrbridge.OpenAvmRuntime
 import com.dante.zeekrbridge.R
 import com.dante.zeekrbridge.server.BridgeServer
 import com.dante.zeekrbridge.server.BluetoothServer
@@ -26,8 +27,9 @@ class BridgeService : Service() {
         private val _running = MutableStateFlow(false)
         val running: StateFlow<Boolean> = _running.asStateFlow()
 
-        fun start(context: Context) {
-            context.startForegroundService(Intent(context, BridgeService::class.java))
+        fun start(context: Context, openPairingWindow: Boolean = false) {
+            context.startForegroundService(Intent(context, BridgeService::class.java)
+                .putExtra("open_pairing_window", openPairingWindow))
         }
 
         fun stop(context: Context) {
@@ -37,15 +39,26 @@ class BridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        OpenAvmRuntime.initialize(this)
         createChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
         BridgeServer.start(this)
-        BluetoothServer.start(this)
+        if (!BridgeServer.state.value.running) {
+            _running.value = false
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // A restarted sticky service has no explicit pairing intent.
+        if (intent?.getBooleanExtra("open_pairing_window", false) == true) {
+            com.dante.zeekrbridge.core.PairingManager.newPairingCode()
+        }
         BridgePowerLocks.acquire(this)
         _running.value = true
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFICATION_ID, buildNotification())
         return START_STICKY
     }
 
@@ -73,14 +86,16 @@ class BridgeService : Service() {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            OpenAvmHost.openIntent(this,"connection"),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(
-                t("Ready to receive from your vehicle. Keeping the connection active uses battery.", "已准备接收车机文件，保持连接会增加耗电。"),
+                if (BridgeServer.state.value.running)
+                    t("Ready to receive on the same network. Tap for pairing details.", "接收已就绪，请让车机与手机连接同一网络。点此查看配对。")
+                else t("Starting recording receiver…", "正在启动录像接收…"),
             )
             .setContentIntent(pendingIntent)
             .setOngoing(true)

@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 fun ToolboxScreen() {
     var showEditor by remember { mutableStateOf(false) }
     var showUsbSentry by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(showEditor || showUsbSentry) { showEditor = false; showUsbSentry = false }
 
     if (showUsbSentry) {
         UsbSentryScreen(onBack = { showUsbSentry = false })

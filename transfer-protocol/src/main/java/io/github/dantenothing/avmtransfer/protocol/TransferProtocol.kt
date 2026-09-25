@@ -24,6 +24,8 @@ data class DiscoveryReply(
     val deviceName: String,
     val ip: String,
     val port: Int = TransferProtocol.PORT,
+    val securityVersions: List<Int> = emptyList(),
+    val tlsPort: Int? = null,
 )
 
 @Serializable
@@ -32,6 +34,10 @@ data class HealthResponse(
     val version: Int = TransferProtocol.VERSION,
     val deviceName: String,
     val phoneDeviceId: String,
+    /** Omitted by old receivers. Only advertise formats supported by playback AND export. */
+    val recordingRasterLayouts: List<String> = emptyList(),
+    val securityVersions: List<Int> = emptyList(),
+    val tlsPort: Int? = null,
 )
 
 @Serializable

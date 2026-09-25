@@ -1,6 +1,7 @@
 package com.dante.zeekrcapabilitylab.service.recorder
 
 import android.content.Context
+import android.util.AtomicFile
 import com.dante.zeekrcapabilitylab.usbexport.UsbExportAssetKind
 import java.io.File
 import kotlinx.serialization.Serializable
@@ -94,11 +95,16 @@ data class UsbPendingRecordingOutput(
     val createdAtEpochMs: Long,
     val bundleId: String? = null,
     val assets: List<UsbPendingRecordingAsset> = emptyList(),
+    /** Native file switching defers publication; preserve completed video across process loss. */
+    val nativeCheckpoint: SegmentSidecar? = null,
 )
 
 /** Internal recovery ledger for C1B pending MediaStore items. It never touches USB itself. */
-class UsbRecordingRecoveryJournal(context: Context) {
-    private val file = File(context.applicationContext.filesDir, "recordings/usb-pending.json")
+class UsbRecordingRecoveryJournal(context: Context, diagnosticNamespace: String? = null) {
+    init { require(diagnosticNamespace == null || diagnosticNamespace.matches(Regex("[a-zA-Z0-9-]{1,100}"))) }
+    // Diagnostic MP4s must never be recovered as ordinary recordings after process loss.
+    private val file = File(context.applicationContext.filesDir, if (diagnosticNamespace == null)
+        "recordings/usb-pending.json" else "preflight/usb-$diagnosticNamespace.json")
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true; prettyPrint = true }
 
     fun entries(): List<UsbPendingRecordingOutput> = synchronized(LOCK) { read().entries }
@@ -124,20 +130,35 @@ class UsbRecordingRecoveryJournal(context: Context) {
         write(UsbPendingRecordingLedger(entries = read().entries.filterNot { it.operationId == operationId }))
     }
 
+    fun checkpointNative(operationId: String, sidecar: SegmentSidecar): Boolean = synchronized(LOCK) {
+        val current = read()
+        if (current.entries.none { it.operationId == operationId }) return@synchronized false
+        write(current.copy(entries = current.entries.map {
+            if (it.operationId == operationId) it.copy(nativeCheckpoint = sidecar) else it
+        }))
+        true
+    }
+
+    fun clearNativeCheckpoint(operationId: String) = synchronized(LOCK) {
+        val current = read()
+        write(current.copy(entries = current.entries.map {
+            if (it.operationId == operationId) it.copy(nativeCheckpoint = null) else it
+        }))
+    }
+
     private fun read(): UsbPendingRecordingLedger {
-        if (!file.isFile) return UsbPendingRecordingLedger()
-        return runCatching { json.decodeFromString<UsbPendingRecordingLedger>(file.readText()) }
+        return runCatching { AtomicFile(file).openRead().use {
+            json.decodeFromString<UsbPendingRecordingLedger>(it.bufferedReader(Charsets.UTF_8).readText())
+        } }
             .getOrDefault(UsbPendingRecordingLedger())
     }
 
     private fun write(value: UsbPendingRecordingLedger) {
         file.parentFile?.mkdirs()
-        val partial = File(file.parentFile, "${file.name}.partial")
-        partial.writeText(json.encodeToString(value))
-        if (!partial.renameTo(file)) {
-            partial.copyTo(file, overwrite = true)
-            partial.delete()
-        }
+        val target = AtomicFile(file)
+        val out = target.startWrite()
+        try { out.write(json.encodeToString(value).toByteArray(Charsets.UTF_8)); target.finishWrite(out) }
+        catch (failure: Throwable) { target.failWrite(out); throw failure }
     }
 
     companion object {

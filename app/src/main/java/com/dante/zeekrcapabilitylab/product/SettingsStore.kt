@@ -40,6 +40,14 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_MIN_FREE_BYTES = "min_free_bytes"
         const val KEY_AUTO_CLEANUP = "auto_cleanup"
         const val KEY_PREVIEW_WHILE_RECORDING = "preview_while_recording_beta2"
+        const val KEY_RECORDING_OVERLAY = "recording_status_overlay"
+        private const val KEY_MIRROR_PREVIEW = "experimental_mirror_preview"
+        private const val KEY_MIRROR_REAR_LANE = "mirror_rear_lane"
+        private const val KEY_MIRROR_ROTATION = "mirror_rotation"
+        private const val KEY_MIRROR_HORIZONTAL = "mirror_horizontal"
+        private const val KEY_MIRROR_ZOOM = "mirror_view_zoom"
+        private const val KEY_MIRROR_CENTER_X = "mirror_view_center_x"
+        private const val KEY_MIRROR_CENTER_Y = "mirror_view_center_y"
         const val KEY_AUTO_START_RECORDING = "auto_start_recording"
         const val KEY_DEVELOPER_MODE = "developer_mode"
         const val KEY_SENTRY_GUARD_POLICY = "sentry_guard_policy_v1"
@@ -75,7 +83,8 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         fun init(context: Context): SettingsStore {
             return instance ?: synchronized(this) {
                 instance ?: SettingsStore(
-                    context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE),
+                    context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .also(V5ReleaseDefaults::applyRecorder),
                 ).also { instance = it }
             }
         }
@@ -121,6 +130,39 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     val previewWhileRecordingEnabled: Boolean
         get() = prefs.getBoolean(KEY_PREVIEW_WHILE_RECORDING, true)
+
+    val recordingOverlayEnabled: Boolean
+        get() = prefs.getBoolean(KEY_RECORDING_OVERLAY, false)
+
+    fun setRecordingOverlayEnabled(value: Boolean) {
+        prefs.edit().putBoolean(KEY_RECORDING_OVERLAY, value).apply()
+    }
+
+    val mirrorPreviewEnabled: Boolean get() = prefs.getBoolean(KEY_MIRROR_PREVIEW, true)
+    // Keep the existing key so an explicit compatibility choice survives upgrades.
+    // Developer tools only control visibility; hiding them must not change the recorder backend.
+    val sharedInputRecordingEnabled: Boolean get() = prefs.getBoolean("shared_input_recording_trial", true)
+    fun setSharedInputRecordingEnabled(value: Boolean) { prefs.edit().putBoolean("shared_input_recording_trial", value).apply() }
+    val mirrorRearLane: Int get() = prefs.getInt(KEY_MIRROR_REAR_LANE, V5ReleaseDefaults.REAR_LANE)
+        .takeIf { it in 1..4 } ?: V5ReleaseDefaults.REAR_LANE
+    val mirrorRotation: Int get() = prefs.getInt(KEY_MIRROR_ROTATION, 0).takeIf { it in setOf(0, 90, 180, 270) } ?: 0
+    val mirrorHorizontal: Boolean get() = prefs.getBoolean(KEY_MIRROR_HORIZONTAL, false)
+    fun setMirrorPreviewEnabled(value: Boolean) { prefs.edit().putBoolean(KEY_MIRROR_PREVIEW, value).apply() }
+    fun setMirrorRearLane(value: Int) {
+        if (value in 1..4 && value != mirrorRearLane) prefs.edit().putInt(KEY_MIRROR_REAR_LANE, value)
+            .remove(KEY_MIRROR_ZOOM).remove(KEY_MIRROR_CENTER_X).remove(KEY_MIRROR_CENTER_Y).apply()
+    }
+    fun setMirrorRotation(value: Int) { if (value in setOf(0, 90, 180, 270)) prefs.edit().putInt(KEY_MIRROR_ROTATION, value).apply() }
+    fun setMirrorHorizontal(value: Boolean) { prefs.edit().putBoolean(KEY_MIRROR_HORIZONTAL, value).apply() }
+    val mirrorViewport: com.dante.zeekrcapabilitylab.mirror.MirrorViewport
+        get() = com.dante.zeekrcapabilitylab.mirror.MirrorViewport(
+            prefs.getFloat(KEY_MIRROR_ZOOM, 1f), prefs.getFloat(KEY_MIRROR_CENTER_X, 0f),
+            prefs.getFloat(KEY_MIRROR_CENTER_Y, 0f)).sanitized(fisheyeCorrection.cropZoom)
+    fun setMirrorViewport(value: com.dante.zeekrcapabilitylab.mirror.MirrorViewport) {
+        val safe = value.sanitized(fisheyeCorrection.cropZoom)
+        prefs.edit().putFloat(KEY_MIRROR_ZOOM, safe.zoom).putFloat(KEY_MIRROR_CENTER_X, safe.centerX)
+            .putFloat(KEY_MIRROR_CENTER_Y, safe.centerY).apply()
+    }
 
     val autoStartRecordingEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START_RECORDING, false)

@@ -4,6 +4,7 @@ import android.content.Context
 import com.dante.zeekrcapabilitylab.probe.camera.CameraProfileCatalog
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
+import com.dante.zeekrcapabilitylab.service.recorder.ProductContinuousPolicy
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
@@ -63,8 +64,12 @@ object ProductRecorderConfigFactory {
     ): RecorderConfig? {
         val settings = SettingsStore.get(context)
         val source = resolveSource(context, role) ?: return null
+        val quality = if (recordingMode == RecordingMode.NORMAL) RecordingQualityStore(context).get(role) else RecordingQuality.ORIGINAL
         return RecorderConfig(
-            source = source,
+            source = source.copy(profile = source.profile.copy(bitrateBps = quality.bitrate(source.profile.bitrateBps))),
+            requestedFrameRate = quality.fps,
+            strictFrameRate = quality != RecordingQuality.ORIGINAL,
+            sharedInputRecordingEnabled = settings.sharedInputRecordingEnabled && ProductContinuousPolicy.supportsSource(source),
             segmentSeconds = settings.segmentSeconds,
             storageLimitBytes = settings.internalStorageLimitBytes,
             minFreeBytes = settings.minFreeBytes,

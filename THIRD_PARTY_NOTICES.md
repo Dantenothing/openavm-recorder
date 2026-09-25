@@ -26,3 +26,9 @@ Upstream licence references:
 - ZXing: <https://github.com/zxing/zxing/blob/master/LICENSE>
 
 Build and test tools downloaded by Gradle are not bundled in the release APK. They retain their respective upstream licences.
+
+## Unified Android phone application
+
+The phone app also uses AndroidX Camera and Media3 components, and OkHttp TLS, under Apache License 2.0. Its APK includes the Apache notice text alongside its other notices.
+
+The vehicle protocol implementation includes work derived from zeekr-ev-api, copyright (c) 2025 Fryyyyy, under the MIT License. The complete notice is retained at [`phone-unified/app/src/main/assets/zeekr-ev-api-license.txt`](phone-unified/app/src/main/assets/zeekr-ev-api-license.txt) and included in the phone APK.

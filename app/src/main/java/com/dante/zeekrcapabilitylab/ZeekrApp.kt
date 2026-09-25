@@ -42,6 +42,12 @@ class ZeekrApp : Application() {
     override fun onCreate() {
         super.onCreate()
         appContext = applicationContext
+        // The remote connection process must not initialize recorder owners, recovery or native camera code.
+        if (android.os.Build.VERSION.SDK_INT >= 28 && Application.getProcessName().endsWith(":remoteLab")) return
+        if (android.os.Build.VERSION.SDK_INT < 28 && getSystemService(android.app.ActivityManager::class.java)
+                .runningAppProcesses?.any { it.pid==Process.myPid() && it.processName.endsWith(":remoteLab") } == true) return
+        com.dante.zeekrcapabilitylab.preflight.PreflightRecovery.installInterlock(this)
+        com.dante.zeekrcapabilitylab.runtime.C0Store.installInterlock(this)
         AppLanguage.init(this)
 
         EventLogger.init(this)
@@ -96,7 +102,9 @@ class ZeekrApp : Application() {
                 errorType = crash.exceptionType,
                 errorMessage = crash.message,
             )
-            CrashHandler.clear(this)
+            if (com.dante.zeekrcapabilitylab.diagnostic.ProcessExitDiagnostics.preserveCrash(this, crash)) {
+                CrashHandler.clear(this)
+            }
         }
 
     }

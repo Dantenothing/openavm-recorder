@@ -46,39 +46,10 @@ object BluetoothServer {
     private var accepting = false
     private val connections = CopyOnWriteArrayList<BtConnection>()
 
+    @Suppress("UNUSED_PARAMETER")
     fun start(context: Context) {
-        if (_state.value.running) return
-        val adapter = BluetoothAdapter.getDefaultAdapter()
-        if (adapter == null || !adapter.isEnabled) {
-            _state.value = _state.value.copy(lastError = "Bluetooth disabled")
-            ServerLog.log("BT_SERVER_START_FAILED bluetooth disabled")
-            return
-        }
-        serverSocket = try {
-            adapter.listenUsingRfcommWithServiceRecord("ZeekrBridge", BtProtocol.SERVICE_UUID)
-        } catch (t: Throwable) {
-            _state.value = _state.value.copy(lastError = t.message)
-            ServerLog.log("BT_SERVER_START_FAILED ${t.message}")
-            return
-        }
-        accepting = true
-        _state.value = _state.value.copy(running = true, lastError = null)
-        acceptThread = Thread {
-            val ss = serverSocket
-            while (ss != null && accepting) {
-                val socket = try {
-                    ss.accept()
-                } catch (t: Throwable) {
-                    break
-                }
-                val connection = BtConnection(socket, this)
-                connections += connection
-                Thread { connection.run() }.apply { isDaemon = true }.start()
-                _state.value = _state.value.copy(connectedCars = connections.size, lastClient = socket.remoteDevice?.name)
-                ServerLog.log("BT_ACCEPTED ${socket.remoteDevice?.name ?: "?"}")
-            }
-        }.apply { isDaemon = true; start() }
-        ServerLog.log("BT_SERVER_STARTED ${BtProtocol.SERVICE_UUID}")
+        // The legacy RFCOMM protocol has no v2 identity binding. Do not expose a bypass.
+        _state.value = BluetoothServerState(lastError = "SECURE_TRANSPORT_REQUIRED")
     }
 
     fun stop(context: Context) {

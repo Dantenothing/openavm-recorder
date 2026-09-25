@@ -30,6 +30,11 @@ google-services.json
 .env
 .env.*
 !.env.example
+/.wrangler/
+/diagnostic-relay/.wrangler/
+/diagnostic-relay/.dev.vars*
+# Paused, independent location experiment; not part of the V5 car release.
+/location-probe/
 
 # Real-car captures and generated deliverables
 phone-logs/
@@ -58,6 +63,9 @@ logcat*.txt
 # local workspace but are not part of the AVM Recorder public source tree.
 /ZeekrProbes/
 /docs/
+!/docs/
+/docs/*
+!/docs/v5/
 /tools/
 /CAR_*_PLAN.md
 /IMPLEMENTATION_PLAN.md
@@ -160,10 +168,19 @@ Thumbs.db
 # Private development handoffs and capture/model fixtures; public guides live at the root.
 /OPENAVM_*.md
 /FACEBOOK_POST_*.md
-/app/src/androidTest/
+# Keep private fixture trees ignored, but include the product's emulator regression tests.
+/app/src/androidTest/*
+!/app/src/androidTest/java/
 /app/src/sentryIntegrated/
 /research/*
 !/research/sentry/
 /research/sentry/*
 !/research/sentry/README_V4_ARCHIVE.md
 /sentry-offline/
+
+# Unified phone app private build inputs and internal delivery files.
+/phone-unified/config/private/
+/phone-unified/dist/
+/phone-unified/build/
+/phone-unified/*_WORK.md
+/phone-unified/*_HANDOFF*.md

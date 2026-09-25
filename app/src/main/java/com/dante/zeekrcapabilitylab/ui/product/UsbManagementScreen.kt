@@ -322,7 +322,7 @@ fun UsbManagementScreen(
                                 }) {
                                     Text(Utils.t("Recording report", "录像报告"))
                                 }
-                                TextButton(onClick = onOpenDiagnostics) {
+                                if (com.dante.zeekrcapabilitylab.BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) TextButton(onClick = onOpenDiagnostics) {
                                     Text(Utils.t("Storage diagnostics", "存储诊断"))
                                 }
                             }

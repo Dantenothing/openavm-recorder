@@ -28,7 +28,6 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,10 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -105,11 +101,8 @@ object PhoneSoundRelay {
     private lateinit var payloadRoot: File
     private val _tasks = MutableStateFlow<List<SoundRelayTask>>(emptyList())
     val tasks: StateFlow<List<SoundRelayTask>> = _tasks.asStateFlow()
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
-    private var webSocket: WebSocket? = null
+    private val hintsConnecting = AtomicBoolean(false)
+    @Volatile private var webSocket: WebSocket? = null
     private var fallbackPollJob: Job? = null
     private val reconcileRunning = AtomicBoolean(false)
     @Volatile private var hintsEnabled = false
@@ -282,18 +275,16 @@ object PhoneSoundRelay {
             )
             update(current); postCurrent(current.offer.offerId)
         } catch (t: Throwable) {
-            update(current.copy(state = SoundOfferStates.FAILED_RECOVERABLE, errorCode = "SOUND_RELAY_FAILED", message = t.message ?: t.javaClass.simpleName))
+            update(current.copy(state = SoundOfferStates.FAILED_RECOVERABLE, errorCode = "SOUND_RELAY_FAILED", message = if (t is PhoneSecurityException) phoneSecurityMessage(t.error) else "Sound transfer failed"))
             postCurrent(current.offer.offerId)
         }
     }
 
     private fun reconcile() {
         val endpoint = PhoneConnectionStore.saved() ?: return
-        val request = Request.Builder().url(url(endpoint, "api/outbound"))
-            .header("Authorization", "Bearer ${endpoint.token}").get().build()
-        client.newCall(request).execute().use { response ->
+        execute(endpoint, "/api/outbound").use { response ->
             if (!response.isSuccessful) error("Offer list failed (${response.code})")
-            val list = wireJson.decodeFromString(SoundOfferListResponse.serializer(), response.body?.string().orEmpty())
+            val list = wireJson.decodeFromString(SoundOfferListResponse.serializer(), response.limitedText())
             list.offers.forEach { offer ->
                 if (offer.targetCarDeviceId != PhoneConnectionStore.carId || SoundTransferValidation.validateOffer(offer) != null) return@forEach
                 synchronized(lock) {
@@ -311,9 +302,7 @@ object PhoneSoundRelay {
         val final = File(payloadRoot, "${offer.offerId}.wav")
         val partial = File(payloadRoot, "${offer.offerId}.partial")
         partial.delete()
-        val request = Request.Builder().url(url(endpoint, "api/outbound/${offer.offerId}"))
-            .header("Authorization", "Bearer ${endpoint.token}").get().build()
-        client.newCall(request).execute().use { response ->
+        execute(endpoint, "/api/outbound/${offer.offerId}").use { response ->
             if (!response.isSuccessful) error("Sound download failed (${response.code})")
             val announced = response.body?.contentLength() ?: -1
             if (announced > SoundTransferProtocol.MAX_WAV_BYTES) error("Phone payload exceeds limit")
@@ -358,45 +347,62 @@ object PhoneSoundRelay {
                 targetStorageUuid = task.boundStorageUuid, errorCode = task.errorCode, message = task.message,
             )
             val body = wireJson.encodeToString(SoundInstallStatusUpdate.serializer(), update)
-            val request = Request.Builder().url(url(endpoint, "api/outbound/$offerId/status"))
-                .header("Authorization", "Bearer ${endpoint.token}")
-                .post(body.toRequestBody("application/json".toMediaType())).build()
-            client.newCall(request).execute().use { if (!it.isSuccessful) error("Status failed (${it.code})") }
+            execute(endpoint, "/api/outbound/$offerId/status", "POST", body.toRequestBody("application/json".toMediaType()))
+                .use { if (!it.isSuccessful) error("Status failed (${it.code})") }
         }
     }
 
+    private fun execute(endpoint: PhoneEndpoint, path: String, method: String = "GET", body: okhttp3.RequestBody? = null): Response {
+        val transport = PhoneConnectionStore.transportFor(endpoint)
+        return try { transport.newCall(path, method, body).execute() }
+        catch (t: Exception) { throw PhoneConnectionStore.reportFailure(transport.endpoint, t, transport) }
+    }
+
     private fun connectHints() {
-        if (!hintsEnabled) return
-        val endpoint = PhoneConnectionStore.saved() ?: return
-        webSocket?.cancel()
-        val request = Request.Builder().url("ws://${endpoint.host}:${endpoint.port}/control")
-            .header("Authorization", "Bearer ${endpoint.token}").build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send("""{"type":"HELLO","sequence":${System.currentTimeMillis()},"payload":{"carDeviceId":"${PhoneConnectionStore.carId}"}}""")
-                reconcileInBackground()
-                scope.launch {
-                    while (hintsEnabled && this@PhoneSoundRelay.webSocket === webSocket) {
-                        delay(10_000)
-                        if (!webSocket.send("""{"type":"HEARTBEAT","sequence":${System.currentTimeMillis()},"payload":{}}""")) break
+        if (!hintsEnabled || webSocket != null || !hintsConnecting.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val endpoint = PhoneConnectionStore.requireConnected()
+                val transport = PhoneConnectionStore.transportFor(endpoint)
+                if (!hintsEnabled) return@launch
+                val socket = transport.newWebSocket(object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        if (!hintsEnabled) { webSocket.cancel(); return }
+                        webSocket.send("""{"type":"HELLO","sequence":${System.currentTimeMillis()},"payload":{"carDeviceId":"${PhoneConnectionStore.carId}"}}""")
+                        reconcileInBackground()
+                        scope.launch {
+                            while (hintsEnabled && this@PhoneSoundRelay.webSocket === webSocket) {
+                                delay(10_000)
+                                if (!webSocket.send("""{"type":"HEARTBEAT","sequence":${System.currentTimeMillis()},"payload":{}}""")) break
+                            }
+                        }
                     }
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        if (text.contains("\"FILE_OFFER\"")) reconcileInBackground()
+                    }
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        if (!hintsEnabled) return
+                        val failure = phoneFailure(t)
+                        if (!failure.error.retryable) PhoneConnectionStore.reportFailure(transport.endpoint, t, transport)
+                        // Async delivery also covers a handshake failing before newWebSocket returns.
+                        scope.launch { delay(100); scheduleHintReconnect(webSocket) }
+                    }
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { scheduleHintReconnect(webSocket) }
+                })
+                webSocket = socket
+                if (!hintsEnabled) { socket.cancel(); webSocket = null }
+            } catch (_: Exception) {
+                if (hintsEnabled && PhoneConnectionStore.securityError()?.retryable != false) {
+                    scope.launch { delay(3_000); connectHints() }
                 }
-            }
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                if (text.contains("\"FILE_OFFER\"")) reconcileInBackground()
-            }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                scheduleHintReconnect(webSocket)
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                scheduleHintReconnect(webSocket)
-            }
-        })
+            } finally { hintsConnecting.set(false) }
+        }
     }
 
     private fun scheduleHintReconnect(failed: WebSocket) {
         if (!hintsEnabled || webSocket !== failed) return
         webSocket = null
+        if (PhoneConnectionStore.securityError()?.retryable == false) return
         scope.launch { delay(3_000); if (hintsEnabled) connectHints() }
     }
 
@@ -434,9 +440,6 @@ object PhoneSoundRelay {
             Files.move(temp.toPath(), final.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
-
-    private fun url(endpoint: PhoneEndpoint, path: String): HttpUrl = HttpUrl.Builder()
-        .scheme("http").host(endpoint.host).port(endpoint.port).addPathSegments(path.trim('/')).build()
 
     internal fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")

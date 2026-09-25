@@ -1,0 +1,11 @@
+{
+  "service": "openavm-transfer",
+  "version": 1,
+  "deviceName": "Test phone",
+  "ip": "192.0.0.2",
+  "port": 8766,
+  "securityVersions": [
+    2
+  ],
+  "tlsPort": 8767
+}

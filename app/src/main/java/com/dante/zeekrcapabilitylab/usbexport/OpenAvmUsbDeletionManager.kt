@@ -15,6 +15,7 @@ data class OpenAvmUsbDeleteRequest(
     val recordingKey: String,
     val storageUuid: String,
     val units: List<OpenAvmOwnedUnitRef>,
+    val includeProtected: Boolean = false,
 )
 
 data class OpenAvmUsbDeleteResult(
@@ -57,88 +58,94 @@ class OpenAvmUsbDeletionManager(context: Context) {
             EventLogger.logEvent(Categories.SYSTEM, "USB_MANUAL_DELETE_$stage", payload = mapOf(
                 "operation" to operation, "requested" to requests.size.toString(),
                 "recorderStatus" to recorder.status, "recordingMode" to recorder.recordingMode.name,
-                "previewActive" to recorder.previewActive.toString()) + details)
+                "previewActive" to recorder.previewActive.toString(),
+                "cameraWorkKind" to com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.kind) + details)
         }
         audit("STARTED")
-        if (CameraRecordingService.isRunning()) {
-            audit("BLOCKED", mapOf("reason" to "RECORDING_ACTIVE"))
-            return blocked(requests, "RECORDING_ACTIVE")
+        blockingReason()?.let { reason ->
+            audit("BLOCKED", mapOf("reason" to reason))
+            return blocked(requests, reason)
         }
-        var deletedRecordings = 0
-        var deletedUnits = 0
-        var deletedBytes = 0L
-        val errors = mutableListOf<String>()
-
-        requests.distinctBy { it.recordingKey }.forEach { request ->
-            val outcome = runCatching {
-                UsbMutationCoordinator.withTarget(request.storageUuid) {
-                    val target = UsbExportVolumeResolver.mountedTargets(appContext)
-                        .singleOrNull { it.storageUuid.equals(request.storageUuid, ignoreCase = true) }
-                        ?: error("TARGET_NOT_MOUNTED")
-                    val freshSegments = segmentCatalog.snapshot(target).segments
-                        .associateBy { it.manifestData.bundleId }
-                    val freshLegacy = legacyCatalog.snapshot(target).completeExports
-                        .associateBy { it.exportKey }
-                    val units = request.units.distinct()
-                    require(units.isNotEmpty()) { "NO_VERIFIED_OWNED_UNITS" }
-
-                    val segments = units.filter { it.kind == OpenAvmOwnedUnitKind.SEGMENT_BUNDLE }
-                        .map { ref -> freshSegments[ref.id] ?: error("SEGMENT_NOT_FRESH:${ref.id.take(12)}") }
-                    val legacy = units.filter { it.kind == OpenAvmOwnedUnitKind.LEGACY_EXPORT }
-                        .map { ref -> freshLegacy[ref.id] ?: error("EXPORT_NOT_FRESH:${ref.id.take(12)}") }
-
-                    segments.forEach { bundle ->
-                        require(!bundle.manifestData.protected) { "USB_SEGMENT_PROTECTED" }
-                        require(!UsbBundleLeaseRegistry.isLeased(target.storageUuid, bundle.manifestData.bundleId)) {
-                            "USB_SEGMENT_TRANSFER_ACTIVE"
-                        }
-                        require(!isPlaying(target, listOf(bundle.video))) { "USB_SEGMENT_PLAYING" }
-                    }
-                    legacy.forEach { export ->
-                        require(!isPlaying(target, export.assets.filter { it.mimeType == "video/mp4" })) {
-                            "USB_EXPORT_PLAYING"
-                        }
-                    }
-
-                    val bytes = segments.sumOf { it.existingBytes } + legacy.sumOf { it.existingBytes }
-                    segments.forEach { segmentRetention.deleteValidatedBundle(target, it) }
-                    legacy.forEach { deleteLegacy(target, it) }
-
-                    // A final fresh catalog must no longer expose any requested complete unit.
-                    val remainingSegments = segmentCatalog.snapshot(target).segments
-                        .mapTo(mutableSetOf()) { it.manifestData.bundleId }
-                    val remainingLegacy = legacyCatalog.snapshot(target).completeExports
-                        .mapTo(mutableSetOf()) { it.exportKey }
-                    require(units.none { ref ->
-                        when (ref.kind) {
-                            OpenAvmOwnedUnitKind.SEGMENT_BUNDLE -> ref.id in remainingSegments
-                            OpenAvmOwnedUnitKind.LEGACY_EXPORT -> ref.id in remainingLegacy
-                        }
-                    }) { "POST_DELETE_CATALOG_VERIFY_FAILED" }
-                    units.size to bytes
+        val began = System.nanoTime()
+        var catalogNanos = 0L
+        var deleteNanos = 0L
+        var lockWaitNanos = 0L
+        var catalogSnapshots = 0
+        fun snapshot(target: UsbExportTarget, kinds: Set<OpenAvmOwnedUnitKind>): DeleteInventory {
+            val started = System.nanoTime()
+            try {
+                catalogSnapshots++
+                return DeleteInventory(target,
+                    if (OpenAvmOwnedUnitKind.SEGMENT_BUNDLE in kinds) segmentCatalog.snapshot(target).segments
+                        .associateBy { it.manifestData.bundleId } else emptyMap(),
+                    if (OpenAvmOwnedUnitKind.LEGACY_EXPORT in kinds) legacyCatalog.snapshot(target).completeExports
+                        .associateBy { it.exportKey } else emptyMap())
+            } finally { catalogNanos += System.nanoTime() - started }
+        }
+        val result = UsbManualDeleteBatch(
+            withTarget = { uuid, action ->
+                val waiting = System.nanoTime()
+                UsbMutationCoordinator.withTarget(uuid) {
+                    lockWaitNanos += System.nanoTime() - waiting
+                    action()
                 }
-            }
-            outcome.onSuccess { (unitCount, bytes) ->
-                deletedRecordings += 1
-                deletedUnits += unitCount
-                deletedBytes += bytes
-            }.onFailure { error ->
-                errors += "${request.recordingKey}:${error.message ?: error.javaClass.simpleName}"
-            }
-        }
-        val result = OpenAvmUsbDeleteResult(
-            requestedRecordings = requests.distinctBy { it.recordingKey }.size,
-            deletedRecordings = deletedRecordings,
-            deletedUnits = deletedUnits,
-            deletedBytes = deletedBytes,
-            blockedRecordings = requests.distinctBy { it.recordingKey }.size - deletedRecordings,
-            errors = errors,
-        )
+            },
+            inspect = { uuid, kinds ->
+                blockingReason()?.let { error(it) }
+                val target = UsbExportVolumeResolver.mountedTargets(appContext)
+                    .singleOrNull { it.storageUuid.equals(uuid, ignoreCase = true) } ?: error("TARGET_NOT_MOUNTED")
+                snapshot(target, kinds)
+            },
+            remove = { inventory: DeleteInventory, request ->
+                val started = System.nanoTime()
+                try { deleteRequested(inventory, request) }
+                finally { deleteNanos += System.nanoTime() - started }
+            },
+            remaining = { inventory, kinds ->
+                val target = UsbExportVolumeResolver.resolveExact(appContext, inventory.target) ?: error("TARGET_NOT_MOUNTED")
+                val after = snapshot(target, kinds)
+                after.segments.keys.map { OpenAvmOwnedUnitRef(OpenAvmOwnedUnitKind.SEGMENT_BUNDLE, it) }.toSet() +
+                    after.legacy.keys.map { OpenAvmOwnedUnitRef(OpenAvmOwnedUnitKind.LEGACY_EXPORT, it) }
+            },
+        ).delete(requests)
         audit("COMPLETED", mapOf("deletedRecordings" to result.deletedRecordings.toString(),
             "deletedUnits" to result.deletedUnits.toString(), "blockedRecordings" to result.blockedRecordings.toString(),
+            "elapsedMs" to ((System.nanoTime() - began) / 1_000_000).toString(),
+            "catalogMs" to (catalogNanos / 1_000_000).toString(), "catalogSnapshots" to catalogSnapshots.toString(),
+            "deleteMs" to (deleteNanos / 1_000_000).toString(), "lockWaitMs" to (lockWaitNanos / 1_000_000).toString(),
             "errors" to result.errors.take(3).joinToString("; ").take(500)))
         return result
     }
+
+    private data class DeleteInventory(val target: UsbExportTarget,
+        val segments: Map<String, UsbOwnedSegmentBundle>, val legacy: Map<String, UsbOwnedExport>)
+
+    private fun deleteRequested(inventory: DeleteInventory, request: OpenAvmUsbDeleteRequest): Long {
+        blockingReason()?.let { error(it) }
+        val target = UsbExportVolumeResolver.resolveExact(appContext, inventory.target) ?: error("TARGET_NOT_MOUNTED")
+        val segments = request.units.filter { it.kind == OpenAvmOwnedUnitKind.SEGMENT_BUNDLE }
+            .map { ref -> inventory.segments[ref.id] ?: error("SEGMENT_NOT_FRESH:${ref.id.take(12)}") }
+        val legacy = request.units.filter { it.kind == OpenAvmOwnedUnitKind.LEGACY_EXPORT }
+            .map { ref -> inventory.legacy[ref.id] ?: error("EXPORT_NOT_FRESH:${ref.id.take(12)}") }
+        segments.forEach { bundle ->
+            require(!bundle.manifestData.protected || request.includeProtected) { "USB_SEGMENT_PROTECTED" }
+            require(!UsbBundleLeaseRegistry.isLeased(target.storageUuid, bundle.manifestData.bundleId)) {
+                "USB_SEGMENT_TRANSFER_ACTIVE"
+            }
+            require(!isPlaying(target, listOf(bundle.video))) { "USB_SEGMENT_PLAYING" }
+        }
+        legacy.forEach { export ->
+            require(!isPlaying(target, export.assets.filter { it.mimeType == "video/mp4" })) { "USB_EXPORT_PLAYING" }
+        }
+        val bytes = segments.sumOf { it.existingBytes } + legacy.sumOf { it.existingBytes }
+        blockingReason()?.let { error(it) }
+        segments.forEach { segmentRetention.deleteValidatedBundle(target, it) }
+        legacy.forEach { deleteLegacy(target, it) }
+        return bytes
+    }
+
+    private fun blockingReason() = UsbDeleteAdmission.blockingReason(CameraRecordingService.isRunning(),
+        com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value)
 
     private fun deleteLegacy(target: UsbExportTarget, export: UsbOwnedExport) {
         val ordered = listOf(export.manifest) + export.assets

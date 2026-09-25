@@ -128,10 +128,20 @@ internal object FourLaneTextureLayout {
     private const val STRONG_FOUR_LANE_RATIO = 3.2f
     private const val MAX_SEPARATOR_FRACTION = 0.125f
 
-    fun windowForLane(videoWidth: Int, videoHeight: Int, lane: Int): LaneTextureWindow {
+    fun windowForLane(videoWidth: Int, videoHeight: Int, lane: Int,
+        lanes: List<com.dante.zeekrbridge.core.IndexedLane> = emptyList()): LaneTextureWindow {
         require(videoWidth > 0) { "videoWidth must be positive" }
         require(videoHeight > 0) { "videoHeight must be positive" }
         require(lane in 1..4) { "lane must be in 1..4" }
+
+        if (lanes.isNotEmpty()) {
+            val source = lanes.single { it.lane == lane }
+            require(source.x0 >= 0 && source.y0 >= 0 && source.x1 > source.x0 && source.y1 > source.y0 &&
+                source.x1 <= videoWidth && source.y1 <= videoHeight)
+            return LaneTextureWindow(source.x0.toFloat() / videoWidth, source.y0.toFloat() / videoHeight,
+                (source.x1 - source.x0).toFloat() / videoWidth, (source.y1 - source.y0).toFloat() / videoHeight,
+                source.x0.toFloat(), source.y0.toFloat(), (source.x1 - source.x0).toFloat(), (source.y1 - source.y0).toFloat())
+        }
 
         val classified = FourLaneLayoutClassifier.classify(videoWidth, videoHeight)
         if (classified?.kind == IndexedLayoutKind.FOUR_LANE_GRID_2X2) {

@@ -1,6 +1,8 @@
 package com.dante.zeekrcapabilitylab.usbexport
 
 import android.content.Context
+import com.dante.zeekrcapabilitylab.service.recorder.PlaybackPinRegistry
+import java.io.File
 import java.util.Locale
 import kotlinx.serialization.json.Json
 
@@ -80,7 +82,7 @@ class UsbExportCatalog(
         target: UsbExportTarget,
         incomingBytes: Long,
         protectedExportKey: String,
-    ): UsbQuotaCleanupResult {
+    ): UsbQuotaCleanupResult = UsbMutationCoordinator.withTarget(target.storageUuid) {
         if (incomingBytes > UsbExportPolicy.OPENAVM_QUOTA_BYTES) {
             throw UsbExportQuotaException(
                 "EXPORT_EXCEEDS_OPENAVM_QUOTA",
@@ -90,12 +92,19 @@ class UsbExportCatalog(
         val before = snapshot(target)
         var required = before.namespaceBytes + incomingBytes - UsbExportPolicy.OPENAVM_QUOTA_BYTES
         if (required <= 0L) {
-            return UsbQuotaCleanupResult(before.namespaceBytes, 0L, before.namespaceBytes)
+            return@withTarget UsbQuotaCleanupResult(before.namespaceBytes, 0L, before.namespaceBytes)
         }
 
         var reclaimed = 0L
         for (export in before.completeExports) {
             if (export.exportKey == protectedExportKey) continue
+            val root = target.directoryPath?.let(::File) ?: continue
+            if (export.assets.any { asset ->
+                    asset.displayName?.let { name ->
+                        val directory = File(root, asset.relativePath.orEmpty().trim('/', '\\'))
+                        PlaybackPinRegistry.isPinned(File(directory, name))
+                    } == true
+                }) continue
             val expectedReclaim = export.existingBytes
             deleteValidatedExport(target, export)
             reclaimed += expectedReclaim
@@ -110,7 +119,7 @@ class UsbExportCatalog(
                 "OpenAVM owns files that could not be validated and safely reclaimed",
             )
         }
-        return UsbQuotaCleanupResult(
+        UsbQuotaCleanupResult(
             ownedBytesBefore = before.namespaceBytes,
             reclaimedBytes = reclaimed,
             ownedBytesAfter = after.namespaceBytes,

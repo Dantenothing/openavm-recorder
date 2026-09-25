@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Research components and installation permissions belong to internal debug builds only. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <application>
+        <service android:name=".runtime.C0ParkingService" android:exported="false" android:foregroundServiceType="camera" />
+        <activity android:name=".runtime.ParkingDiagnosticsActivity" android:exported="false"
+            android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <service android:name=".enhancement.ConcurrentRecordingService" android:exported="false" android:foregroundServiceType="camera" />
+        <service android:name=".preflight.PreflightService" android:exported="false" android:foregroundServiceType="camera|dataSync" />
+        <service android:name=".preflight.cloud.DiagnosticUploadJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".preflight.remote.RemoteLabService" android:process=":remoteLab" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".preflight.remote.LabUpdateReceiver" android:process=":remoteLab" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
+        <activity android:name=".preflight.PreflightActivity" android:exported="false" android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <activity android:name="com.dante.zeekrcapabilitylab.mirror.MirrorGlTestActivity"
+            android:exported="false" android:hardwareAccelerated="true" />
+        <activity android:name=".mirror.MirrorSleepTestHostActivity" android:exported="false" />
+    </application>
+</manifest>

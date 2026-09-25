@@ -64,6 +64,7 @@ object VehicleAwayProbe {
     fun init(appContext: Context) {
         if (::context.isInitialized) return
         context = appContext.applicationContext
+        AwayJournal.init(context)
         scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "vehicle-away-probe").apply { isDaemon = true }
         }
@@ -79,6 +80,12 @@ object VehicleAwayProbe {
         recordCapabilities()
         snapshot("PROBE_INITIALIZED")
         refreshPowerSnapshot("PROBE_INITIALIZED")
+        scheduler.scheduleWithFixedDelay({
+            if (AwayJournal.observing || CameraRecordingService.isRunning() ||
+                com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.isRunning()) {
+                snapshot("POWER_PASSIVE_SNAPSHOT")
+            }
+        }, 60, 60, TimeUnit.SECONDS)
     }
 
     fun recordAppState(foreground: Boolean) {
@@ -145,6 +152,15 @@ object VehicleAwayProbe {
                 put("probeId", incidentId)
                 put("processStartId", ZeekrApp.processStartId)
                 put("interactive", (power?.isInteractive == true).toString())
+                put("mainDisplayId", Display.DEFAULT_DISPLAY.toString())
+                put("elapsed", android.os.SystemClock.elapsedRealtime().toString())
+                put("uptime", android.os.SystemClock.uptimeMillis().toString())
+                put("standalonePreview", com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.isPreviewing().toString())
+                put("floatingControls", com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.active().toString())
+                put("captureCallbackAgeMs", com.dante.zeekrcapabilitylab.service.recorder.RecorderCaptureEvidence.latest.lastReceivedElapsedMs
+                    ?.let { (android.os.SystemClock.elapsedRealtime()-it).coerceAtLeast(0).toString() } ?: "UNKNOWN")
+                put("cleanupOwners", com.dante.zeekrcapabilitylab.service.recorder.CaptureCleanupRuntime.pendingOwners.value.toString())
+                put("experimentalC0Active", com.dante.zeekrcapabilitylab.runtime.C0ParkingService.state.value.active.toString())
                 put("displays", displays)
                 put("appForeground", ZeekrApp.isForeground.value.toString())
                 put("activity", MainActivity.currentState.value)

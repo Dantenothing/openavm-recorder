@@ -28,6 +28,41 @@ class SegmentSidecarTest {
 
     private val profile = CameraFormatProfile(ProfileSize(1280, 5140), 14_000_000)
 
+    @Test fun continuousSidecarSeparatesCameraRasterFromEncodedTrackAndFileTimeline() {
+        val source = sampleSidecar(tempMp4()).copy(
+            actualTrack = ActualTrackInfo(width = 3840, height = 1728),
+            laneLayout = com.dante.zeekrcapabilitylab.service.recorder.SegmentLaneLayoutFactory.forProfile(
+                1280, 5140, emptyList(), emptyList(), emptyList()))
+        val contract = io.github.dantenothing.avmtransfer.protocol.StripRepackContract(inputWidth = 1280,
+            inputHeight = 5140, stripHeight = 1728, encodedWidth = 3840, encodedHeight = 1728)
+        val timeline = io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline(runId = source.recordingSessionId!!,
+            firstPtsUs = 60_000_000, lastPtsUs = 119_966_667, endExclusivePtsUs = 120_000_000,
+            frames = 1800, startsWithKeyFrame = true)
+        val output = source.withContinuousRaster(contract, timeline)
+        val raw = SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), output)
+        val restored = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), raw)
+        assertEquals(output, restored)
+        assertEquals(9, restored.schemaVersion)
+        assertEquals(5140, restored.profile.size.height)
+        assertEquals(1728, restored.actualTrack?.height)
+        assertEquals(60_000_000L, restored.continuousTimeline?.firstPtsUs)
+        assertTrue(io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(raw) is
+            io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
+        assertTrue(runCatching { source.copy(profile = profile.copy(size = ProfileSize(3840, 1728)))
+            .withContinuousRaster(contract, timeline) }.isFailure)
+        assertTrue(runCatching { source.withContinuousRaster(contract, timeline.copy(runId = "wrong")) }.isFailure)
+        val lapse = source.copy(recordingMode = RecordingMode.TIME_LAPSE, timeLapseMultiplier = 150,
+            realDurationMs = 60_000, requestedCaptureRateFps = 0.2,
+            captureSubmissionMode = CaptureSubmissionMode.REPEATING_ENCODER)
+            .withContinuousRaster(contract, timeline.copy(firstPtsUs = 0, lastPtsUs = 366_666,
+                endExclusivePtsUs = 400_000, frames = 12))
+        val decoded = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(),
+            SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), lapse))
+        assertEquals(150, decoded.timeLapseMultiplier); assertEquals(60_000L, decoded.realDurationMs)
+        assertEquals(400_000L, decoded.continuousTimeline?.endExclusivePtsUs)
+        assertEquals(CaptureSubmissionMode.REPEATING_ENCODER, decoded.captureSubmissionMode)
+    }
+
     private fun sampleSidecar(mp4: File, protected: Boolean = false) = SegmentSidecar(
         file = mp4.absolutePath,
         cameraId = "2",
@@ -75,6 +110,19 @@ class SegmentSidecarTest {
         assertEquals("session-1700000000000-a", decoded?.recordingSessionId)
         assertEquals(RecordingSourceRole.SURROUND, decoded?.sourceRole)
         assertEquals(RecordingLayoutKind.FOUR_LANE_V1, decoded?.layoutKind)
+    }
+
+    @Test
+    fun playbackReadsInternalAndDirectUsbSidecarNames() {
+        val mp4 = tempMp4()
+        val sidecar = sampleSidecar(mp4).copy(eventId = "event", eventRequestedAtEpochMs = 3000)
+        val usbMetadata = File(mp4.parentFile, mp4.nameWithoutExtension + ".sidecar.json")
+        usbMetadata.writeText(SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), sidecar))
+        assertEquals(sidecar, SegmentSidecarIO.readForMedia(mp4))
+        assertEquals(2000L, com.dante.zeekrcapabilitylab.player.ManualBookmarkTimeline.from(SegmentSidecarIO.readForMedia(mp4)).single().positionMs)
+        val internal = sidecar.copy(eventId = "internal", eventRequestedAtEpochMs = 4000)
+        SegmentSidecarIO.writeAtomic(mp4, internal)
+        assertEquals(internal, SegmentSidecarIO.readForMedia(mp4))
     }
 
     @Test

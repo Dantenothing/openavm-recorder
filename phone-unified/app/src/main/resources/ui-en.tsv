@@ -1,0 +1,2136 @@
+一二三四五六日	Mon Tue Wed Thu Fri Sat Sun
+一次弄明白	Get started in a few steps
+一键备车	Prepare car
+一键找车	Find car
+上一步	Previous
+上一轮结果尚未确认	Previous result is not confirmed
+上次位置	Last location
+上次刷新未完成	Last refresh did not finish
+上次备车	Last preparation
+上次备车详情	Last preparation details
+上次操作中断	Previous operation interrupted
+上次测量	Last measured
+上次记录	Last reported
+上次车温	Last cabin temperature
+下一次需重新导入	Import again next time
+下一步	Next
+下一目标	Next target
+下一程	Your next trip
+下次停车恢复自动守护	Auto guard resumes at the next stop
+下次停车重新判断守护	Recheck guard at the next stop
+下次出发	Next departure
+下次备车目标	Next preparation target
+下次自动恢复	Resumes next time
+下次里程增长可补充识别行程	A later odometer increase can identify the next trip
+下车后尽快检查	Check soon after leaving the car
+不代表具备控制权限	Does not establish control permission
+不代表原厂漆色的精确色差	Not an exact factory paint match
+不代表每项数据都单独在此时采样	Individual readings may have different sample times
+不会保存	Will not be saved
+不会把查询时间替代车辆采样时间	Query time never replaces the vehicle sample time
+不会用车温冒充设定值	Cabin temperature is not the AC setpoint
+不会重新发送	Will not resend
+不使用手机位置代替车辆	Phone location is not used as the car location
+不包含登录凭据	No login credentials included
+不包含账号	No account details included
+不发送空调	Do not send AC commands
+不展示位置	Hide location
+不循环响铃	No repeated honking
+不把它当作关闭	Unknown does not mean off
+不用于识别车辆	Not used to identify the vehicle
+不申请定位	Does not request location
+不能作为本车权限验证	Cannot verify this vehicle's permissions
+不能据此显示	Cannot show
+不能据此认定不支持	Does not establish lack of support
+不能据此认定无权限	Does not establish lack of permission
+不补发过时备车	Do not run missed preparation jobs
+不要把密钥或密码发到聊天	Do not send keys or passwords in chat
+不采用旧查询	Older queries are ignored
+不采用较早的停车状态	Older parking reports are ignored
+不重复发送	Do not send again
+不需要手动输入坐标	No manual coordinates needed
+不需要每次输入密码	No need to enter your password each time
+不需要私人服务器	No private server required
+与	and
+且两次至少间隔	with at least
+且间隔至少	with an interval of at least
+两前排	Both front seats
+个可读	readable
+个字符	characters
+个字符的地址	characters in the address
+个本机录像	local recordings
+临时配置未能清除	Could not clear temporary configuration
+为	is
+为上次记录	last reported
+为什么执行	Why it ran
+也不代表当前车辆状态	Does not establish the current vehicle state
+也不会触发离家守护	Will not trigger away guard
+也可以直接下一步	You can also continue
+也未据此扩大或推断权限	No additional permissions inferred
+亮黄	Bright yellow
+仅左前座椅	Front left seat only
+仅表示接口提供的分组	The API grouping only
+仍受电池优化	Still subject to battery optimisation
+仍可搜索地址或使用车辆位置	You can search an address or use the vehicle location
+仍需位置	Location is still required
+仍需核对是否为车辆采样时间	Vehicle sampling time still needs verification
+令牌	Token
+以后优先恢复会话	Saved sessions are restored on later launches
+以车辆位置和停车记录决定守护	Guard uses vehicle location and parking evidence
+优先复用会话	Reuse the saved session first
+会自动恢复	Restores automatically
+会话凭据格式无效	Invalid session credentials
+会话恢复未完成	Session restore incomplete
+会话有效	Session valid
+会话设备格式无效	Invalid session device
+会话配置格式无效	Invalid session configuration
+会话需重新验证	Session needs verification
+但加密保存会话失败	Could not save the encrypted session
+但加密保存失败	Encrypted save failed
+但重开	On reopening
+位置过期时显示上次记录	Show last known location when stale
+位置须可信	A reliable location is required
+使用下一个该时刻	Use the next occurrence
+使用当前车辆位置	Use current vehicle location
+使用手机当前位置	Use phone location
+使用此颜色	Use this colour
+使用车辆上次上报的位置	Use the last reported vehicle location
+例如	For example
+供电脑核对	For local diagnostics
+保存	Save
+保存不会启动车辆	Saving does not start the car
+保存偏好不会发送指令	Saving preferences does not send commands
+保存偏好不会启动备车	Saving preferences does not start preparation
+保存偏好不会启动车辆	Saving preferences does not start the car
+保存后生效	Takes effect after saving
+保存备注	Save note
+保存备车偏好	Save preparation preferences
+保存外观	Save appearance
+保存失败	Save failed
+保存家的位置与范围	Save home and radius
+保存的登录状态未能完整删除	Saved login could not be fully removed
+保存预约	Save schedule
+保持哨兵当前状态	Keep the current sentry state
+保持登录	Stay signed in
+保留上次温度	Keep last temperature
+保留上次记录	Keep last reading
+保留可用记录	Keep available readings
+保留备车	Keep preparation
+保留本次停车选择	Keep this stop's choice
+修改	Edit
+修改下次备车偏好	Change next preparation preferences
+修改预约	Edit schedule
+值未知或超出校验范围	Unknown or out-of-range value
+偏冷时选择加热	Use heating when cold
+偏热时选择通风	Use ventilation when hot
+停机以回读为准	Confirm stopping from vehicle feedback
+停止本轮检查	Stop this check
+停止请求	Stop requesting
+停用	Disable
+停车位置与家	Location and home
+停车守护	Parking guard
+停车行程复查	Parking trip recheck
+允许任务通知	Allow task notifications
+允许定时权限后才能安排执行	Scheduling requires alarm permission
+允许按需开启	Allow when needed
+允许范围与运行时长	Allowed features and duration
+允许闹钟与提醒	Allow alarms and reminders
+充电上限	Charge limit
+充电与电量	Charging and battery
+充电功率	Charging power
+充电口	Charge port
+充电口关	Port closed
+充电口和更多车况	Charge port and more vehicle details
+充电口已上报打开	Vehicle reports charge port open
+充电口开	Port open
+充电口控制	Charge port controls
+充电电压	Charging voltage
+充电电流	Charging current
+充电遥测	Charging telemetry
+充电遥测及现有预约	Charging telemetry and saved schedules
+充电预约	Charge schedule
+先准备连接	Set up connection first
+先导入本机提取的协议	First import the locally extracted protocol
+先核实上次备车	Check the previous preparation first
+先设置并核对家的位置	Set and verify home first
+先读取车温	Read cabin temperature first
+全选	Select all
+全部正常	All normal
+公钥	Public key
+共享账号	Shared account
+关闭	Off
+关闭充电口	Close charge port
+关闭原厂哨兵	Turn factory sentry off
+关闭后	When off
+关闭哨兵	Turn sentry off
+关闭空调	Turn AC off
+关闭自定义车牌	Hide custom plate
+关闭请求尚未发送	Off request not sent yet
+关闭车窗	Close windows
+其他偏好和预约不受影响	Other preferences and schedules are unchanged
+内保存的文字仍保留	Saved text is kept
+内容为空	Content is empty
+内容待本车核对	Verify content on this vehicle
+再决定备车时是否允许座椅通风或加热	Then allow seat heating or ventilation as needed
+再按本次偏好备车	Then use the current preparation preferences
+再按需要启用停车守护或预约用车	Then enable parking guard or departure schedules as needed
+再检查本车	Then check this vehicle
+再次打开应用会恢复调度	Opening the app restores scheduling
+再用获得授权的极氪账号登录并选择车辆	Then sign in with your authorised Zeekr account and select the vehicle
+再设置它的外观	Then set its appearance
+再选择允许的舒适功能	Then choose allowed comfort features
+再选择打开或关闭	Then choose open or close
+出发前读取车温	Read cabin temperature before departure
+出发时间	Departure time
+出发计划	Departure plan
+出发预约	Departure schedule
+分	min
+分钟	minutes
+分钟内	minutes ago
+分钟再次核对位置与驻车	minutes before rechecking location and parking
+分钟及当前舒适偏好	minutes and current comfort preferences
+分钟安排查询	minutes between scheduled queries
+分钟检查	minutes between checks
+分钟的两次查询均确认已驻车	minutes apart both confirm parking
+切到后台会取消未发送目标	Unsent targets are cancelled when the app goes to the background
+切换到它后才能操作	Select that vehicle before controlling it
+切换到此车辆后操作	Select this vehicle before controlling it
+切换座椅档位	Change seat level
+切换账号请先退出	Sign out before switching accounts
+刚刷新不等于新车况	A new query does not mean new vehicle data
+删除	Delete
+删除本机连接配置与会话	Remove local configuration and session
+到	to
+到家不会自动关闭	Sentry stays on after arriving home
+到家关闭	Turn off at home
+到家关闭已启用	Home shutoff enabled
+到家关闭由上方独立开关控制	Home shutoff has its own switch above
+到家关闭等待有效位置	Home shutoff needs a valid location
+到家再次确认	Confirm arrival again
+到家待确认	Arrival awaiting confirmation
+到家自动关闭哨兵	Turn sentry off after arriving home
+到家自动关闭已停用	Home shutoff disabled
+到家自动关闭未启用	Home shutoff not enabled
+刷新	Refresh
+刷新不会把旧数据变成实时	Refreshing does not make old data live
+刷新图标读取车况	Use refresh to read vehicle status
+刷新座椅与空调状态	Refresh seats and AC
+刷新未能启动	Could not start refresh
+刷新车辆位置	Refresh vehicle location
+刷新车辆状态	Refresh vehicle status
+包含共享车辆	Includes shared vehicles
+匹配中	Matching
+匹配地址或使用当前位置	Find an address or use current location
+区	region
+单位待本车核对	Verify units on this vehicle
+卡片	Widget
+卡片会保留数据时间	The widget keeps the data timestamp
+卡片刷新	Widget refresh
+卡片操作	Widget action
+卡片显示实际回传状态	The widget shows reported vehicle states
+卡片显示进度和数据时间	The widget shows progress and data time
+卡片设置未能保存	Could not save widget settings
+即使存在字段	Even if a field exists
+原厂	Factory
+原厂哨兵	Factory sentry
+原厂哨兵与停车守护	Sentry and parking guard
+原厂已驻车	Factory status: parked
+原厂驻车状态	Factory parking status
+原因待核对	Reason needs checking
+原生出发预约	Native departure schedule
+原设置已保留	Previous settings kept
+去连接车辆	Connect vehicle
+发现里程增长	Odometer increased
+发送一次鸣笛请求	Send one horn request
+发送原厂尾门解锁或锁定请求	Send a factory tailgate lock or unlock request
+发送已中断	Sending interrupted
+取消	Cancel
+取消尚未发送的目标	Cancel unsent targets
+取消未发送的目标	Cancel pending targets
+受理后需在原厂	After acceptance, check in the factory
+只导入文件	Import the file only
+只有观察到本次停车中哨兵由开变关才能识别	Detection requires observing sentry change from on to off during this stop
+只看到定位变化	Only a location change was observed
+只证明读取端点可达	Only proves the read endpoint is reachable
+只读自检	Read-only check
+可以三项全选	All three can be allowed
+可以先浏览其他功能	You can explore other features first
+可以改用地址搜索	Try address search instead
+可以查看识别范围	You can review the home radius
+可以用手机当前位置设为家	You can set home from the phone location
+可以直接下一步	Continue to the next step
+可以稍后点	You can do this later
+可先核对协议配置	Check the protocol configuration first
+可刷新车况	Refresh vehicle status
+可回到本车	Return to this vehicle
+可在应用结束	End it in the app
+可操作	Available to control
+可查看	Available to view
+可点右上角重试	Tap the top-right button to retry
+可能尚未设置	May not be configured yet
+可能需要重新登录	Sign-in may be required again
+可调整为不限制	You can choose Unrestricted
+可选	Optional
+右上角箭头打开应用	The top-right arrow opens the app
+右前座椅	Front right seat
+右前座椅加热	Front right seat heating
+号	number
+号码只用于本助手展示	Plate text is only displayed in this assistant
+各项状态保留各自采样时间	Each reading retains its own sample time
+各项车辆采样时间单独核对	Check each vehicle sample time separately
+同一时间的里程不一致	Conflicting odometer readings at the same timestamp
+同时照顾两张前排座椅	Apply to both front seats
+名称	Name
+后台	Background
+后台与自动化	Background and automation
+后台定期检查	Periodic background checks
+后台权限与只读自检	Background permissions and read-only check
+后台查询车况	Background vehicle queries
+后台省电	Background battery limits
+后台联网	Background network access
+后自动载入	Load automatically afterwards
+启用后	When enabled
+启用后约每	When enabled, about every
+启用离家守护或到家关闭后也会安排检查	Away guard or home shutoff also schedules checks
+告诉助手哪里是家	Set your home location
+和	and
+和精确位置	and precise location
+响应格式不符合预期	Unexpected response format
+哨兵	Sentry
+哨兵与数据时效一起核对	Check sentry and data freshness together
+哨兵已关	Sentry off
+哨兵已关闭	Sentry is off
+哨兵已开	Sentry on
+哨兵已自动关闭	Sentry turned off automatically
+哨兵接口返回开启	Sentry API reports on
+哨兵未知	Sentry unknown
+哨兵状态未知	Sentry state unknown
+哨兵自动化	Sentry automation
+四键方形卡片	Four-button square
+四键横条	Four-button bar
+回收站与配对	Recycle bin and pairing
+回看和导出原厂哨兵视频	View and export factory sentry footage
+回读	Reported
+回读显示未知时	When feedback is unknown
+在	at
+在后台设置里检查通知	Check notifications in background settings
+在地图查看位置	View location on map
+在地图查看选中位置	View selected location on map
+在小组件中选择	Select from the widgets list
+在本应用关闭哨兵会暂停本次守护	Turning sentry off here pauses guard for this stop
+在本应用开启会立即保留	Turning it on here immediately preserves it
+地区	Area
+地区或邮编	Area or postcode
+地图与停车备注	Map and parking note
+地址与停车备注	Address and parking note
+地址匹配暂不可用	Address matching is unavailable
+地址匹配超时	Address search timed out
+地址匹配需要网络	Address search needs a network connection
+地址待核对	Address needs verification
+地址未解析	Address not resolved
+地址解析暂不可用	Address lookup is unavailable
+基础车况	Basic vehicle status
+声音次数由原厂车辆执行	The vehicle decides the actual horn pattern
+备车	Preparation
+备车任务	Preparation task
+备车偏好	Preparation preferences
+备车已到时	Preparation time elapsed
+备车已受理	Preparation accepted
+备车未启动	Preparation not started
+备车结果待核实	Preparation result unconfirmed
+备车观察已中断	Preparation monitoring interrupted
+备车详情	Preparation details
+复用已保存的登录	Reuse saved login
+外观设置无效	Invalid appearance settings
+多个卡片共用数据	Widgets share the same data
+大尺寸显示六个操作与更多车况	Larger widgets show six controls and more status
+天蓝	Sky blue
+字段	Field
+字段可读	Field readable
+字段缺失	Field missing
+字母	Letters
+字节	bytes
+存在有效坐标	Valid coordinates available
+守护规则	Guard rules
+安装包核对协议参数与签名方式	APK verified protocol parameters and signing
+完成验证	Verification complete
+完整或部分	Complete or partial
+定位漂移或重启应用不会取消你的选择	Location drift or restarting the app will not clear your choice
+定期查询仍可使用	Periodic queries remain available
+实车测试已启用	Vehicle testing enabled
+实际大小由手机桌面网格决定	Actual size depends on the launcher's grid
+实际结果和后台执行分别验证	Physical results and background execution need separate checks
+实际结果待核实	Actual result unconfirmed
+家	Home
+家中或家附近	At or near home
+家周围	Around home
+家外	Away
+家外停车已确认	Parking away from home confirmed
+家的位置	Home location
+家的位置已保存	Home location saved
+家的范围	Home radius
+家的范围已更新	Home radius updated
+家附近	Near home
+容忍车辆定位偏移	Allow for vehicle location drift
+密码	Password
+密码不会保存	Your password is not saved
+对象格式的协议配置	Object-format protocol configuration
+导入协议配置	Import protocol configuration
+导入配置	Import configuration
+导出包含检查结果和来源时间	Export includes results and source timestamps
+导出脱敏报告	Export redacted report
+导出诊断报告	Export diagnostics
+将使用操作回传更新	Will update from operation feedback
+将发送到当前所选车辆	Will send to the selected vehicle
+小尺寸下可能看不清	May be hard to read at small sizes
+小尺寸保留四个常用操作	Small widgets keep four common controls
+小组件图片中也不含号码	The widget image also omits the plate text
+尚无已配对设备	No paired devices
+尚无明确里程增长	No clear odometer increase yet
+尚未取得	Not available yet
+尚未执行后台查询	No background query yet
+尚未添加桌面卡片	No home-screen widget added
+尚未连接	Not connected yet
+尚未连接车辆服务	Vehicle service not connected
+尚未验证控制	Control not verified
+尾号	Last digits
+尾门	Tailgate
+尾门已关	Tailgate closed
+尾门已开	Tailgate open
+尾门已打开	Tailgate is open
+尾门开合	Tailgate operation
+尾门未知	Tailgate unknown
+层	level
+展示车牌	Show plate
+展示车牌放大预览	Enlarged plate preview
+属于拟开发规则	Planned rule
+工具	Tools
+左前座椅	Front left seat
+左前座椅加热	Front left seat heating
+已两次确认到家并驻车	Arrival and parking confirmed twice
+已从本机	Verified from local
+已保存历史停车里程	Historical parking odometer saved
+已保存家的位置	Home saved
+已保存家的位置与范围	Home location and radius saved
+已保存登录状态	Login saved
+已保存的设置未改变	Saved settings unchanged
+已保持登录	Signed in
+已保留加密会话	Encrypted session retained
+已保留完成的检查结果	Completed check results retained
+已停止	Stopped
+已停止连接	Connection stopped
+已停用	Disabled
+已允许	Allowed
+已允许不受流量节省限制	Allowed with Data Saver
+已删除本机保存的登录状态	Saved login removed
+已删除本机加密配置和会话	Encrypted configuration and session removed
+已刷新	Refreshed
+已加密保存	Saved encrypted
+已去除身份凭据	Credentials removed
+已发送动作无法撤回	Sent commands cannot be recalled
+已受理	Accepted
+已复用本机登录状态	Reused saved login
+已安排	Scheduled
+已恢复到家自动关闭	Home shutoff resumed
+已恢复登录	Login restored
+已接近	Near
+已接近目标温度	Near target temperature
+已暂停新执行	New tasks paused
+已暂停本机的新任务	New local tasks paused
+已更新卡片	Widget updated
+已有任务处理中	A task is already running
+已有操作正在处理	An operation is already running
+已有预约使用各自的偏好快照	Existing schedules keep their saved preferences
+已核对	Verified
+已确认到家	Arrival confirmed
+已确认新行程	New trip confirmed
+已绑定	Bound
+已解锁	Unlocked
+已记录停车里程	Parking odometer recorded
+已设置家	Home configured
+已识别新一次停车	New parking session detected
+已读到坐标	Coordinates received
+已读到真实行驶	Driving observed
+已豁免电池优化	Battery optimisation unrestricted
+已跳过本次	Skipped this time
+已过执行窗口或车辆已更改	Execution window expired or vehicle changed
+已退出本机账号	Signed out locally
+已退出远程备车	Remote preparation ended
+已配对设备	Paired devices
+已锁	Locked
+已锁车	Locked
+已错过准备时间	Preparation window missed
+已驻车	Parked
+布局预览	Layout preview
+应为	should be
+座椅加热	Seat heating
+座椅通风	Seat ventilation
+座椅通风已加入独立测试面板	Seat ventilation has a dedicated test panel
+座舱出风量与	Cabin blower and
+座舱风量	Cabin blower speed
+延迟超过两分钟会跳过	Skipped if delayed more than two minutes
+建议调整	Adjustment recommended
+开关	Switch
+开关原厂哨兵	Control factory sentry
+开启	On
+开启到	Turn on to
+开启原厂哨兵	Turn factory sentry on
+开启哨兵	Turn sentry on
+开始使用	Get started
+开始准备	Start preparation
+开始本车只读检查	Start read-only vehicle check
+强行停止或手机离线期间无法保证自动执行	Automation cannot be guaranteed while force-stopped or offline
+当前已保存颜色	Current saved colour
+当前没有保存的登录	No saved login
+当前没有返回可访问车辆	No accessible vehicles returned
+当前达温后通知你确认结束	Currently, notify at target and let you confirm stopping
+当前连接可用	Connection available
+录像	Recordings
+录像分别显示	Recordings shown separately
+录像接收已暂停	Recording reception paused
+录像状态仍待接入	Recording status not integrated yet
+录像连接尚未配对	Recorder not paired yet
+录像连接已就绪	Recorder connection ready
+影像	Media
+影像与工具	Video and tools
+影像和桌面卡片使用同一种语言	Media and widgets use the same language
+影像设置	Media settings
+影像页回看录像	Play recordings in Media
+影响任务通知	Affects task notifications
+待保存	Unsaved
+待导入	Import required
+待核实	Unconfirmed
+待检查	Check required
+待读取	Awaiting data
+待验证	Unverified
+快捷控制	Quick controls
+总里程至少增长	Odometer increased by at least
+恢复保存的登录	Restore saved login
+恢复外观草稿	Restore appearance draft
+恢复执行	Resume tasks
+恢复本次到家自动关闭	Resume home shutoff for this stop
+恢复本次自动守护	Resume auto guard for this stop
+恢复登录	Restore login
+恢复默认外观	Restore default appearance
+悬浮窗或后台常驻权限	Overlay or persistent background permissions
+想接收车机录像	Want to receive recordings from your car
+成功响应为空	Successful response was empty
+我已在地图核对过坐标位置	I checked these coordinates on a map
+我已核对结果	I checked the result
+我的	My
+我的停车备注	My parking note
+我的助手	My assistant
+我的车辆	My vehicle
+或使用地址搜索	Or search an address
+或关闭自定义车牌	Or hide the custom plate
+或将手机当前位置设为家	Or set home from your phone location
+或手机重启都不会清除	Or restarting the phone will not clear it
+或文件超过	Or the file exceeds
+或精确位置	Or precise location
+或车内核对	Or verify in the car
+或车机的手动关闭	Or a manual shutoff in the car
+或车机的操作	Or actions in the car
+手动关闭哨兵后	After manually turning sentry off
+手动开启优先	Manual activation takes priority
+手动暂停	Manually paused
+手动调节在	Manual adjustment is in
+手机	Phone
+手机定位精度不足	Phone location is not accurate enough
+手机定位超时	Phone location timed out
+手机当前位置	Current phone location
+手机或车辆位置不一定相同	Phone and car may be in different places
+手机直连极氪云端	Phone connects directly to Zeekr cloud
+手机解锁	Phone unlocked
+才能继续本轮操作	Before continuing this operation
+才重新判断守护	Then re-evaluate guard
+打开	Open
+打开充电口	Open charge port
+打开应用	Open app
+打开或关闭充电口盖	Open or close charge port cover
+打开车窗	Open windows
+执行中断	Execution interrupted
+执行到哪一步	Operation progress
+执行未完成	Execution incomplete
+找到	Found
+找车	Find car
+找车鸣笛	Find car with horn
+找车鸣笛一次	Honk once to find car
+把常用操作放到桌面	Add controls to your home screen
+把此卡片改绑当前车辆	Bind this widget to the selected vehicle
+报告未保存	Report not saved
+抬起效果需本车确认	Verify physical tailgate opening on this car
+按	Press
+按原厂整体车况时间核对	Check against the overall vehicle timestamp
+按在家处理	Treat as home
+按车辆位置判断	Use the vehicle location
+按钮原地执行	Buttons act directly in the widget
+按钮按下后会显示发送和等待回读的进度	After tapping, progress shows sending and waiting for vehicle feedback
+排队发送	Send in sequence
+接口失败或空字段不等于账号无权限	API failure or empty fields do not prove missing account permissions
+接口读取成功	API read succeeded
+接收录像和查看传输状态	Receive recordings and view transfer progress
+接近目标	Near target
+控制	Control
+控制与智能规则	Controls and smart rules
+控制待实测	Control needs vehicle testing
+提前	Before
+提前准备	Prepare ahead
+提前多久开始备车	How early to start preparation
+提前结束	End early
+操作	Operation
+操作会发送到本车	Actions will be sent to this vehicle
+操作记录	Activity log
+收到备车操作	Preparation requested
+收到操作	Action received
+收到新温度	New temperature received
+收起	Collapse
+收起连接说明	Hide connection help
+数字	Numbers
+文件无法读取	Cannot read file
+文件由系统文件选择器授权	Files are granted through the system file picker
+文字和底色较接近	Text and background colours are similar
+文本读取	Read text
+断连后安排一次检查	Schedule a check after disconnecting
+新手指南	Beginner guide
+方向盘加热	Steering wheel heating
+无法取得手机位置	Cannot get phone location
+无法读取已配对设备	Cannot read paired devices
+无返回内容	No response content
+无需启动空调	AC does not need to start
+无需持续读取手机位置	Continuous phone location is not required
+无需每次输入密码	No need to enter your password every time
+无需立即输入密码	No need to enter your password now
+无需自动开启	No automatic activation needed
+无需重复发送	No need to send again
+旧操作不会重发	Old commands are never replayed
+旧数据	Old data
+旧温度会明确标注	Old temperatures are clearly labelled
+时区和手机离线执行尚未验证	Time-zone and offline execution not verified
+时间按手机时区显示	Times use the phone's time zone
+明暗	Brightness
+昵称	Nickname
+显示号码	Show plate text
+显示自定义车牌	Show custom plate
+智能备车	Smart preparation
+智能备车设置	Preparation settings
+智能调温	Smart climate
+暂不判断新行程	Do not infer a new trip yet
+暂不改变本次哨兵选择	Keep this stop's sentry choice
+暂不自动操作哨兵	Do not control sentry automatically yet
+暂停新执行	Pause new tasks
+暂时	Temporarily
+暂时没有取得手机位置	Phone location unavailable for now
+更多	More
+更多里可随时查看	Available anytime in More
+更换协议配置	Replace protocol configuration
+更新备车进度	Update preparation progress
+最多	Up to
+最多补查	Additional checks limited to
+最近一次实际检查	Last actual check
+最近上报	Last reported
+最近查询成功	Last query succeeded
+最长	Up to
+最长运行	Maximum runtime
+有效登录和	Valid login and
+服务器角色尚未解释验证	Server account role not verified
+服务暂时限流	Service rate limited
+服务端已不再接受保存的登录	Server no longer accepts the saved session
+服务端让会话失效时仍可能需要重新登录	Sign-in may be needed if the server expires the session
+未允许	Not allowed
+未允许手机定位	Phone location not allowed
+未允许附近设备	Nearby devices not allowed
+未发送任何操作	No commands sent
+未发送操作	No action sent
+未发送结束备车指令	No stop-preparation command sent
+未取得可用字段	No usable fields returned
+未受理	Not accepted
+未安排	Not scheduled
+未执行	Not executed
+未提供	Not provided
+未查询	Not queried
+未检查	Not checked
+未猜测冷热或发送备车	Did not guess heating/cooling or send preparation
+未知	Unknown
+未知车况不会被当作相反状态	Unknown status is never treated as the opposite state
+未确认的动作不会自动重发	Unconfirmed actions are never automatically resent
+未绑定车辆	No vehicle bound
+未能安排	Could not schedule
+未自动重试	Not automatically retried
+未补发控制	No control replayed
+未连接你的车	Not connected to your car
+未连接车辆	Vehicle not connected
+未选重复时	Without repeat days
+未重发	Not resent
+未重复发送	Not sent again
+未重新发送	Not resent
+未锁	Unlocked
+未驻车	Not parked
+本地存储	Local storage
+本地展示外观	Local vehicle appearance
+本工具只申请网络权限	This tool only requests network access
+本机会话保存失败	Could not save local session
+本机会话未能解密	Cannot decrypt local session
+本机会话格式无效	Invalid local session format
+本机加密	Encrypted on device
+本机加密记录无法解密	Cannot decrypt local record
+本机外观记录未能读取	Cannot read appearance settings
+本机配置未能完整删除	Could not fully remove local configuration
+本机配置未能载入	Cannot load local configuration
+本次不自动守护	No auto guard for this stop
+本次会话可用	Available in this session
+本次保存	Saved this time
+本次保持开启	Keep on for this stop
+本次停车不会再次自动开启	It will not automatically turn on again during this stop
+本次停车不再自动开启	Do not auto-enable again this stop
+本次停车识别	Current parking session
+本次到家不会自动关闭	No automatic shutoff on this arrival
+本次到家已发送关闭请求	Shutoff already requested for this arrival
+本次后台检查未完成	Background check incomplete
+本次备车	Current preparation
+本次已发送开启请求	Activation already requested this stop
+本次已完成	Completed this time
+本次已恢复	Resumed this time
+本次已暂停	Paused this time
+本次已触发	Triggered this time
+本次已跳过	Skipped this time
+本次手动保持开启	Manually kept on this stop
+本次手动暂停优先	This stop's manual pause takes priority
+本次手动选择已保留	Manual choice preserved for this stop
+本次无需启动	No start needed this time
+本次暂停	Paused this stop
+本次暂停会保留	This stop's pause is retained
+本次未发送	Not sent this time
+本次未发送备车	No preparation sent this time
+本次未发送操作	No action sent this time
+本次未执行	Not executed this time
+本次未自动操作哨兵	No automatic sentry action this time
+本次未补发	No replay this time
+本次未读到	Not received this time
+本次未重试	Not retried this time
+本次查询中断	Query interrupted
+本次查询超时	Query timed out
+本次没有发送车控	No vehicle commands sent this time
+本次登录已尝试发送	Commands attempted in this login session:
+本次自动守护已暂停	Auto guard paused for this stop
+本次自动守护暂停	Auto guard paused this stop
+本次跟踪已到时限	Monitoring time limit reached
+本次跟踪已结束	Monitoring ended
+本次连接仍可使用	This connection remains usable
+本版不在后台继续排队	This version does not continue the queue in the background
+本车能力	Vehicle capabilities
+本车能力检查	Vehicle capability check
+本车读取已验证	Vehicle reads verified
+本轮检查结束	Check finished
+本页草稿恢复为白色车身	Draft reset to a white body
+权限	Permissions
+条控制	control requests
+来源	Source
+来源时间异常	Invalid source timestamp
+来源时间未知	Source time unknown
+来源时间未确认	Source time unconfirmed
+来源时间较近	Recent source timestamp
+查找匹配地址	Find matching address
+查看停车位置	View parking location
+查看准备说明	View setup instructions
+查看受理	View acceptance
+查看地图	View map
+查看实际检查时间	View actual check time
+查看影像	View media
+查看示例报告	View sample report
+查看这辆车与此	View this vehicle and this
+查看连接	View connection
+查询	Query
+查询中	Querying
+查询失败	Query failed
+查询成功表示取得云端响应	Query success means a cloud response was received
+查询时间不代表车辆采样时间	Query time is not the vehicle sample time
+查询未完成	Query incomplete
+查询超时	Query timed out
+核对	Verify
+核对共享有效期	Check sharing expiry
+格式无效	Invalid format
+桌面上有卡片时	When a widget is on the home screen
+桌面卡片	Home-screen widgets
+桌面卡片自动更新	Update widgets automatically
+桌面小组件	Home-screen widgets
+桌面显示	Home-screen display
+桌面显示车牌号码	Show plate text on the home screen
+档	level
+检查中断	Check interrupted
+检查后台设置	Check background settings
+检查已停止	Check stopped
+检查读取车况和现有计划	Read vehicle status and existing schedules
+检查账号	Check account
+检查账号权限	Check account permissions
+检查超时	Check timed out
+检测到哨兵已关闭	Sentry off detected
+检测到家中哨兵重新开启	Sentry turned back on at home
+橙	Orange
+次	times
+欢迎使用	Welcome to
+正在关闭哨兵	Turning sentry off
+正在准备	Preparing
+正在准备备车	Getting preparation ready
+正在删除本机连接配置	Removing local connection configuration
+正在加密保存配置	Saving configuration encrypted
+正在升温	Heating cabin
+正在发送	Sending
+正在发送备车请求	Sending preparation request
+正在发送找车指令	Sending find-car request
+正在只读检查	Running read-only check
+正在合并连续操作	Combining repeated selections
+正在处理卡片操作	Processing widget action
+正在处理车辆操作	Processing vehicle action
+正在备车	Preparing car
+正在开启哨兵	Turning sentry on
+正在恢复备车进度	Restoring preparation progress
+正在恢复登录	Restoring login
+正在查询云端车况	Querying cloud vehicle status
+正在核对车况	Checking vehicle status
+正在结束	Stopping
+正在读取	Reading
+正在读取手机位置	Getting phone location
+正在读取本机登录状态	Reading saved login
+正在读取本机连接配置	Reading connection configuration
+正在读取车温	Reading cabin temperature
+正在读取车温并准备	Reading temperature and preparing
+正在读取车辆状态	Reading vehicle status
+正在连接	Connecting
+正在连接车辆	Connecting to vehicle
+正在退出账号	Signing out
+正在重新连接	Reconnecting
+正在降温	Cooling cabin
+正在驻车	Parking
+正在验证已保存的登录	Verifying saved login
+没有可用的地图应用	No map app available
+没有找到匹配地址	No matching address found
+没有新鲜车温	No recent cabin temperature
+没有车辆完成回传	No completion feedback from vehicle
+没有障碍物	No obstacles
+沿用家的范围与	Use the home radius and
+流量节省未限制	Data Saver unrestricted
+流量节省正在限制后台数据	Data Saver restricts background data
+测试版	Test build
+测试版会在本应用私有目录保存已脱敏的连接进度和报告	Test builds save redacted connection progress and reports in private app storage
+浓淡	Saturation
+深红	Dark red
+深绿	Dark green
+深蓝	Dark blue
+添加	Add
+添加出发计划	Add departure plan
+清空本轮	Clear this operation
+温度暂无新上报	No new temperature report
+温度记录未变化	Temperature record unchanged
+满足自动开启条件	Automatic activation conditions met
+漏掉行驶过程时	When driving was missed
+漏读行驶时可通过总里程增长和驻车复查补充判断	Odometer increase and parking rechecks can identify a missed trip
+澳洲原厂	Australian factory
+灰	Grey
+点	Tap
+点击刷新车况	Tap to refresh vehicle status
+点刷新重试	Tap refresh to retry
+点图标直接执行	Tap an icon to act directly
+点开查看	Tap to view
+点按切档	Tap to change level
+点按可重试	Tap to retry
+状态已读取	Status read
+状态未知	Status unknown
+状态来源	Status source
+玫红	Magenta
+用于预览报告	For report preview
+用户尚未实际测试	Not physically tested by the user
+用户已确认	User confirmed
+由本手机执行	Runs on this phone
+电动关闭尚未接入	Powered closing not integrated yet
+电池与后台运行	Battery and background execution
+电池限制和预约权限	Battery limits and schedule permissions
+电量	Battery
+登录	Sign in
+登录会加密保存在手机上	Login is saved encrypted on your phone
+登录后会加密保存会话	Sessions are encrypted after sign-in
+登录后自动保持登录	Stay signed in automatically
+登录完成	Sign-in complete
+登录已加密保存在本机	Login saved encrypted on this device
+登录并读取共享车辆	Sign in and read shared vehicles
+登录成功	Signed in
+登录状态仍保存在本机	Login is still saved on this phone
+白	White
+的应用信息	app info
+目标	Target
+目标温度	Target temperature
+短按切换档位	Tap to cycle levels
+确认	Confirm
+确认下一次行程后恢复	Resume after the next trip is confirmed
+确认到家后自动关闭	Turn off after confirmed arrival
+确认周边环境适合此次操作	Confirm the surroundings are clear for this action
+确认开始新行程后恢复	Resume when a new trip is confirmed
+确认新行程后恢复	Resume after a new trip is confirmed
+确认澳洲区域	Confirm the Australian region
+确认这是家的位置	Confirm this is home
+示例位置	Sample location
+示例报告	Sample report
+示例数据	Sample data
+示例模式	Demo mode
+示例车况	Sample vehicle status
+示例车辆	Sample vehicle
+离家与到家	Away and home
+离家停车	Parked away
+离家停车守护	Away parking guard
+离家停车自动守护	Auto guard when parked away
+离家停车自动守护也会停用	Away parking guard will also be disabled
+离家守护会等待停车与位置确认	Away guard waits for parking and location confirmation
+离家开启未启用	Away activation not enabled
+离家自动开启哨兵	Turn sentry on when away
+离车检查	Before you leave
+秒复查	seconds before rechecking
+移除	Remove
+移除失败	Removal failed
+移除家的位置	Remove home location
+移除蓝牙触发	Remove Bluetooth trigger
+稍后可刷新	Refresh later
+稍后继续	Continue later
+空格和连字符	Spaces and hyphens
+空调	AC
+空调与座椅	AC and seats
+空调以车机为准	Use the car's AC controls
+空调出风量待接入	Cabin blower control not integrated yet
+空调已开	AC on
+空调已开启	AC is on
+空调状态待核实	AC state unconfirmed
+空调状态格式尚需核对	AC status format needs verification
+空调目标	AC target
+空调设定值的回读尚未取得	AC setpoint feedback is unavailable
+空调送风中	Cabin fan running
+等待下一次行程证据	Waiting for the next trip evidence
+等待下次检查	Waiting for next check
+等待两次有效确认	Waiting for two valid confirmations
+等待关闭状态回传	Waiting for off-state feedback
+等待原厂已驻车和零车速记录	Waiting for factory parked status and zero speed
+等待复查本次停车	Waiting to recheck this stop
+等待安排	Waiting to schedule
+等待已驻车	Waiting for parked status
+等待当前车辆到家记录	Waiting for this vehicle's arrival record
+等待当前车辆状态	Waiting for current vehicle status
+等待执行时可继续改目标	You can change the target while waiting
+等待操作	Ready
+等待新位置	Waiting for new location
+等待新的停车里程基准	Waiting for a new parking odometer baseline
+等待新车况进行比较	Waiting for new vehicle data to compare
+等待有效停车证据	Waiting for valid parking evidence
+等待有效停车里程	Waiting for valid parking odometer
+等待有效行程证据	Waiting for valid trip evidence
+等待有效车况	Waiting for valid vehicle status
+等待本次哨兵状态	Waiting for this stop's sentry state
+等待本次哨兵读取	Waiting for a sentry read
+等待本次驻车记录	Waiting for this stop's parking record
+等待本车检查	Waiting for vehicle check
+等待登录	Waiting for login
+等待确认	Awaiting confirmation
+等待空调运行回传	Waiting for AC running feedback
+等待读取位置与驻车证据	Waiting to read location and parking evidence
+等待读取原厂驻车状态	Waiting to read factory parking status
+等待读取车辆状态	Waiting to read vehicle status
+等待车况回读	Waiting for vehicle feedback
+等待车况来源时间	Waiting for vehicle sample time
+等待车机加入热点	Waiting for the car to join the hotspot
+等待车辆回传	Waiting for vehicle feedback
+等待车辆数据	Waiting for vehicle data
+等待车辆新上报	Waiting for a new vehicle report
+等待车辆确认	Waiting for vehicle confirmation
+等待运行回传	Waiting for running feedback
+等待近期可信车辆位置	Waiting for a recent reliable vehicle location
+等待锁车	Waiting for doors to lock
+等待闹钟与提醒权限	Alarm permission required
+等待首次查询	Waiting for first query
+等待首次读取	Waiting for first reading
+等待首次读取车况	Waiting for first vehicle reading
+简体中文	Simplified Chinese
+米	m
+米为定位缓冲区	m location buffer
+米作为可信停车区	m trusted parking radius
+米定位缓冲	m location buffer
+精确位置及原始响应	Precise location and raw responses
+系统只保留最后选择	Only the latest choice is kept
+系统后台设置	System background settings
+系统周期任务	System periodic task
+系统回收应用后仍依靠定期任务	Periodic jobs remain after process termination
+系统未允许后台启动	System did not allow background start
+系统未允许启动备车任务	System did not allow preparation to start
+系统未允许启动操作	System did not allow the action to start
+系统省电可能延迟	Battery saving may cause delays
+系统省电和网络可能延迟更新	Battery saving and network conditions may delay updates
+系统限制后台运行	System limits background execution
+紧凑卡片	Compact widget
+紫粉	Purple pink
+红	Red
+约每	About every
+绑定另一辆车	Bound to another vehicle
+绑定已经配对的车载蓝牙	Bind a paired vehicle Bluetooth device
+绑定当前车辆	Bound to selected vehicle
+绑定车辆	Bound vehicle
+结束备车未完成	Ending preparation incomplete
+结束请求未受理	Stop request not accepted
+结束请求结果待核实	Stop result unconfirmed
+结果待核实	Result unconfirmed
+结果未确认	Result not confirmed
+结果确认	Result confirmation
+结果确认及后台执行	Result confirmation and background execution
+给你的车起个名字	Give your car a name
+继续	Continue
+继续操作	Continue operation
+继续观察备车	Continue monitoring preparation
+续航	Range
+绯红	Crimson
+绿	Green
+编辑	Edit
+编辑备车设置	Edit preparation settings
+缺少或无效字段	Missing or invalid field
+缺少采样时间时保留上次值	Keep the last value when sampling time is missing
+网关连接已验证	Gateway connection verified
+网络或服务不可达	Network or service unavailable
+网络或车辆未更新可能延迟	Network delays or stale vehicle data may delay execution
+胎压	Tyre pressure
+胎压字段	Tyre pressure fields
+能力证据	Capability evidence
+自动关闭原厂哨兵	Turn factory sentry off automatically
+自动关闭哨兵	Turn sentry off automatically
+自动化	Automation
+自动化总开关已暂停	Automation master switch is paused
+自动化页设置预约与停车守护	Set departure schedules and parking guard in Automation
+自动守护还会检查位置	Auto guard also checks location
+自动恢复	Restore automatically
+自动恢复进度观察	Automatically resume progress monitoring
+自动更新	Automatic updates
+自定义色值	Custom colour value
+自定义车身颜色	Custom body colour
+自行导出的文件不会被删除	Files you exported yourself are not removed
+至少间隔	At least
+舒适允许范围与时长	Allowed comfort features and duration
+色相	Hue
+芥黄	Mustard
+若需要验证码	If a verification code is required
+范围	Radius
+范围内会按在家处理	Within the radius is treated as home
+范围内都算在家	Anywhere within this radius counts as home
+获取	Get
+获取车辆	Get vehicles
+获取车辆服务登录码	Get vehicle service login code
+蓝	Blue
+蓝牙	Bluetooth
+行驶中	Driving
+行驶模式	Driving mode
+街道	Street
+街道或地区	Street or area
+补充识别漏读的行程	Identify a missed trip
+表示请求送达	Means the request was received
+裁切	Trim
+规则已停用	Rule disabled
+规则已暂停	Rule paused
+规则或本次手动选择已变化	Rule or manual choice changed
+规则未启用	Rule not enabled
+解析中	Resolving
+解析街道地址	Resolve street address
+解锁取物	Unlock to retrieve belongings
+解锁尾门	Unlock tailgate
+解锁或哨兵关闭不会清除你的选择	Unlocking or sentry shutoff does not clear your choice
+解锁手机时也会尽量补查	Also attempt a check when the phone is unlocked
+解锁车辆	Unlock vehicle
+解闭锁音效制作	Create lock/unlock sounds
+计划截止	Scheduled deadline
+让自动化可靠运行	Keep automation running reliably
+记录	Record
+设为	Set to
+设好舒适偏好	Set your comfort preferences
+设定温度不回传	Setpoint feedback unavailable
+设定温度回读	Setpoint feedback
+设定温度暂时不能自动确认	Setpoint cannot be automatically confirmed yet
+设置后台和运行只读自检	Set background permissions and run read-only check
+设置备车偏好	Set preparation preferences
+设置家的位置	Set home location
+设置目标温度和最长运行时间	Set target temperature and maximum runtime
+设置车辆外观与车牌隐私	Vehicle appearance and plate privacy
+证据	Evidence
+诊断与下一步	Diagnostics and next steps
+诊断报告已保存	Diagnostic report saved
+试听并导出车辆音效文件	Preview and export vehicle sound files
+语言	Language
+请使用专用	Use a dedicated
+请使用地址搜索	Use address search
+请保持应用在前台再试	Keep the app in the foreground and retry
+请先	Please first
+请先切换	Switch vehicle first
+请先在	First, in
+请先在原厂	First, in the factory
+请先在手机蓝牙设置中配对车辆	Pair your car in phone Bluetooth settings first
+请先恢复保存的登录	Restore saved login first
+请先恢复车辆连接	Restore the vehicle connection first
+请先打开手机定位	Enable phone location first
+请先核对上一条操作结果	Check the previous operation result first
+请先核对结果	Check the result first
+请先设置并核对家的位置	Set and verify home first
+请先连接车辆	Connect your vehicle first
+请先选择车辆	Select a vehicle first
+请再点一次操作	Tap the action again
+请刷新核实	Refresh to verify
+请在	In
+请在原厂	In the factory
+请在应用核实	Verify in the app
+请在手机设置中打开	Open in phone settings
+请在系统设置中清除本应用数据	Clear this app's data in system settings
+请填写	Enter
+请安装地图后再试	Install a map app and retry
+请开启精确位置或使用地址搜索	Enable precise location or use address search
+请恢复保存的登录	Restore saved login
+请打开应用恢复登录	Open the app to restore login
+请按每项证据判断	Review the evidence for each feature
+请改时间或缩短提前量	Change the time or shorten the lead time
+请核对后再开始	Verify before starting
+请检查系统定时权限	Check system alarm permission
+请检查网络或使用当前位置	Check the network or use current location
+请检查附近设备权限	Check Nearby devices permission
+请求受理后保留	After acceptance, keep showing
+请求已受理	Request accepted
+请求未受理	Request not accepted
+请求结束本次备车	Request to end this preparation
+请求结果未确认	Request result unconfirmed
+请求被拒绝	Request rejected
+请求超时	Request timed out
+请求频率受限	Request rate limited
+请登录以建立新的会话	Sign in to create a new session
+请确认车旁无人	Make sure no one is next to the vehicle
+请稍后再刷新	Refresh again later
+请稍后再试	Try again later
+请稍后手动重试	Retry manually later
+请稍后重试	Retry later
+请稍后重试或使用当前位置	Retry later or use current location
+请稍等	Please wait
+请缩短后保存	Shorten the text before saving
+请补充街道	Add street details
+请输入展示号码	Enter plate text
+请输入有效时间	Enter a valid time
+请输入至少	Enter at least
+请选一个留有准备时间的出发时刻	Choose a departure time that leaves enough preparation time
+请选择本地协议	Select the local protocol
+请重启后重试	Restart and retry
+请重新导入协议	Import the protocol again
+请重新点按	Tap again
+请重新登录	Sign in again
+请重新选择保存位置	Choose a save location again
+请重试	Retry
+请重试或使用当前位置	Retry or use current location
+请长按桌面	Long-press the home screen
+读到字段	Field received
+读取	Read
+读取中	Reading
+读取中断	Read interrupted
+读取充电与预约状态	Read charging and schedules
+读取哨兵状态	Read sentry state
+读取失败	Read failed
+读取已中断	Read interrupted
+读取成功	Read succeeded
+读取是否唤醒车辆仍需本车核对	Whether reads wake the car needs physical verification
+读取未完成	Read incomplete
+读取空调状态	Read AC status
+读取车温	Read cabin temperature
+读取车温中	Reading cabin temperature
+账号	Account
+账号与车辆	Account and vehicle
+账号与连接	Account and connection
+账号和本车权限仍以实际检查结果为准	Account and vehicle permissions depend on actual check results
+账号已更改	Account changed
+账号当前没有返回可访问车辆	No accessible vehicles returned for this account
+账号的实际证据	Account evidence
+账号的邮箱和密码	Account email and password
+账号身份来自你的说明	Account identity is based on your description
+距家约	Distance from home: about
+距离出发不足	Less than this time before departure:
+跟随系统	Follow system
+跳过与失败原因	Skip and failure reasons
+跳过本次	Skip this time
+车内	Cabin
+车内偏冷	Cabin cold
+车内偏热	Cabin hot
+车内温度	Cabin temperature
+车内舒适	Cabin comfort
+车内舒适功能以车机为准	Use the vehicle controls for cabin comfort
+车况仍在读取	Still reading vehicle status
+车况回读已匹配	Vehicle feedback matches
+车况已变化	Vehicle state changed
+车况已回传	Vehicle state reported
+车况旁的时间表示新旧程度	The time beside a reading shows its freshness
+车况时间未提供	Vehicle timestamp unavailable
+车况时间未知或超过	Vehicle timestamp unknown or older than
+车况时间缺失或超过	Vehicle timestamp missing or older than
+车况读取未完成	Vehicle status read incomplete
+车况须在	Vehicle status must be within
+车控	Vehicle controls
+车机未连接时也能回看	Watch local videos even when the car is disconnected
+车机连接与配对	Car connection and pairing
+车温	Cabin temperature
+车温已达标	Target reached
+车温待核实	Temperature unconfirmed
+车温过期时本次仅请求目标温度的空调	When temperature is stale, request only AC at the chosen target
+车牌与桌面显示	Plate and home-screen display
+车牌底色	Plate background
+车牌支持字母	Plate supports letters
+车牌文字	Plate text
+车牌文字颜色	Plate text colour
+车牌最多	Plate maximum
+车窗	Windows
+车窗控制	Window controls
+车端时长会随启动请求发送	Runtime is included in the start request
+车身颜色	Body colour
+车载蓝牙断开	Car Bluetooth disconnected
+车辆	Vehicle
+车辆与备车偏好	Vehicle and preparation preferences
+车辆位置	Vehicle location
+车辆位置已读取	Vehicle location read
+车辆位置待核实	Vehicle location unconfirmed
+车辆位置待读取	Vehicle location pending
+车辆位置未核对或缺少近期可信记录	Location unverified or no recent reliable record
+车辆停车位置	Vehicle parking location
+车辆列表授权相关字段	Vehicle-list authorisation fields
+车辆回传后才显示确认	Only confirm after vehicle feedback
+车辆在家外	Vehicle is away from home
+车辆在家附近	Vehicle is near home
+车辆坐标已读取	Vehicle coordinates read
+车辆处于行驶模式	Vehicle is in driving mode
+车辆外观	Vehicle appearance
+车辆尚未确认锁好	Vehicle not confirmed locked
+车辆尚未连接	Vehicle not connected yet
+车辆已连接	Vehicle connected
+车辆控制	Vehicle controls
+车辆操作	Vehicle action
+车辆旧数据不会算作第二次确认	Old vehicle data cannot count as a second confirmation
+车辆是否停止尚未确认	Vehicle stopping is unconfirmed
+车辆昵称	Vehicle nickname
+车辆服务已连接	Vehicle service connected
+车辆未返回此项状态	Vehicle did not return this state
+车辆未返回温度	Vehicle did not return a temperature
+车辆未连接	Vehicle disconnected
+车辆未选中	Vehicle not selected
+车辆模式	Vehicle mode
+车辆状态卡片	Vehicle status widget
+车辆结果待核实	Vehicle result unconfirmed
+车辆进入行驶模式	Vehicle entered driving mode
+车辆门锁	Door locks
+车辆页调空调和座椅	Adjust AC and seats in Vehicle
+车辆驻车与行驶	Parking and driving
+车速	Speed
+车速为零	Speed is zero
+车速为零且已锁车时开启	Enable when speed is zero and doors are locked
+车速未返回	Speed not returned
+车锁	Door lock
+车锁和哨兵为上次上报记录	Door locks and sentry show the last report
+车锁和本次暂停	Door locks and this stop's pause
+车锁控制	Door lock controls
+车锁未知	Lock unknown
+轮位待核对	Wheel positions need verification
+轻点切档	Tap to change level
+轻点座椅切档	Tap a seat to change level
+辆车	vehicles
+输入一部分地址并选择匹配结果	Enter part of an address and select a matching result
+输入部分地址	Enter part of an address
+边缘另有	Additional edge buffer
+达温后提醒确认结束	Notify to confirm stopping at target
+达温和任务结果提醒可能不可见	Temperature and task notifications may be hidden
+运行只读自检	Run read-only check
+运行时长	Runtime
+运行状态待核实	Running state unconfirmed
+近期车况	Recent vehicle status
+返回	Back
+返回了数据	Data returned
+返回此页面会重新检查实际设置	Returning here checks actual settings again
+还有尾门	Also include tailgate
+还没有出发计划	No departure plan yet
+还没有可用车辆位置	No vehicle location yet
+还没有设置家	Home not set yet
+还没有车控记录	No vehicle activity yet
+还没有配置	No configuration yet
+这台手机暂不支持地址匹配	Address matching unavailable on this phone
+这张卡片绑定的是另一辆车	This widget is bound to another vehicle
+进度显示在卡片上	Progress appears in the widget
+进度留在卡片里	Progress stays in the widget
+远程备车已结束	Remote preparation ended
+远程空调未运行	Remote AC is not running
+远程车控可以先独立使用	Remote vehicle controls can be used independently
+远程车控尚未连接	Remote controls not connected
+远程车控已连接	Remote controls connected
+远程预空调已结束	Remote preconditioning ended
+连接	Connect
+连接与数据	Connection and data
+连接与本车能力检查	Connection and vehicle capability check
+连接你的车辆	Connect your vehicle
+连接准备	Connection setup
+连接失败时可以重试	Retry if connection fails
+连接尚未完成	Connection incomplete
+连接已断开	Disconnected
+连接并选择车辆	Connect and select a vehicle
+连接待恢复	Connection needs restoring
+连接总时限已到	Connection time limit reached
+连接未完成	Connection incomplete
+连接账号	Connect account
+连接超时	Connection timed out
+连接车机	Connect recorder
+连接车机录像	Connect car recordings
+连接车辆服务	Connect vehicle service
+连接配置保留	Connection configuration retained
+连接配置和登录状态加密保存在本机	Configuration and login are encrypted on this device
+连接配置已保留	Connection configuration kept
+连接配置已变化	Connection configuration changed
+连接配置已就绪	Connection configuration ready
+连续两次确认车辆在家附近	Confirm vehicle near home twice in succession
+连续操作会冲突	Repeated actions can conflict
+连续选择会合并成最新目标	Repeated selections merge into the latest target
+连续选择会排队合并	Repeated selections are merged in the queue
+退出账号	Sign out
+选择关闭或指定档位	Select off or a specific level
+选择匹配结果后保存	Select a matching result, then save
+选择对应车辆	Select the matching vehicle
+选择明确的目标	Select a specific target
+选择桌面卡片	Choose a widget
+选择绑定车辆	Select the bound vehicle
+选择色块后替换	Choose a swatch to replace it
+选择车载蓝牙	Choose vehicle Bluetooth
+通用展示色	Display colours
+通知	Notifications
+通知未开启	Notifications disabled
+通知设置	Notification settings
+通风与加热放在一起	Ventilation and heating together
+邮箱	Email
+配置可在本次会话使用	Configuration available for this session
+配置已加密保存在本机	Configuration saved encrypted on this device
+配置文件超过	Configuration file exceeds
+配置文件还没准备好时	If the configuration file is not ready yet
+配置格式无效	Invalid configuration format
+配置格式通过	Configuration format valid
+采集时间未知	Sample time unknown
+里程	Odometer
+里程变化与时间不一致	Odometer change conflicts with elapsed time
+里程变化待复查	Odometer change needs rechecking
+里程回退	Odometer decreased
+里程增长与驻车复查一致	Odometer increase agrees with parking recheck
+里程已确认新一次停车	Odometer confirmed a new stop
+里程或驻车数据不足	Insufficient odometer or parking data
+重启	Restart
+重启后请重新导入	Import again after restarting
+重开	Reopen
+重新判断守护	Re-evaluate guard
+重新查看设置步骤和操作说明	Review setup steps and controls
+重新检查	Check again
+重新确认位置与驻车	Reconfirm location and parking
+重新连接	Reconnect
+金黄	Gold
+锁定不代表电动关闭	Locking does not mean powered closing
+锁定尾门	Lock tailgate
+锁定车辆	Lock vehicle
+长按桌面卡片可调整位置	Long-press a widget to move it
+长按直接选关闭	Long-press to choose off
+长按直接选择	Long-press to choose directly
+长按选关闭或指定档位	Long-press to choose off or a level
+长按选择档位	Long-press to choose level
+长按选档	Long-press to select
+门牌号	Street number
+门窗	Doors and windows
+门窗与尾门到位状态尚未完成本车映射	Door/window/tailgate position mapping is not complete for this car
+门锁	Door lock
+门锁或预约设置动作	Door-lock or schedule changes
+闹钟与提醒	Alarms and reminders
+队列已停止	Queue stopped
+零车速和非行驶模式	Zero speed and not in driving mode
+需要	Required
+需要从你使用的原厂	From your factory
+需要在家中观察到哨兵由关变开才能识别	Requires observing sentry change from off to on at home
+需要核对协议或响应格式	Protocol or response format needs checking
+需要核对本车返回的数据格式	This vehicle's response format needs checking
+需要联网	Network required
+需要重新登录	Sign-in required again
+非你的车辆	Not your vehicle
+非实时	Not live
+非行驶模式	Not in driving mode
+项协议参数	Protocol parameters
+预约和登录不变	Schedules and login unchanged
+预约已保存在本机	Schedule saved on this phone
+预约用车	Schedule departure
+预计续航	Estimated range
+颜色格式为	Colour format:
+额外	Additional
+首次发现到家后约	About this long after first detecting arrival:
+首次测试请核对澳洲车型的左右座椅对应	First verify left/right seat mapping on this Australian vehicle
+首次请核对本车轮位对应	First verify this vehicle's wheel positions
+首版温控仍需在实测面板中确认目标	Initial climate controls require target confirmation in the test panel
+首页	Home
+首页和桌面卡片会一起更新	Home and widgets update together
+首页看车况	View vehicle status on Home
+驻车与车速不一致	Parking and speed disagree
+驻车和后台能力验证	Parking and background verification
+驻车异常	Parking fault
+驻车待确认	Parking unconfirmed
+驻车状态未知	Parking state unknown
+驾驶者接管信号尚未核实	Driver takeover signal not verified
+鸣笛一次	Honk once
+黄	Yellow
+黑	Black
+默认外观	Default appearance
+使用获得主账号授权的	Use an account authorised by the primary owner
+可用功能以车辆实际返回为准	Available features depend on actual vehicle responses
+文件由系统选择器授权	File access is granted through the system picker
+蓝牙触发和后台自动化会在使用对应功能时申请权限	Bluetooth triggers and background automation request permissions when you use them
+连接车辆需要网络	Vehicle connection requires network access
+语言 / Language	Language
+跟随系统 / System	Follow system
+简体中文 / English	Simplified Chinese / English
+车控、影像和桌面卡片使用同一种语言。	One language for vehicle controls, media and widgets.
+首页和桌面卡片会一起更新。	Your new name appears on Home and all linked widgets.
+连接、备车、桌面卡片，一次弄明白	Set up your vehicle, comfort preferences and widgets.
+首页看车况，车辆页调空调和座椅，自动化页设置预约与停车守护，影像页回看录像。	Home shows your car's status. Use Vehicle for AC and seats, Automation for schedules and parking guard, and Media for recordings.
+按钮按下后会显示发送和等待回读的进度；“已受理”表示请求送达，车辆回传后才显示确认。	After a tap, you can follow the request as it sends and waits for feedback. Accepted means the request arrived; confirmation requires a matching vehicle report.
+车况旁的时间表示新旧程度。旧温度会明确标注，刷新不会把旧数据变成实时。	Check the timestamp beside each reading. Old temperatures are labelled clearly. Refreshing does not make an old reading live.
+车辆已连接，可以直接下一步。	Your vehicle is connected. You can continue.
+先导入本机提取的协议 JSON，再用获得授权的极氪账号登录并选择车辆。配置文件还没准备好时，可以先浏览其他功能。	Import your locally extracted protocol JSON, sign in with your authorised Zeekr account, then select your vehicle. You can explore the app while you prepare the file.
+登录会加密保存在手机上。以后优先恢复会话，不需要每次输入密码。	Your session is encrypted on this phone and restored on later launches, so you usually only need to sign in once.
+家的位置已保存。可以查看识别范围，也可以直接下一步。	Home is already saved. Review the radius or continue to the next step.
+输入一部分地址并选择匹配结果，或将手机当前位置设为家。范围内会按在家处理，容忍车辆定位偏移。	Search part of your address and choose a result, or use your phone's location. The home radius allows for small errors in the car's location.
+离家守护会等待停车与位置确认。手动关闭哨兵后，本次停车不会再次自动开启。	Away guard waits for parking and location confirmation. If you turn sentry off manually, it stays off for this stop.
+设置目标温度和最长运行时间，再决定备车时是否允许座椅通风或加热。保存偏好不会启动备车。	Choose a target temperature and maximum runtime, then allow seat heating or ventilation if you want. Saving preferences does not start preparation.
+手动调节在“车辆 → 空调与座椅”。轻点座椅切档，长按选关闭或指定档位；连续选择会排队合并。	For manual adjustment, open Vehicle → AC and seats. Tap a seat to cycle levels, or hold to choose Off or a level. Repeated choices are merged before sending.
+2×2 和 4×1 保留备车、找车、车锁、哨兵；4×2 和 4×3 还有尾门、充电口和更多车况。	Choose 2×2 or 4×1 for preparation, horn, locks and sentry. The 4×2 and 4×3 widgets add tailgate, charge port and more status.
+点图标直接执行，进度留在卡片里。箭头按钮打开应用，刷新图标读取车况。长按桌面卡片可调整位置。	Tap an icon to act directly and follow progress on the widget. The arrow opens the app; the refresh icon reads vehicle status. Hold the widget to move it.
+在后台设置里检查通知、电池限制和预约权限，再按需要启用停车守护或预约用车。系统省电和网络可能延迟更新，卡片会保留数据时间。	Check notifications, battery restrictions and alarm permission in Background settings. Then enable parking guard or departure schedules as needed. Power saving and network conditions can delay updates; the widget always keeps the data time.
+想接收车机录像？到“更多 → 车机连接与配对”连接 OpenAVM Recorder。远程车控可以先独立使用。	To receive recordings, pair OpenAVM Recorder in More → Car connection and pairing. Remote vehicle controls work independently.
+稍后继续 · 更多里可随时查看	Continue later · find this guide in More
+小尺寸保留四个常用操作，大尺寸显示六个操作与更多车况。按钮原地执行，卡片显示进度和数据时间。	Small widgets have four common controls. Larger widgets add two controls and more status. Actions run in place with progress and data timestamps.
+通风与加热放在一起：点按切档，长按选档。	Switch between ventilation and heating. Tap to cycle levels; hold to choose one.
+轻点切档，长按直接选关闭 / 1 / 2 / 3。连续选择会合并成最新目标，排队发送。	Tap to cycle levels. Hold to choose Off, 1, 2 or 3. Repeated choices merge into the latest target and send in sequence.
+空调设定值的回读尚未取得。请求受理后保留“待核实”，不会用车温冒充设定值。	The car does not report the AC setpoint. Accepted requests stay unconfirmed; cabin temperature is never treated as the setpoint.
+旧	Old
+上次	Last
+仅一次	Once
+尚未读取	Not read yet
+已保存	Saved
+座椅通风与加热可在车辆页操作	Seat ventilation and heating are available in Vehicle
+整体车况	Overall vehicle status
+未取得可解释字段	No interpretable fields
+未设置	Not set
+本次	This time
+来源未知	Source unknown
+点按读取状态	Tap to read status
+等待车况	Waiting for vehicle status
+设定温度回读与座舱风量仍待验证	Setpoint feedback and cabin blower control still need verification
+车况已确认	Vehicle status confirmed
+近期测量	Recently measured
+选择车辆	Select vehicle
+重复	Repeat
+驻车数据	Parking data
+箭头按钮打开应用	The arrow button opens the app
+一键备车开始后	Once preparation starts
+停止备车	Stop preparation
+停止尚未发送	Stop not sent
+停止操作已中断	Stop interrupted
+停止操作已记录	Stop requested
+再点停止	Tap to stop
+再点同一个按钮即可停止	Tap the same button again to stop
+备车状态已变化	Preparation state changed
+已取消备车	Preparation cancelled
+已收到停止操作	Stop requested
+收到停止操作	Stop requested
+时	when
+显示	shows
+未发送新操作	No new action sent
+未发送结束指令	No stop command sent
+未自动重发	Not resent automatically
+核实备车状态	Check preparation
+正在核实备车状态	Checking preparation
+正在等待当前请求结束	Waiting for the current request
+正在等待车辆回传关闭状态	Waiting for the vehicle to report it has stopped
+正在结束备车	Stopping preparation
+等待关闭回传	Awaiting stop
+等待当前请求结束	Waiting for the current request
+请先核实当前操作	Check the current action first
+请核实车况	Check vehicle status
+请重新选择	Please tap again
+一键备车开始后，再点同一个按钮即可停止。显示“正在结束”时，正在等待车辆回传关闭状态。	Tap the same button again to stop preparation. Stopping means the app is waiting for the vehicle to confirm it has stopped.
+收到停止操作 · 正在结束备车	Stop requested · Stopping preparation
+已收到停止操作 · 等待当前请求结束	Stop requested · Waiting for the current request
+停止尚未发送 · 请先核实当前操作，再点停止	Stop not sent · Check the current action, then tap to stop
+备车状态已变化 · 已更新卡片，请重新选择	Preparation changed · Card updated, please tap again
+停止操作已中断 · 未自动重发，请核实车况	Stop interrupted · Not resent. Check vehicle status
+不代表座舱风量接口已验证	Cabin fan control is not verified
+不补发中断的自动调节	Interrupted adjustments are not replayed
+临近出发时开始	Starts closer to departure
+任何时候再点备车按钮都可以停止	Tap preparation again at any time to stop
+低档预热中	Warming on low
+保持待出发	Holding for departure
+保持至	Holding until
+关闭结果以车辆回传为准	Stopping is confirmed by vehicle feedback
+分钟后用车	minutes until departure
+剩余时间不足	Not enough time remaining
+可手动停止	You can stop manually
+处理座椅余热	Removing residual seat heat
+备车状态待核实	Check preparation
+已到本次截止	Preparation deadline reached
+已发送	Sent
+已手动调节舒适功能	Comfort controls adjusted manually
+已有座椅操作会保留	Existing seat settings are preserved
+已退出自动调节	Automatic adjustments ended
+座椅加热先使用低档短时预热	Seat heating uses a short low-level cycle
+座椅可能继续处理余热或余冷	Seats may need more cooling or warming
+座椅定时已结束	Seat timer has ended
+座椅已有操作	Seat controls are already active
+座椅执行结果待核实	Seat action needs verification
+座椅操作未受理	Seat request was not accepted
+座椅状态不完整	Seat status is incomplete
+座椅继续处理	Finishing seats
+座椅舒适程度按运行记录估计	Seat comfort is estimated from operating history
+座椅设置已变化	Seat settings changed
+座椅阶段调整	Seat preparation adjustment
+手机恢复运行后只继续核实	After recovery the app only checks status
+手机时间已变化	Phone clock changed
+接管或手动调节后退出自动策略	Driving or manual control ends automatic adjustments
+控制结果待核实	Control outcome needs verification
+方向盘状态暂不可核实	Steering wheel status cannot be verified
+方向盘运行状态未接入	Steering wheel feedback is unavailable
+未启动新的备车动作	No new preparation action started
+未测量表面温度	Surface temperature is not measured
+本次不自动开启	Not started automatically
+本次仅设置空调目标	Only the cabin target is requested this time
+本次保留原设置	Existing settings preserved
+本次处理已完成规则评估	Preparation estimate complete
+本次备车控制已确认结束	Preparation controls confirmed off
+本次已结束	This task has ended
+本次未启动座椅	Seat preparation not started
+本次未自动开启	Not started automatically
+本次未自动操作	Not controlled automatically
+本次舒适任务已完成规则评估	Comfort tasks have completed their estimated preparation
+档连续操作会冲突	Rapid level changes can conflict
+正在通风	Ventilating
+的	in
+立即备车	Prepare now
+立即备车可选择舒适后自动结束	Immediate preparation can stop when estimated comfortable
+等待车况核实结束	Waiting to verify stopping
+自动结束未发送	Automatic stop was not sent
+自动调节已暂停	Automatic adjustments paused
+舒适后自动结束	Stop when estimated comfortable
+舒适程度按规则估计	Comfort is estimated
+舒适程度未完全核实	Comfort could not be fully verified
+舱温已稳定	Cabin temperature stable
+舱温已达标	Cabin target reached
+舱温稳定后	Once cabin temperature is stable
+舱温达标后	After reaching the cabin target
+车况暂不可核实	Vehicle status cannot be verified
+车况过期时不会猜测进度	Old readings never imply progress
+车温暂不可核实	Cabin temperature cannot be verified
+还会检查本次座椅处理	Seat preparation is also checked
+进度已恢复	Progress restored
+远程空调已结束	Remote climate has ended
+部分舒适项目未参与或未完全核实	Some comfort features were excluded or not fully verified
+预约备车保持到出发	Scheduled preparation holds until departure
+预约备车保持至出发	Scheduled preparation holds until departure
+15 分钟后用车	Depart in 15 minutes
+舒适后自动结束（立即备车）	Stop when comfortable (immediate preparation)
+舱温稳定后，还会检查本次座椅处理。预约备车保持至出发；接管或手动调节后退出自动策略。关闭结果以车辆回传为准。	Seat preparation is checked as well as cabin temperature. Scheduled preparation holds until departure. Driving or manual control ends automatic adjustments. Vehicle feedback confirms stopping.
+座椅加热先使用低档短时预热；方向盘状态暂不可核实，本次不自动开启。已有座椅操作会保留。	Seats use a short cycle of low heat. Automatic steering-wheel heating awaits verified feedback. Existing seat settings are preserved.
+舱温达标后，座椅可能继续处理余热或余冷。立即备车可选择舒适后自动结束；预约备车保持到出发。任何时候再点备车按钮都可以停止。	Seats may still need cooling or warming after the cabin reaches its target. Immediate preparation can stop when estimated comfortable; scheduled preparation holds until departure. Tap preparation again to stop.
+车况过期时不会猜测进度。手机恢复运行后只继续核实，不补发中断的自动调节。	Old readings never imply progress. After recovery, the app checks status without replaying interrupted adjustments.
+座椅舒适程度按运行记录估计，未测量表面温度。	Seat comfort is estimated from operating history, without a surface-temperature measurement.
+舱温已达标 · 座椅继续处理，舒适程度按规则估计	Cabin target reached · Finishing seats (estimated comfort)
+断网时以车辆自身计时为准	When offline the vehicle's own timer applies
+不能保证恰好在出发时停止	Stopping exactly at departure cannot be guaranteed
+断网时以车辆自身计时为准，不能保证恰好在出发时停止。	When offline, the vehicle's own timer applies. It may stop after the departure time.
+等待座椅关闭回传	Waiting for seat-off confirmation
+等待座椅运行回传	Waiting for seat operation feedback
+临近出发再预热座椅	Seats will warm closer to departure
+座椅状态待核实	Seat status needs verification
+不改变舒适目标	Your comfort target stays unchanged
+临近出发再进行局部预热	Local warming will begin closer to departure
+出风回传	Blower feedback
+分钟加热	minutes of heating
+可在空调面板手动使用	Available manually in the climate panel
+回传	Reported
+回传时间	Vehicle report time
+已受理不代表模式已确认	Acceptance does not confirm the mode
+已有操作或状态未知时保留原设置	Existing or unknown settings are preserved
+座椅使用低档短时预热	Seats use a short cycle of low heat
+快速升温	Quick warming
+快速降温	Quick cooling
+方向盘加热已回传	Wheel heating reported on
+方向盘可核对开关状态	Steering wheel on/off status can be checked
+方向盘已在加热	Steering wheel is already heating
+方向盘按需请求	Steering wheel heating is requested as needed for
+方向盘状态未知	Steering wheel state is unknown
+暂不参与后台自动调节	Not used for automatic background adjustments yet
+本次定时已结束	This timed cycle has ended
+本次未启动舒适项目	No new comfort task started
+模式	mode
+点上方的温度按钮	Tap the temperature button above
+空调回传	Climate feedback
+等待舒适项目关闭回传	Waiting for comfort features to report off
+等待舒适项目运行回传	Waiting for comfort feature operation feedback
+自动备车使用舒适目标温度	Automatic preparation uses your comfort target
+舒适设置已变化	Comfort settings changed
+舒适项目执行结果待核实	Comfort task outcome needs verification
+舒适项目操作未受理	Comfort task request was rejected
+舒适项目状态待核实	Comfort feature status needs verification
+舒适项目继续处理	Comfort tasks are continuing
+表面温度未直接测量	Surface temperature is not measured
+请求	Requested
+车辆暂不回传空调设定值或	The vehicle does not report the climate setpoint or
+需要恢复目标时	To return to your target
+LO 快速降温	LO Quick cool
+HI 快速升温	HI Quick warm
+LO / HI 请求 5 分钟，不改变舒适目标。需要恢复目标时，点上方的温度按钮。	LO / HI requests a 5-minute cycle without changing your comfort target. Tap the temperature button above to return to that target.
+车辆暂不回传空调设定值或 LO / HI 模式；已受理不代表模式已确认。方向盘可核对开关状态，表面温度未直接测量。	The vehicle does not report the climate setpoint or LO / HI mode. Acceptance is not mode confirmation. Wheel on/off feedback is available; surface temperature is not measured.
+座椅使用低档短时预热；方向盘按需请求 5～8 分钟加热，已有操作或状态未知时保留原设置。	Seats use a short low-heat cycle. Wheel heating requests 5-8 minutes when needed. Existing or unknown settings are preserved.
+自动备车使用舒适目标温度。LO / HI 可在空调面板手动使用，暂不参与后台自动调节。	Automatic preparation uses your comfort target. LO / HI is available manually in the climate panel, but is not used automatically yet.
+开启 8 分钟	Heat for 8 min
+是手动快速降温或升温	Manually requests quick cooling or warming
+舒适目标保持不变	Your comfort target stays unchanged
+方向盘只有开启与关闭	Steering wheel heating is on/off only
+自动备车会按允许项和车况选择短时加热	Automatic preparation selects short heating cycles based on your permissions and vehicle state
+空调设定值暂不回传	The climate setpoint is not reported
+受理后可继续选择	You can keep selecting after acceptance
+结果未确认时队列会暂停	The queue pauses on an uncertain outcome
+LO / HI 是手动快速降温或升温，舒适目标保持不变。方向盘只有开启与关闭，自动备车会按允许项和车况选择短时加热。	LO / HI manually requests quick cooling or warming without changing your comfort target. Wheel heating is on/off only; automatic preparation selects short cycles based on your permissions and vehicle state.
+空调设定值暂不回传；受理后可继续选择，结果未确认时队列会暂停。空调出风量待接入。	The climate setpoint is not reported. You can keep selecting after acceptance; an uncertain outcome pauses the queue. Independent fan speed is not available yet.
+方向盘自动加热待实车验证	Automatic wheel heating awaits vehicle testing
+本次未参与	Not used in this preparation
+方向盘可在空调面板手动开关	Wheel heating can be switched manually in the climate panel
+自动加热待实车定时验证后启用	Automatic wheel heating awaits native timer validation
+这些新控制先在空调面板手动使用	These new controls are initially available manually in the climate panel
+座椅使用低档短时预热。方向盘可在空调面板手动开关，自动加热待实车定时验证后启用。	Seats use a short low-heat cycle. Wheel heating can be switched manually in the climate panel; automatic use awaits vehicle timer validation.
+LO / HI 是手动快速降温或升温，舒适目标保持不变。方向盘只有开启与关闭；这些新控制先在空调面板手动使用。	LO / HI manually requests quick cooling or warming without changing your comfort target. Wheel heating is on/off only. These new controls are initially available manually in the climate panel.
+不会自动重发	Will not resend automatically
+到家后哨兵已关闭	Sentry is off after arriving home
+可稍后重试	Try again later
+可继续其他操作	Other controls remain available
+已查询云端	Cloud checked
+找车结果未确认	Horn result unconfirmed
+找车请求已受理	Find-car request accepted
+找车请求未受理	Find-car request not accepted
+收到新车温	New cabin reading received
+时间未知	Time unknown
+暂无新上报	No newer reading
+本次不自动重开	Will stay off for this stop
+正在查询	Checking
+点开地图	Open map
+等待首次读取车温	Waiting for cabin temperature
+请留意车辆鸣笛	Listen for the horn
+车温上报	Cabin reading
+车温暂无新上报	No newer cabin reading
+车温记录未变化	Cabin reading unchanged
+道路名称待解析	Street name unavailable
+附近	nearby
+已查询云端 · 车温暂无新上报	Cloud checked · No newer cabin reading
+找车结果未确认 · 不会自动重发，可继续其他操作	Horn result unconfirmed · Not resent; other controls remain available
+找车请求已受理 · 请留意车辆鸣笛	Find-car request accepted · Listen for the horn
+哨兵已关闭 · 本次不自动重开	Sentry is off · Will stay off for this stop
+道路名称待解析 · 点开地图	Street name unavailable · Open map
+“查询”是手机访问云端的时间，“车温上报”是车辆测量时间。停车后车辆可能暂无新上报。	“Checked” is when your phone fetched cloud data. “Cabin reading” is the vehicle measurement time. A parked car may not send a newer reading.
+是手机访问云端的时间	is when your phone fetched cloud data
+是车辆测量时间	is the vehicle measurement time
+停车后车辆可能暂无新上报	A parked car may not send a newer reading
+找车只发送一次鸣笛请求，不需要手动核对才能继续；没听到可稍后再试。	Find car sends one horn request. Other controls stay available without manual acknowledgement. If you hear nothing, try again later.
+找车只发送一次鸣笛请求	Find car sends one horn request
+尾门解锁请求已受理 · 未抬起可按车尾按键	Tailgate unlock accepted · Press rear button if needed
+尾门解锁结果未确认 · 未重发，可继续其他操作	Tailgate unlock unconfirmed · Not resent; other controls available
+尾门解锁请求未受理 · 可稍后重试	Tailgate unlock not accepted · Try again later
+尾门解锁请求已受理	Tailgate unlock accepted
+未抬起可按车尾按键	Press rear button if needed
+尾门解锁结果未确认	Tailgate unlock unconfirmed
+尾门解锁请求未受理	Tailgate unlock not accepted
+远程按钮发送尾门解锁请求；若未抬起，请按车尾按键。锁定不会电动关闭尾门。	Remote control requests a tailgate unlock. If it stays down, press the rear button. Locking does not power-close the tailgate.
+远程按钮发送尾门解锁请求	Remote control requests a tailgate unlock
+若未抬起	If it stays down
+请按车尾按键	Press the rear button
+锁定不会电动关闭尾门	Locking does not power-close the tailgate
+尾门按钮用于解锁。若未抬起，请按车尾按键；图标继续显示车辆上报的开合状态。	The tailgate button requests an unlock. If it stays down, press the rear button. Its icon continues to show the opening state reported by the car.
+尾门按钮用于解锁	The tailgate button requests an unlock
+图标继续显示车辆上报的开合状态	The icon continues to show the opening state reported by the car
+不需要手动核对才能继续	Other controls stay available without manual acknowledgement
+没听到可稍后再试	If you hear nothing, try again later
+操作结果仍待回传	Command confirmation still pending
+温度达标 · 保持中	Comfortable · maintaining
+温度达标	Comfortable
+保持中	Maintaining
+舱温达标 · 座椅继续处理	Cabin ready · seats finishing
+车模浅琥珀色表示偏热，浅蓝色表示偏冷。蓝色气流表示本次备车正在降温，琥珀气流表示升温；中性气流表示保持或仅确认送风。数据过期后气流停止，保留上次车温和时间。	An amber glow means the cabin is warm; a blue glow means it is cool. Blue airflow shows cooling progress, amber shows warming, and neutral lines show holding or confirmed airflow. Old data stops the airflow display; the last temperature and sample time remain visible.
+车模浅琥珀色表示偏热	An amber glow means the cabin is warm
+浅蓝色表示偏冷	a blue glow means it is cool
+蓝色气流表示本次备车正在降温	blue airflow shows cooling progress
+琥珀气流表示升温	amber shows warming
+中性气流表示保持或仅确认送风	neutral lines show holding or confirmed airflow
+数据过期后气流停止	old data stops the airflow display
+保留上次车温和时间	the last temperature and sample time remain visible
+舱温达标	Cabin ready
+等待新的车辆回传	Waiting for a new vehicle report
+预热至	Warming to
+预冷至	Cooling to
+空调已运行	Climate running
+等待温度变化	Waiting for temperature change
+空调已运行 · 等待温度变化	Climate running · Waiting for temperature change
+目标是希望达到的车内温度	The target is your desired cabin temperature
+是否达标以实际测量为准	Comfort is confirmed by measured temperature
+不能仅凭运行时间判断	Running time alone does not confirm comfort
+目标是希望达到的车内温度；是否达标以实际测量为准，不能仅凭运行时间判断。	The target is your desired cabin temperature. Comfort is confirmed by measurements, not by elapsed time.
+座舱周围的淡色光晕提示偏热或偏冷	A subtle cabin glow indicates a warm or cool interior
+备车空调运行后	Once remote climate is running
+琥珀气流表示向目标预热	Amber airflow shows warming toward your target
+蓝色表示预冷	Blue shows cooling toward your target
+测到温度变化后才显示正在升温或降温	Measured heating or cooling is shown after the temperature changes
+中性气流表示保持或送风	Neutral airflow indicates holding or fan operation
+座舱周围的淡色光晕提示偏热或偏冷。备车空调运行后，琥珀气流表示向目标预热，蓝色表示预冷；测到温度变化后才显示正在升温或降温。中性气流表示保持或送风。数据过期后气流停止，保留上次车温和时间。	A subtle cabin glow shows a warm or cool interior. Once remote climate is running, amber airflow shows warming toward your target and blue shows cooling. Measured progress appears once the temperature changes. Neutral airflow means holding or fan operation. Flow stops when data expires; the last temperature and time remain.
+上次目标	Last target
+本次目标	Current target
+正在获取新车况…	Getting a new vehicle report…
+等待车辆新上报…	Waiting for a new vehicle report…
+正在结束本次刷新…	Finishing refresh…
+已收到新车况上报	New vehicle report received
+温度数值未变	Temperature unchanged
+已查询云端 · 车辆暂无新上报	Cloud checked · No new vehicle report
+等待新上报已结束 · 保留最新可用记录	Wait ended · Keeping the latest available report
+刷新已结束 · 将使用车辆操作回传	Refresh ended · Following the vehicle operation
+新车况暂未取到 · 保留云端记录	New report unavailable · Keeping the cloud record
+在线连接待收尾	Online session cleanup pending
+上次在线连接待收尾 · 请稍后再试	Previous online session needs cleanup · Try again shortly
+刚尝试获取新车况 · 车辆暂无新上报	Recently checked · No new vehicle report
+本次刷新已结束 · 保留最新可用记录	Refresh ended · Keeping the latest available report
+车辆暂无新上报	No new vehicle report
+等待新上报已结束	Wait for a new report ended
+保留最新可用记录	Keeping the latest available report
+刷新已结束	Refresh ended
+将使用车辆操作回传	Following the vehicle operation
+新车况暂未取到	New report unavailable
+保留云端记录	Keeping the cloud record
+上次在线连接待收尾	Previous online session needs cleanup
+刚尝试获取新车况	Recently requested a new report
+本次刷新已结束	Refresh ended
+正在获取新车况	Getting a new vehicle report
+正在结束本次刷新	Finishing refresh
+不会关闭	Will not turn it off
+临时任务已过期	Temporary task expired
+临时空调停止待确认	Temporary A/C stop unconfirmed
+临时空调已结束	Temporary A/C stopped
+临时空调请求未受理	Temporary A/C request rejected
+会短暂开启空调	Briefly turns A/C on
+保留上次车温	Keeping previous temperature
+保留原空调	Keeping existing A/C
+停止临时空调	Stop temporary A/C
+停止空调	Stop A/C
+再请求停止	Then request stop
+只读取车温	Reading temperature only
+尚未开启空调	A/C not started
+已交给手动空调操作	Handed over to manual A/C
+已取消车温更新	Temperature update cancelled
+已有空调只读取	Existing A/C is read only
+已有空调或备车只读取	Existing A/C or preparation is read only
+已结束车温更新	Temperature update ended
+已读取运行中的车温	Read temperature from running A/C
+打开空调控制	Open A/C controls
+更新车温	Update temperature
+未启动临时空调	Temporary A/C not started
+未继续发送	No further request sent
+未获得新车温	No new temperature received
+本次备车未启动	Preparation not started
+核对空调	Check A/C
+正在准备更新车温	Preparing temperature update
+正在核对临时空调是否停止	Checking temporary A/C stop
+正在核对新车况	Checking updated vehicle state
+正在短暂开启空调获取车温	Briefly starting A/C for temperature
+正在结束临时空调	Stopping temporary A/C
+正在结束取温	Ending temperature update
+正在结束车温更新	Ending temperature update
+短开空调取温	Read via A/C
+短暂开启空调后读取车温	Briefly start A/C and read temperature
+短暂开空调	Brief A/C
+空调取温中	A/C temperature update
+空调已在运行	A/C already running
+空调已有活动或状态未知	A/C is active or state unknown
+等待车辆上报	Waiting for vehicle report
+系统未允许更新车温	System blocked temperature update
+结束中	Ending
+结束取温	End update
+舒适操作尚未启动	Comfort action not started
+请在空调页核对并按需要关闭	Check A/C controls and turn it off if needed
+请打开应用重试	Open app and retry
+读取后请求停止	Request stop after reading
+车温上报已更新	Temperature report updated
+车温已更新	Temperature updated
+车温暂未更新	No new temperature yet
+车温更新尚未结束	Temperature update still active
+车温更新已中断	Temperature update interrupted
+车温更新已取消	Temperature update cancelled
+车温读取未完成	Temperature read incomplete
+车辆已接管	Vehicle has taken over
+车辆暂无新车温	No new vehicle temperature
+随后处理舒适操作	Then apply comfort action
+驻车或空调状态待确认	Parked or A/C state unconfirmed
+已收到车温	Temperature report received
+是车辆回传的时间	Is the vehicle report time
+新上报不一定代表重新测温	A new report does not always mean a new measurement
+普通刷新只读取车况	Regular refresh only reads vehicle status
+点温度旁的	Tap the control beside the temperature
+取温后请求停止	Request stop after reading temperature
+停止待确认时请核对空调状态	Check A/C when its stop is unconfirmed
+正在刷新车况	Refreshing vehicle status
+刷新已中断 · 未启动临时空调	Refresh interrupted · temporary A/C was not started
+已结束刷新 · 保留已读取的车况	Refresh ended · received status kept
+车况读取未完成 · 未启动临时空调	Status unavailable · temporary A/C was not started
+车况已更新 · 保留车辆上报的车温	Status updated · reported temperature kept
+车况已更新 · 5 分钟内已读取车温	Status updated · temperature read within 5 min
+车况已更新 · 车温稍后可重试	Status updated · retry temperature shortly
+车况已更新 · 正在更新车温	Status updated · reading cabin temperature
+正在结束刷新	Ending refresh
+刷新车况与车温	Refresh status and temperature
+OpenAVM · 车辆刷新	OpenAVM · Vehicle refresh
+刷新时读取车温	Read cabin temperature on refresh
+停车休眠时，车辆可能不更新车温。开启后，手动刷新会在必要时短暂启动空调取温，再关闭本次临时空调。	A parked vehicle may stop reporting cabin temperature. When enabled, a manual refresh briefly starts A/C if needed to read the temperature, then stops that temporary A/C.
+已有空调只读取；5 分钟内成功取温不重复启动。后台自动刷新只读取车况。	Existing A/C is only observed. A successful read within 5 minutes avoids another start. Background refresh only reads vehicle status.
+刷新车况与车温 · 必要时短暂开启空调	Refresh status and temperature · briefly starts A/C if needed
+点一次刷新，先显示车况，再按需要更新车温；运行中再点同一个按钮即可结束。必要时会短暂开启空调取温，已有空调只读取。	Tap refresh once: status appears first, then temperature updates if needed. Tap the same button again to end it. A/C may run briefly to obtain a reading; existing A/C is only observed.
+“更多”里的“刷新时读取车温”默认开启，可随时关闭。后台自动刷新只读车况；显示停止待确认时，请核对空调状态。	Read cabin temperature on refresh is enabled by default under More and can be turned off. Background refresh only reads status. If a stop is unconfirmed, check the A/C state.
+结束	End
+已结束刷新	Refresh ended
+保留已读取的车况	received status kept
+车况已更新	Status updated
+保留车辆上报的车温	reported temperature kept
+分钟内已读取车温	min since temperature read
+车温稍后可重试	retry temperature shortly
+正在更新车温	reading cabin temperature
+刷新已中断	Refresh interrupted
+点一次刷新	Tap refresh once
+先显示车况	show status first
+再按需要更新车温	then update temperature if needed
+运行中再点同一个按钮即可结束	tap the same button again to end it
+必要时会短暂开启空调取温	A/C may briefly run to read temperature
+里的	under
+默认开启	enabled by default
+可随时关闭	can be turned off at any time
+后台自动刷新只读车况	Background refresh only reads vehicle status
+显示停止待确认时	if a stop is unconfirmed
+请核对空调状态	check the A/C state
+停车休眠时	While parked and asleep
+车辆可能不更新车温	the vehicle may stop reporting temperature
+开启后	When enabled
+手动刷新会在必要时短暂启动空调取温	manual refresh briefly starts A/C if needed to read temperature
+再关闭本次临时空调	then stops that temporary A/C
+分钟内成功取温不重复启动	min since a successful read avoids another start
+后台自动刷新只读取车况	Background refresh only reads vehicle status
+车辆刷新	Vehicle refresh
+必要时短暂开启空调	briefly starts A/C if needed
+先连接极氪账号，就能使用远程车控。想把车机录像传到手机，再单独配对 OpenAVM Recorder。	Connect your ZEEKR account for remote vehicle controls. Pair OpenAVM Recorder separately to receive car recordings.
+可以只设置现在需要的功能，其余步骤稍后在「更多 → 新手指南」继续。	Set up what you need now. Continue later in More → Beginner guide.
+本地试用版需要先导入协议 JSON，再登录有车辆授权的极氪账号并选择车辆。没有配置文件时，可先跳过并浏览。	This local test build needs a protocol JSON file. Import it, sign in with an authorised ZEEKR account and select your vehicle. Without the file, skip this step to explore.
+这里连接成功代表远程车控可用，不代表已经连接车机录像。	This connection enables remote controls. Recorder pairing is a separate step.
+保存家的位置不会启用守护；请在自动化里选择是否启用离家开启、到家关闭。	Saving home does not enable parking guard. Choose whether to enable away-from-home guard and turn it off on arrival in Automation.
+点一次备车开始，再点同一个按钮停止。等待车辆回传时会显示进度；「已受理」还不等于车辆已经完成。	Tap Prepare once to start, then tap it again to stop. Progress remains visible while waiting for the car. Accepted does not yet mean completed.
+琥珀气流表示预热，蓝色表示预冷；温度和时间一起看，旧读数不能当作当前车温。	Amber airflow indicates warming; blue indicates cooling. Always check the temperature timestamp: an old reading is not the current cabin temperature.
+「更多 → 刷新时读取车温」默认开启，可随时关闭。后台刷新只读车况。尾门按钮只解锁，必要时到车尾按实体按键。	More → Read cabin temperature on refresh is on by default and can be turned off. Background refresh only reads status. Tailgate control releases the latch; use the physical button if needed.
+设置完成后，先在方便观察车辆时试一次备车和一次离家停车，确认结果符合你的习惯。	After setup, try preparation and away-from-home parking when you can check the car, to confirm the behaviour suits you.
+录像在手机与车机之间通过局域网传输，不需要私人服务器。不在车旁时可以跳过，远程车控照常使用。	Recordings transfer directly over your local network, without a private server. Away from the car? Skip this step; remote controls still work.
+配对只需做一次。传完后可以停止接收以节省手机电量；已收到的录像离线也能播放。	Pair once. After transfer, stop receiving to save phone battery. Received recordings also play offline.
+接收已就绪 · 请在车机确认连接	Receiver ready · confirm connection on the car
+最近与车机通信正常	Recent car communication
+录像接收启动失败 · 打开连接页重试	Recorder receiver failed · open connection to retry
+录像接收启动失败	Recorder receiver failed
+打开连接页重试	Open connection to retry
+接收已就绪	Receiver ready
+请在车机确认连接	Confirm connection on the car
+先连接极氪账号	Connect your ZEEKR account first
+就能使用远程车控	to use remote vehicle controls
+想把车机录像传到手机	To receive car recordings
+再单独配对	pair separately
+可以只设置现在需要的功能	Set up the features you need now
+其余步骤稍后在	Continue later in
+本地试用版需要先导入协议	This local test build requires the protocol file
+再登录有车辆授权的极氪账号并选择车辆	Sign in with an authorised ZEEKR account and select your vehicle
+没有配置文件时	Without a configuration file
+可先跳过并浏览	skip this step to explore
+这里连接成功代表远程车控可用	This connection enables remote controls
+不代表已经连接车机录像	Recorder pairing is a separate step
+保存家的位置不会启用守护	Saving home does not enable parking guard
+请在自动化里选择是否启用离家开启	Choose whether to enable away-from-home guard in Automation
+点一次备车开始	Tap Prepare once to start
+再点同一个按钮停止	Tap it again to stop
+等待车辆回传时会显示进度	Progress stays visible while waiting for the car
+还不等于车辆已经完成	does not yet mean completed
+琥珀气流表示预热	Amber airflow indicates warming
+温度和时间一起看	Check the temperature and its timestamp
+旧读数不能当作当前车温	An old reading is not the current cabin temperature
+后台刷新只读车况	Background refresh only reads status
+尾门按钮只解锁	Tailgate control only releases the latch
+必要时到车尾按实体按键	Use the physical button if needed
+设置完成后	After setup
+先在方便观察车辆时试一次备车和一次离家停车	Try preparation and away-from-home parking when you can check the car
+确认结果符合你的习惯	Confirm the behaviour suits you
+录像在手机与车机之间通过局域网传输	Recordings transfer over the local network
+不在车旁时可以跳过	Skip this step if you are away from the car
+远程车控照常使用	Remote controls still work
+配对只需做一次	Pair once
+传完后可以停止接收以节省手机电量	After transfer, stop receiving to save battery
+已收到的录像离线也能播放	Received recordings play offline
+开始使用与连接	Getting started
+继续上次步骤，或选择需要的帮助	Resume your guide or jump to a topic
+登录已保存在本机	Sign-in saved on this phone
+导入配置并登录极氪账号	Import configuration and sign in to Zeekr
+接收 Recorder 录像，与车辆账号分开设置	Receive Recorder videos with a separate pairing
+日常偏好	Everyday preferences
+目标温度、座椅舒适与最长时长	Temperature, seat comfort and time limit
+预览 2×2 / 4×1 / 4×2 / 4×3	Preview 2×2 / 4×1 / 4×2 / 4×3
+自动化与记录	Automation and history
+离家开启、到家关闭与本次暂停	Away, home and current parking controls
+检查权限、自动更新和运行状态	Permissions, automatic updates and status
+查看执行结果与原因	See what happened and why
+帮助与诊断	Help and diagnostics
+换手机使用	Moving to a new phone
+首次安装、重新连接与旧手机设置	First install, reconnecting and your old phone
+独立开发的非官方应用。账号配置保存在本机，权限在使用对应功能时申请。	An independently developed, unofficial app. Account configuration stays on this phone. Permissions are requested when you use the relevant feature.
+在新手机上开始	Start on a new phone
+安装包包含应用，不包含旧手机的账号、家地址或录像。	The installer includes the app, without your old phone's account, home address or recordings.
+1 · 连接车辆	1 · Connect your vehicle
+准备协议 JSON，导入后登录并选择车辆。	Have your protocol JSON ready, import it, then sign in and select your vehicle.
+2 · 重新设置偏好	2 · Set your preferences
+设置家的位置与识别范围，核对备车偏好，再添加桌面卡片。	Set home and its radius, review preparation preferences, then add your widgets.
+3 · 交接自动化	3 · Move your automations
+先暂停旧手机的预约、离家守护和到家关闭，再在新手机开启需要的规则与后台权限。	Pause schedules, away guarding and automatic home disarming on the old phone. Then enable the rules and background permissions you need on the new one.
+4 · 配对车机录像（可选）	4 · Pair Recorder (optional)
+在同一网络下重新配对这台手机，发送一段已有录像并确认能播放。	Pair this phone on the same network, send an existing recording, and check that it plays.
+最后，在方便观察车辆时试一次备车和停车守护，确认通知、结果与习惯一致。	When you can observe the car, try preparation and parking guard to check the notifications and results suit you.
+选择步骤	Choose a step
+看车况、提前备车、停车守护，把每天用车的几件事放在一起。	Vehicle status, preparation and parking guard, together for your daily drive.
+先连接极氪账号。想接收车机录像，再配对 OpenAVM Recorder。两个连接可以分开设置。	Connect your Zeekr account first. Pair OpenAVM Recorder when you want to receive recordings. You can set up either connection independently.
+不必一次完成。进度会自动保存，随时在「更多 → 新手指南」继续。	No need to finish now. Your place is saved automatically. Resume from More → Beginner guide.
+已经可以读取车况，直接下一步即可。	Your vehicle is connected. You can go straight to the next step.
+准备协议 JSON 文件 → 导入配置 → 登录极氪账号 → 选择车辆。guest 账号需要主账号已授予车辆权限。	Prepare a protocol JSON → import it → sign in to Zeekr → select your vehicle. A guest account needs access granted by the main account.
+换手机需要重新导入和登录。配置与登录会加密保存在这台手机，不会随安装包带过来。	On a new phone, import your configuration and sign in again. They are stored encrypted on that phone and are not included in the installer.
+没有配置文件也可以先浏览；连接页有准备说明。	You can browse without a configuration file. The connection page explains what you need.
+输入部分地址并选择匹配结果，或把手机当前位置设为家。家的范围可调整，容忍车辆定位偏移。	Search part of your address and choose a match, or use your phone's current location. Adjust the home radius to allow for vehicle location drift.
+保存地址后，在停车守护里分别开启「离家开启」和「到家关闭」。保存地址本身不会开启规则。	After saving home, enable away guarding and home disarming separately in Parking guard. Saving the address does not enable these rules.
+手动关闭哨兵后，本次停车不会再自动开启。	Turning sentry off manually pauses automatic guarding for this parking session.
+选好目标温度、最长时长，以及是否允许座椅通风或加热。保存偏好不会启动备车。	Choose a target temperature, time limit, and whether to allow seat ventilation or heating. Saving preferences does not start preparation.
+点一次开始，再点同一个按钮停止。卡片会显示进度；收到车辆回传后，才会确认结果。	Tap once to start, then tap the same button to stop. Progress stays on the card; results are confirmed from vehicle feedback.
+琥珀气流表示预热，蓝色表示预冷。车温旁的时间告诉你读数有多新。	Amber airflow means warming; blue means cooling. The timestamp beside cabin temperature shows how recent it is.
+先预览，再选适合桌面的大小。小卡片有备车、找车、车锁、哨兵；大卡片还显示更多车况。	Preview the sizes before adding a widget. Small ones have preparation, find car, lock and sentry. Larger ones show more vehicle information.
+点图标直接操作，进度留在卡片上；箭头打开应用。尾门按钮只解锁，需要时到车尾按实体按键。	Tap an icon to act and see progress on the widget; the arrow opens the app. The tailgate button only unlocks it. Use the physical button if needed.
+手动刷新默认也读取车温，必要时会短暂开启空调。可在更多里关闭；后台刷新只读车况。	Manual refresh also reads cabin temperature by default and may briefly turn on AC. You can turn this off in More. Background refresh is read-only.
+按后台设置页的提示检查通知、电池和预约权限，再启用需要的守护或预约。	Follow Background settings to check notifications, battery restrictions and scheduling permissions. Then enable the guard rules or schedules you need.
+省电限制和网络可能延迟更新。刷新成功表示取到了云端记录，不保证车辆刚刚测量；请一起看数据时间。	Battery restrictions and network conditions can delay updates. Refresh success means cloud data was retrieved, not that the car just measured it. Check its timestamp too.
+换主力手机时，先暂停旧手机的预约和自动守护，避免两台手机重复执行。	Before switching phones, pause schedules and automatic guarding on the old one to avoid duplicate actions.
+在车旁时再设置即可。手机和车机连同一网络，传送已有录像，不需要私人服务器。	Set this up when you are near the car. Connect both devices to the same network to send existing recordings. No private server is needed.
+首次配对后会保存连接。传完可停止接收，已收到的录像离线也能播放。	Pairing is saved. Stop receiving when the transfer finishes; downloaded recordings play offline.
+回到首页	Go to home
+连接后显示你的车况。录像接收可在影像页单独设置。	Your vehicle status appears once connected. Set up recording transfers separately in Video.
+当前接入适配澳洲原厂 App 1.6.6。配置需与你使用的版本匹配，车辆权限以你的账号实际授权为准。	This connection supports the Australian official app version 1.6.6. Configuration must match your version; available controls depend on your account's vehicle access.
+选一张适合你的卡片	Choose your widget
+卡片外观预览	Widget appearance preview
+示例车况 · 添加后显示你绑定的车辆	Sample data · Your linked vehicle appears after adding
+备车、找车、车锁、哨兵，四个常用操作。	Four everyday controls: prepare, find, lock and sentry.
+六个操作、车内温度与车辆状态。	Six controls, cabin temperature and vehicle status.
+添加到桌面	Add to home screen
+按钮直接执行，卡片显示进度；箭头打开应用。桌面网格和字体大小可能影响显示。	Buttons act directly and progress stays on the widget. The arrow opens the app. Layout varies with your launcher grid and font size.
+不会随安装包带过来	Not included in the installer
+不保证车辆刚刚测量	The car may not have taken a new measurement
+不包含旧手机的账号	Without your old phone's account
+不必一次完成	No need to finish now
+与车辆账号分开设置	Set up separately from your vehicle account
+两个连接可以分开设置	Set up either connection independently
+交接自动化	Move automations
+以及是否允许座椅通风或加热	And whether to allow seat ventilation or heating
+传完可停止接收	Stop receiving after the transfer
+传送已有录像	Send existing recordings
+保存地址后	After saving the address
+保存地址本身不会开启规则	Saving the address does not enable rules
+先暂停旧手机的预约	Pause schedules on your old phone first
+先暂停旧手机的预约和自动守护	Pause schedules and guarding on your old phone first
+先预览	Preview first
+六个操作	Six controls
+再启用需要的守护或预约	Then enable the rules or schedules you need
+再在新手机开启需要的规则与后台权限	Then enable rules and background permissions on the new phone
+再添加桌面卡片	Then add widgets
+再选适合桌面的大小	Then choose a size for your home screen
+再配对	Then pair
+准备协议	Prepare protocol
+到家关闭与本次暂停	Home disarming and current parking pause
+刷新成功表示取到了云端记录	Refresh success means cloud records were retrieved
+卡片会显示进度	The widget shows progress
+卡片显示进度	Progress stays on the widget
+发送一段已有录像并确认能播放	Send an existing recording and check that it plays
+可在更多里关闭	Turn this off in More
+四个常用操作	Four everyday controls
+在停车守护里分别开启	Enable separately in Parking guard
+在同一网络下重新配对这台手机	Pair this phone on the same network
+在方便观察车辆时试一次备车和停车守护	Try preparation and parking guard when you can observe the car
+在车旁时再设置即可	Set this up when near the car
+大卡片还显示更多车况	Larger widgets show more vehicle information
+安装包包含应用	The installer includes the app
+家地址或录像	Home address or recordings
+家的范围可调整	The home radius is adjustable
+导入后登录并选择车辆	Import, sign in and select your vehicle
+小卡片有备车	Small widgets include preparation
+已经可以读取车况	Vehicle status is available
+座椅舒适与最长时长	Seat comfort and time limit
+当前接入适配澳洲原厂	Supports the Australian official
+录像接收可在影像页单独设置	Set up recording transfers separately in Video
+必要时会短暂开启空调	May briefly turn on AC if needed
+或把手机当前位置设为家	Or use your phone's current location as home
+或选择需要的帮助	Or choose a help topic
+手动刷新默认也读取车温	Manual refresh reads cabin temperature by default
+手机和车机连同一网络	Connect both devices to the same network
+才会确认结果	Before confirming results
+把每天用车的几件事放在一起	Together for your daily drive
+按后台设置页的提示检查通知	Follow Background settings to check notifications
+按钮直接执行	Buttons act directly
+换主力手机时	When switching phones
+换手机需要重新导入和登录	Import and sign in again on a new phone
+接收	Receive
+提前备车	Prepare before departure
+收到车辆回传后	After vehicle feedback arrives
+文件	File
+最后	Finally
+最长时长	Time limit
+本次停车不会再自动开启	Automatic guarding is paused for this parking session
+权限在使用对应功能时申请	Permissions are requested when using the relevant feature
+核对备车偏好	Review preparation preferences
+桌面网格和字体大小可能影响显示	Layout varies with your launcher grid and font size
+检查权限	Check permissions
+没有配置文件也可以先浏览	You can browse without a configuration file
+添加后显示你绑定的车辆	Your linked vehicle appears after adding
+点一次开始	Tap once to start
+点图标直接操作	Tap an icon to act
+独立开发的非官方应用	An independently developed, unofficial app
+电池和预约权限	Battery restrictions and scheduling permissions
+登录极氪账号	Sign in to Zeekr
+直接下一步即可	Go to the next step
+省电限制和网络可能延迟更新	Battery restrictions and network conditions can delay updates
+看车况	View vehicle status
+确认通知	Check notifications
+离家守护和到家关闭	Away guarding and home disarming
+离家开启	Enable when away
+箭头打开应用	The arrow opens the app
+结果与习惯一致	Results suit your routine
+继续上次步骤	Resume your guide
+自动更新和运行状态	Automatic updates and status
+设置家的位置与识别范围	Set home and its radius
+请一起看数据时间	Check the data timestamp too
+账号配置保存在本机	Account configuration stays on this phone
+账号需要主账号已授予车辆权限	The account needs access granted by the main account
+车内温度与车辆状态	Cabin temperature and vehicle status
+车温旁的时间告诉你读数有多新	The cabin temperature timestamp shows how recent it is
+车辆权限以你的账号实际授权为准	Available controls depend on your account's vehicle access
+输入部分地址并选择匹配结果	Search part of your address and choose a match
+进度会自动保存	Your place is saved automatically
+进度留在卡片上	Progress stays on the widget
+连接后显示你的车况	Your vehicle status appears once connected
+连接车辆	Connect vehicle
+连接页有准备说明	The connection page explains what you need
+选好目标温度	Choose a target temperature
+避免两台手机重复执行	Avoid duplicate actions from two phones
+配对车机录像	Pair Recorder
+配置与登录会加密保存在这台手机	Configuration and sign-in are encrypted on this phone
+配置需与你使用的版本匹配	Configuration must match your version
+重新设置偏好	Set your preferences again
+重新连接与旧手机设置	Reconnecting and old phone settings
+随时在	Resume from
+需要时到车尾按实体按键	Use the physical tailgate button if needed
+预览	Preview
+首次安装	First install
+首次配对后会保存连接	Pairing is saved
+恢复自动化	Resume automation
+暂停自动化	Pause automation
+暂停会同时影响预约和自动守护，已经开始的备车需单独停止。	Pausing affects schedules and automatic guarding. Stop any preparation already running separately.
+暂停会同时影响预约和自动守护	Pausing affects schedules and automatic guarding
+已经开始的备车需单独停止	Stop any preparation already running separately
+我的 7X	My 7X
+连接车机录像（可选）	Connect Recorder (optional)
+读取、回看和导出原厂哨兵视频	Browse, play and export factory sentry recordings
+裁切、试听并导出车辆音效文件	Trim, preview and export vehicle sound files
+本地存储、回收站与配对	Local storage, recycle bin and pairing
+检查账号权限、导出脱敏报告	Check account permissions and export a redacted report
+录像连接需要安全重新配对	Secure pairing is required for the recorder connection
+登录极氪账号，连接你的车辆	Sign in to your Zeekr account to connect your vehicle
+已内置澳洲版本的连接适配，直接登录即可，无需准备配置文件。	Australian connection support is built in. Just sign in; no configuration file is needed.
+连接配置未能载入，请重启应用；仍有问题可在高级连接设置中恢复默认配置。	Connection settings could not be loaded. Restart the app, or restore defaults in advanced connection settings.
+正在恢复默认连接配置	Restoring default connection settings
+已恢复默认连接配置并退出登录。重新登录即可使用。	Default connection settings restored and account signed out. Sign in again to continue.
+默认连接配置未能恢复，请重启或更新应用。	Default connection settings could not be restored. Restart or update the app.
+准备中	Preparing
+需要检查	Check needed
+收起高级设置	Hide advanced settings
+高级连接设置	Advanced connection settings
+通常无需更换连接配置。只有在排查兼容问题时，才使用手动导入或恢复默认。	Normally you can leave these settings alone. Import or restore a profile only when troubleshooting compatibility.
+手动导入连接配置	Import connection settings manually
+恢复默认配置并退出登录	Restore defaults and sign out
+登录极氪账号并选择车辆	Sign in to Zeekr and select your vehicle
+连接适配已内置，登录极氪账号并选择车辆。	Connection support is built in. Sign in to Zeekr and select your vehicle.
+登录极氪账号 → 选择车辆。guest 账号需要主账号已授予车辆权限。	Sign in to Zeekr → select your vehicle. Guest accounts need access granted by the primary account.
+登录加密保存在这台手机；换手机时需要重新登录，不会随安装包带过来。	Your login is stored encrypted on this phone. Sign in again on a new phone; account details are never included in the installer.
+连接适配已内置	Connection support is built in
+连接配置未能载入	Connection settings could not be loaded
+请重启应用	Please restart the app
+仍有问题可在高级连接设置中恢复默认配置	If the problem persists, restore defaults in advanced connection settings
+已恢复默认连接配置并退出登录	Default connection settings restored and account signed out
+重新登录即可使用	Sign in again to continue
+默认连接配置未能恢复	Default connection settings could not be restored
+请重启或更新应用	Please restart or update the app
+已就绪	Ready
+已内置澳洲版本的连接适配	Australian connection support is built in
+直接登录即可	Just sign in
+无需准备配置文件	No configuration file is needed
+通常无需更换连接配置	Normally you can leave the connection settings alone
+只有在排查兼容问题时	Only when troubleshooting compatibility
+才使用手动导入或恢复默认	Use manual import or restore defaults
+登录加密保存在这台手机	Your login is stored encrypted on this phone
+换手机时需要重新登录	Sign in again on a new phone
+请在桌面弹窗中确认添加	Confirm the addition in the home screen prompt
+已添加到桌面	Added to home screen
+尚未检测到新卡片，可从桌面手动添加。	No new widget detected yet. You can add it from your home screen.
+当前桌面不支持直接添加，请从桌面添加。	This launcher does not support direct addition. Add the widget from your home screen.
+未能打开添加窗口，请重试或从桌面添加。	The add prompt could not be opened. Retry or add the widget from your home screen.
+等待桌面确认	Waiting for home screen confirmation
+没有弹窗？查看手动添加方法	No prompt? See how to add manually
+从桌面添加卡片	Add the widget from your home screen
+部分手机的桌面会忽略应用发起的添加请求。你也可以直接从桌面添加。	Some launchers ignore requests from apps. You can also add the widget directly from your home screen.
+回到桌面，长按空白处。	Go to your home screen and press and hold an empty area.
+选择「小组件」或「插件」，找到 OpenAVM。	Choose Widgets and find OpenAVM.
+把卡片拖到桌面的空白位置。	Drag the widget to an empty space on your home screen.
+去桌面添加	Open home screen
+尚未检测到新卡片	No new widget detected yet
+可从桌面手动添加	You can add it from your home screen
+当前桌面不支持直接添加	This launcher does not support direct addition
+请从桌面添加	Add it from your home screen
+未能打开添加窗口	The add prompt could not be opened
+请重试或从桌面添加	Retry or add it from your home screen
+没有弹窗	No prompt
+查看手动添加方法	See how to add manually
+部分手机的桌面会忽略应用发起的添加请求	Some launchers ignore requests from apps
+你也可以直接从桌面添加	You can also add it directly from your home screen
+回到桌面	Go to your home screen
+长按空白处	Press and hold an empty area
+选择	Choose
+小组件	Widgets
+插件	Widgets
+把卡片拖到桌面的空白位置	Drag the widget to an empty space on your home screen
+或	or
+
+车况与车温分开刷新	Separate status and temperature refresh
+顶部刷新只读取车况。停车休眠时，车温可能仍是上次记录；点击温度旁的刷新按钮可单独更新车温。	The top refresh button reads vehicle status. A sleeping car may keep its last temperature reading. Use the button beside the temperature to update it separately.
+更新车温时可能短暂开启空调，取温后关闭本次临时空调。已有空调或备车只读取；再次点击可结束取温。	Updating temperature may briefly run A/C, then stop only that temporary session. Existing A/C or preparation is only read. Tap again to end the temperature update.
+单独更新车温时可能短暂开启空调	Updating temperature may briefly run A/C
+顶部刷新只读取车况。温度旁的刷新按钮单独更新车温，可能短暂开启空调；再次点击可结束取温。后台刷新只读车况。	The top refresh button reads vehicle status. The button beside the temperature updates it separately and may briefly run A/C. Tap again to end it. Background refresh only reads status.
+OpenAVM · 更新车温	OpenAVM · Temperature update
+5 分钟内已读取车温 · 未重复开启空调	Temperature read within 5 min · A/C was not restarted
+车温暂时无法更新 · 请稍后重试	Temperature update unavailable · Try again later
+更新车温 · 必要时短暂开启空调	Update temperature · May briefly run A/C
+再次点击可结束取温	Tap again to end the temperature update
+刷新中	Refreshing
+取温后关闭本次临时空调	Stop this temporary A/C session after sampling
+可能短暂开启空调	May briefly run A/C
+更新车温时可能短暂开启空调	Updating temperature may briefly run A/C
+未重复开启空调	A/C was not restarted
+温度旁的刷新按钮单独更新车温	The button beside the temperature updates it separately
+点击温度旁的刷新按钮可单独更新车温	Use the button beside the temperature to update it separately
+车温可能仍是上次记录	Temperature may still be the last reported reading
+车温暂时无法更新	Temperature update unavailable
+顶部刷新只读取车况	The top refresh button only reads vehicle status
+5 分钟内已读取车温时，不会重复开启空调。	A/C is not restarted if temperature was read in the last 5 minutes.
+分钟内已读取车温时	When temperature was read in the last few minutes
+不会重复开启空调	A/C will not be restarted

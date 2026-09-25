@@ -23,6 +23,10 @@ class UsbExportEngine(context: Context) {
 
     fun execute(taskId: String) {
         var task = UsbExportRepository.get(taskId) ?: return
+        if (com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.kind == "MULTI") {
+            UsbExportRepository.update(task.copy(state = UsbExportState.FAILED_RECOVERABLE, errorCode = "MULTI_RECORDING_ACTIVE", message = "Stop the two-camera test before exporting"))
+            return
+        }
         if (task.state == UsbExportState.CANCEL_REQUESTED) {
             cancelBeforeStart(task)
             return

@@ -52,7 +52,7 @@ import kotlinx.coroutines.launch
 fun UsbProbeScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val developerModeEnabled = remember { SettingsStore.get(context).developerModeEnabled }
-    if (!developerModeEnabled) {
+    if (!developerModeEnabled || !com.dante.zeekrcapabilitylab.BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) {
         LaunchedEffect(Unit) { onBack() }
         return
     }

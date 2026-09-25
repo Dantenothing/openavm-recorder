@@ -32,7 +32,21 @@ object PhoneLanguage {
     var mode by mutableStateOf(PhoneLanguageMode.SYSTEM)
         private set
     private var systemLocale by mutableStateOf(Locale.getDefault())
-    val language: UiLanguage get() = UiLanguage.resolve(mode.storedValue, systemLocale)
+    private var supportedLanguages by mutableStateOf<Set<UiLanguage>?>(null)
+    /** Hosts can expose a smaller complete language set; standalone Companion remains unrestricted. */
+    fun limitTo(languages: Set<UiLanguage>) {
+        require(UiLanguage.ENGLISH in languages)
+        supportedLanguages = languages.toSet()
+    }
+    val language: UiLanguage get() {
+        val resolved = UiLanguage.resolve(mode.storedValue, systemLocale)
+        val supported = supportedLanguages ?: return resolved
+        return when {
+            resolved in supported -> resolved
+            resolved.locale.language == "zh" && UiLanguage.SIMPLIFIED_CHINESE in supported -> UiLanguage.SIMPLIFIED_CHINESE
+            else -> UiLanguage.ENGLISH
+        }
+    }
     val locale: Locale get() = language.locale
     fun updateSystemLocale(locale: Locale) { systemLocale = locale }
     fun label(mode: PhoneLanguageMode): String = if (mode == PhoneLanguageMode.SYSTEM)

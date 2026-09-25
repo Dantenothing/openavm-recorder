@@ -1,5 +1,13 @@
 # OpenAVM changelog
 
+## 5.0.0 — 2026-09-26
+
+- Vehicle Recorder: continuous surround segmentation, floating mirror and return recovery, date/grouped recording management, emergency clips, and secure phone transfer.
+- Unified Android Phone: vehicle status, preconditioning, factory Sentry rules, four widget sizes, separate cabin-temperature acquisition, and integrated recording playback/export.
+- Phone release identity remains `com.dante.zeekrbridge` for in-place upgrades. Version 5.0.0 / 51 is a non-debuggable release; Recorder is 5.0.0 / 102.
+- Added bilingual setup and upgrade guides. V4 connections require secure re-pairing after both ends are updated.
+- [Full V5 notes](docs/v5/RELEASE_NOTES.md).
+
 ## V4 / 4.0.0
 
 Vehicle: **4.0.0 (57)**. Optional Android Companion: **4.0.0 (29)**.

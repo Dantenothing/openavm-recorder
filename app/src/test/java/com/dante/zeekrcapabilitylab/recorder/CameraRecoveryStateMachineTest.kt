@@ -11,6 +11,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CameraRecoveryStateMachineTest {
+    @Test fun lateNativeStartCannotBypassTheDeadlineBeforeItsTimerRuns() {
+        val machine = recordingMachine()
+        machine.beginRecoverableLoss(generation, "CAMERA_DISCONNECTED", 2_000)
+        machine.onAvailability(generation, "2", true, 2_100)
+        machine.finalizeCompleted(generation, 2_200)
+        machine.onTimer(generation, 3_700)
+        assertEquals(CameraRecoveryStateMachine.RecordingStartOutcome.STALE,
+            machine.markRecordingStarted(generation, 122_000))
+        assertFalse(machine.snapshot.resumeAllowed)
+        assertEquals(CameraRecoveryPhase.TERMINAL, machine.snapshot.phase)
+    }
+    @Test fun aReopenThatNeverStartsCannotLoseItsRecoveryDeadline() {
+        val machine = recordingMachine()
+        machine.beginRecoverableLoss(generation, "CAMERA_DISCONNECTED", 2_000)
+        machine.onAvailability(generation, "2", true, 2_100)
+        machine.finalizeCompleted(generation, 2_200)
+        assertEquals(CameraRecoveryAction.Attempt(generation, 1), machine.onTimer(generation, 3_700))
+        assertEquals(122_000L, machine.nextWakeAtMs())
+        assertEquals(CameraRecoveryAction.Abandon("RECOVERY_WINDOW_EXPIRED"), machine.onTimer(generation, 122_000))
+    }
 
     private val generation = 7L
     private val policy = CameraRecoveryPolicy(

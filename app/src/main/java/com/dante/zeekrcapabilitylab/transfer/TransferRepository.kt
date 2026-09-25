@@ -103,20 +103,21 @@ object TransferRepository {
 
     suspend fun discover(): Result<PhoneAddress> = PhoneConnectionStore.discover().map { PhoneAddress(it.ip, it.port) }
 
-    suspend fun pair(host: String, code: String): Result<PhoneEndpoint> {
+    suspend fun inspectPairing(host: String): Result<PhonePairingCandidate> {
         val parsed = PhoneAddressParser.parse(host)
-        if (parsed.isFailure) {
-            val error = parsed.exceptionOrNull() ?: IllegalArgumentException("手机地址格式无效")
-            _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), false, error.message ?: "配对失败")
-            return Result.failure(error)
-        }
-        val address = parsed.getOrThrow()
-        val result = PhoneConnectionStore.pair(address.host, code.trim(), address.port)
+        val address = parsed.getOrElse { return Result.failure(it) }
+        return PhoneConnectionStore.inspectPairing(address.host, address.port)
+    }
+
+    suspend fun pair(candidate: PhonePairingCandidate, code: String): Result<PhoneEndpoint> {
+        val result = PhoneConnectionStore.pair(candidate, code.trim())
         result.onSuccess {
             _connection.value = PhoneConnectionState(it, true, "Connected to ${it.phoneName}")
             if (hasWork()) TransferService.start(ZeekrApp.appContext)
+        }.onFailure {
+            val failure = phoneFailure(it)
+            _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), false, phoneSecurityMessage(failure.error), failure.error)
         }
-            .onFailure { _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), false, it.message ?: "Pairing failed") }
         return result
     }
 
@@ -126,20 +127,24 @@ object TransferRepository {
             _connection.value = PhoneConnectionState(message = "Not paired")
             return@withLock false
         }
-        val result = PhoneConnectionStore.reconnectSaved()
+        val result = PhoneConnectionStore.reconnectSaved(force = true)
         val connectedEndpoint = result.getOrNull()
         _connection.value = if (connectedEndpoint != null) PhoneConnectionState(
             connectedEndpoint,
             true,
             "Connected to ${connectedEndpoint.phoneName}",
         )
-        else PhoneConnectionState(endpoint, false, result.exceptionOrNull()?.message ?: "Phone unavailable")
+        else {
+            val failure = phoneFailure(result.exceptionOrNull() ?: IllegalStateException())
+            PhoneConnectionState(PhoneConnectionStore.saved(), false, phoneSecurityMessage(failure.error), failure.error)
+        }
         if (result.isSuccess && hasWork()) TransferService.start(ZeekrApp.appContext)
         result.isSuccess
     }
 
     fun reconnectInBackground() {
         if (_connection.value.endpoint == null) return
+        if (_connection.value.securityError?.retryable == false || PhoneConnectionStore.securityError()?.retryable == false) return
         if (!backgroundReconnectRunning.compareAndSet(false, true)) return
         reconnectScope.launch {
             try {
@@ -153,6 +158,7 @@ object TransferRepository {
 
     private fun scheduleReconnectRetry() {
         if (!hasWork() || _connection.value.connected || _connection.value.endpoint == null) return
+        if (_connection.value.securityError?.retryable == false || PhoneConnectionStore.securityError()?.retryable == false) return
         if (!reconnectRetryScheduled.compareAndSet(false, true)) return
         reconnectScope.launch {
             delay(10_000L)
@@ -340,7 +346,7 @@ object TransferRepository {
                 it.video.displayName == file.name && it.video.sizeBytes == file.length()
             } ?: return Result.failure(IllegalArgumentException("USB segment is not a verified OpenAVM bundle: ${file.name}"))
             val sidecarJson = runCatching {
-                backend.readBytes(bundle.sidecar.uri).toString(Charsets.UTF_8)
+                com.dante.zeekrcapabilitylab.usbexport.UsbIncidentMarkers(ZeekrApp.appContext).sidecarBytes(bundle).toString(Charsets.UTF_8)
             }.getOrElse { return Result.failure(it) }
             Triple(file, bundle, sidecarJson)
         }.sortedBy { it.second.manifestData.segmentNumber }
@@ -468,7 +474,9 @@ object TransferRepository {
 
     fun update(task: TransferTask) = synchronized(lock) { updateLocked(task.copy(updatedAt = System.currentTimeMillis())) }
     fun markConnected(endpoint: PhoneEndpoint, connected: Boolean, message: String) {
-        _connection.value = PhoneConnectionState(endpoint, connected, message)
+        if (!PhoneConnectionStore.isCurrentPairing(endpoint)) return
+        _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), connected, message,
+            if (connected) null else PhoneConnectionStore.securityError())
         if (!connected && hasWork()) scheduleReconnectRetry()
     }
 

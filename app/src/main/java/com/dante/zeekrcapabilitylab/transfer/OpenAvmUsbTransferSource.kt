@@ -54,6 +54,6 @@ object OpenAvmUsbTransferSource {
             val bundle = UsbSegmentCatalog(context).snapshot(target).segments.single {
                 it.manifestData.bundleId == bundleId
             }
-            UsbMediaStoreBackend(context).readBytes(bundle.sidecar.uri).toString(Charsets.UTF_8)
+            com.dante.zeekrcapabilitylab.usbexport.UsbIncidentMarkers(context).sidecarBytes(bundle).toString(Charsets.UTF_8)
         }
 }

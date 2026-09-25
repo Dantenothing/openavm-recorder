@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <application
+        android:name=".VehicleApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ZeekrCheck"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/unified_network_security">
+        <activity android:name=".MainActivity" android:exported="true" />
+        <activity android:name=".AppearanceActivity" android:exported="false" android:excludeFromRecents="true" android:taskAffinity="" />
+        <activity android:name=".WidgetActionActivity" android:exported="false"
+            android:theme="@style/Theme.ZeekrWidgetPanel" android:taskAffinity="" android:excludeFromRecents="true" />
+        <receiver android:name=".VehicleWidgetProvider" android:exported="false" android:label="@string/widget_label_full">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/vehicle_widget_info" />
+        </receiver>
+        <receiver android:name=".CompactVehicleWidgetProvider" android:exported="false" android:label="@string/widget_label_compact">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/vehicle_widget_compact_info" />
+        </receiver>
+        <receiver android:name=".SquareVehicleWidgetProvider" android:exported="false" android:label="OpenAVM · 2×2">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/vehicle_widget_square_info" />
+        </receiver>
+        <receiver android:name=".StripVehicleWidgetProvider" android:exported="false" android:label="OpenAVM · 4×1">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/vehicle_widget_bar_info" />
+        </receiver>
+        <service android:name=".WidgetRefreshService" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".CardActionService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".PreparationService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".TemperatureUpdateService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".AwayGuardService" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <receiver android:name=".VehicleConnectionReceiver" android:exported="true" android:permission="android.permission.BLUETOOTH_PRIVILEGED">
+            <intent-filter><action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" /></intent-filter>
+        </receiver>
+        <receiver android:name=".DepartureReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -43,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,19 +68,25 @@ import kotlinx.coroutines.delay
 private enum class VehiclePage { OVERVIEW, CONNECTION_DETAILS }
 
 @Composable
-fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
+fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit, onDetailVisibilityChanged: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val running by BridgeService.running.collectAsState()
     val serverState by BridgeServer.state.collectAsState()
     val devices by PairingManager.devices.collectAsState()
     val pairingCode by PairingManager.code.collectAsState()
     val pairingExpiresAt by PairingManager.codeExpiresAt.collectAsState()
+    val pairingLockedOut by PairingManager.lockedOut.collectAsState()
     val catalogOnline by CarCatalogStore.online.collectAsState()
     val carStatus by CarCatalogStore.carStatus.collectAsState()
     val receivedFiles by ReceivedStore.files.collectAsState()
     val receivedVideos = receivedFiles.filter { it.extension.equals("mp4", ignoreCase = true) }
 
     var page by rememberSaveable { mutableStateOf(VehiclePage.OVERVIEW) }
+    androidx.compose.runtime.DisposableEffect(page) {
+        onDetailVisibilityChanged(page == VehiclePage.CONNECTION_DETAILS)
+        onDispose { onDetailVisibilityChanged(false) }
+    }
+    androidx.activity.compose.BackHandler(page != VehiclePage.OVERVIEW) { page = VehiclePage.OVERVIEW }
     var statusText by remember { mutableStateOf("") }
     var hotspotStatus by remember { mutableStateOf("") }
     var autoStartServer by remember {
@@ -98,18 +105,19 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
         }
     }
     val home = VehicleHomePolicy.resolve(
-        pairedVehicles = devices.map {
+        pairedVehicles = devices.filter { it.securityVersion == 2 && (serverState.identityFingerprint.isBlank() || it.phoneIdentityPin == serverState.identityFingerprint) }.map {
             PairedVehicleSummary(it.carDeviceId, VehicleIdentityPolicy.displayName(it.name), it.lastSeen)
         },
         carOnline = catalogOnline,
-        serviceRunning = running,
+        serviceRunning = serverState.running,
         endpointCandidates = serverState.endpointCandidates.map { "${it.ipv4}:${serverState.port}" },
+        receiverStartedAtEpochMs = serverState.startedAtEpochMs, nowEpochMs = now,
     )
 
     fun openHotspotSettings() {
         hotspotStatus = try {
             context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
-            t("Wireless settings opened. Enable the phone hotspot, then return here.", "已打开无线网络设置，请开启手机热点后返回。")
+            t("Connect both devices to the same Wi-Fi, or enable this phone hotspot, then return.", "请连接同一 Wi-Fi 或开启手机热点，再返回。")
         } catch (_: Throwable) {
             try {
                 context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
@@ -138,16 +146,16 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
     }
 
     fun prepareReconnect() {
-        if (!running) BridgeService.start(context)
+        if (!serverState.running) BridgeService.start(context)
         BridgeServer.refreshAddresses()
         statusText = t(
-            "Receiver is ready. The paired car will reconnect when it joins this hotspot.",
-            "接收服务已就绪；已配对车机加入热点后会自动重连。",
+            "Checking the receiver. On the car, open Phone and choose Reconnect now on the same network.",
+            "正在检查接收服务。请让两边连到同一网络，在车机「手机」页点立即重连。",
         )
     }
 
     LaunchedEffect(Unit) {
-        if (autoStartServer && !running) BridgeService.start(context)
+        if (autoStartServer && !serverState.running) BridgeService.start(context)
     }
     LaunchedEffect(running) {
         while (running) {
@@ -198,6 +206,7 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
             devices = devices,
             pairingCode = pairingCode,
             pairingExpiresAt = pairingExpiresAt,
+            pairingLockedOut = pairingLockedOut,
             now = now,
             autoStartServer = autoStartServer,
             hotspotStatus = hotspotStatus,
@@ -211,8 +220,7 @@ fun VehicleScreen(onOpenLibrary: () -> Unit, onOpenLab: () -> Unit) {
             onCheckHotspot = { checkHotspot() },
             onAutoStartChanged = { setAutoStart(it) },
             onGeneratePairingCode = {
-                if (!running) BridgeService.start(context)
-                PairingManager.newPairingCode()
+                BridgeService.start(context, openPairingWindow = true)
             },
             onRevoke = { revokeDevice = it },
             onStartRecording = {
@@ -271,10 +279,14 @@ private fun VehicleOverview(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 20.dp),
     ) {
-        Text("OpenAVM Companion", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(t("Your vehicle recordings, in one place", "车辆录像与连接，一处管理"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(t("Recorder connection", "车机连接"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(t("Pair OpenAVM Recorder for local recordings. Your ZEEKR account connection is separate.", "这里连接 OpenAVM Recorder 传录像，与极氪账号的远程车控分开设置。"), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(18.dp))
         VehicleHeroCard(home, onConnectionDetails, onReconnect)
+        serverState.startFailure?.let {
+            Text(t("Receiver could not start. Stop another recorder receiver, then try Start again.",
+                "接收未能启动，请关闭其他录像接收 App 的接收服务，再点启动重试。"), color = MaterialTheme.colorScheme.error)
+        }
 
         if (REMOTE_CONTROLS_ENABLED && home.status == VehicleConnectionStatus.CONNECTED) {
             Spacer(Modifier.height(14.dp))
@@ -336,28 +348,29 @@ private fun VehicleHeroCard(home: VehicleHomeSnapshot, onDetails: () -> Unit, on
                 Spacer(Modifier.width(12.dp))
                 Text(
                     home.vehicle?.name?.ifBlank { null }
-                        ?: if (home.status == VehicleConnectionStatus.UNPAIRED) t("Add your vehicle", "添加你的车辆") else "OpenAVM Recorder",
+                        ?: if (home.status == VehicleConnectionStatus.UNPAIRED) t("Pair your recorder", "配对车机录像") else "OpenAVM Recorder",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                 )
             }
             Spacer(Modifier.height(18.dp))
             when (home.status) {
-                VehicleConnectionStatus.CONNECTED -> {
-                    Text("● ${t("Connected", "已连接")}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                    Text("OpenAVM Recorder", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                VehicleConnectionStatus.CONNECTED, VehicleConnectionStatus.RECENT -> {
+                    Text(if (connected) "● ${t("Connected", "已连接")}" else t("Recent car communication", "最近与车机通信正常"), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    Text(t("Last communication: {0}", "上次通信：{0}", formatLastSeen(home.vehicle?.lastSeenEpochMs)), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     home.preferredEndpoint?.let {
                         Spacer(Modifier.height(8.dp))
-                        Text(t("Phone hotspot · {0}", "手机热点 · {0}", it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(t("Phone address · {0}", "手机地址 · {0}", it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = onDetails, modifier = Modifier.align(Alignment.End)) {
+                    TextButton(onClick = onDetails, modifier = Modifier.align(Alignment.End).testTag("recorder_pair_details")) {
                         Text(t("Connection details", "连接详情"))
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, null)
                     }
                 }
                 VehicleConnectionStatus.OFFLINE -> {
-                    Text("○ ${t("Not connected", "未连接")}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (home.receiverReady) t("Receiver ready · confirm on the car", "接收已就绪 · 请在车机确认连接")
+                        else t("Paired · receiver stopped", "已配对 · 接收未启动"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         t("Last connected: {0}", "上次连接：{0}", formatLastSeen(home.vehicle?.lastSeenEpochMs)),
                         style = MaterialTheme.typography.bodySmall,
@@ -365,14 +378,14 @@ private fun VehicleHeroCard(home: VehicleHomeSnapshot, onDetails: () -> Unit, on
                     )
                     Spacer(Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onReconnect) { Text(t("Reconnect now", "立即重连")) }
-                        OutlinedButton(onClick = onDetails) { Text(t("Details", "详情")) }
+                        Button(onClick = onReconnect) { Text(if (home.receiverReady) t("Check connection", "检查连接") else t("Start receiving", "启动接收")) }
+                        OutlinedButton(onClick = onDetails, modifier = Modifier.testTag("recorder_pair_details")) { Text(t("Details", "详情")) }
                     }
                 }
                 VehicleConnectionStatus.UNPAIRED -> {
                     Text(t("Pair with OpenAVM Recorder to receive recordings from your car.", "与 OpenAVM Recorder 配对后，即可接收车机录像。"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(14.dp))
-                    Button(onClick = onDetails) { Text(t("Pair vehicle", "配对车辆")) }
+                    Button(onClick = onDetails, modifier = Modifier.testTag("recorder_pair_details")) { Text(t("Set up connection", "开始连接")) }
                 }
             }
         }
@@ -386,6 +399,7 @@ private fun ConnectionDetails(
     devices: List<PairedDevice>,
     pairingCode: String,
     pairingExpiresAt: Long,
+    pairingLockedOut: Boolean,
     now: Long,
     autoStartServer: Boolean,
     hotspotStatus: String,
@@ -418,24 +432,28 @@ private fun ConnectionDetails(
         Spacer(Modifier.height(10.dp))
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp)) {
-                Text(t("Connection", "连接"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(t("Receiver and connection", "接收与连接"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
                 StatusLine(t("Status", "状态"), when (home.status) {
                     VehicleConnectionStatus.CONNECTED -> t("Connected", "已连接")
-                    VehicleConnectionStatus.OFFLINE -> t("Vehicle offline", "车辆离线")
+                    VehicleConnectionStatus.RECENT -> t("Recent car communication", "最近与车机通信正常")
+                    VehicleConnectionStatus.OFFLINE -> t("Paired · confirm on the car", "已配对 · 请在车机确认")
                     VehicleConnectionStatus.UNPAIRED -> t("Not paired", "未配对")
                 })
                 StatusLine(t("Method", "连接方式"), t("Phone hotspot / local network", "手机热点 / 局域网"))
                 StatusLine(t("Receiver", "手机接收服务"), if (home.receiverReady) t("Running", "正在运行") else t("Stopped", "已停止"))
-                StatusLine(t("Preferred address", "首选地址"), home.preferredEndpoint ?: "—")
+                StatusLine(t("Phone address", "手机地址"), home.preferredEndpoint ?: t("Connect Wi-Fi or enable hotspot first", "先连接 Wi-Fi 或开启热点"))
+                serverState.startFailure?.let {
+                    Text(t("Receiver failed to start. Stop another receiver and try again.", "接收启动失败，请关闭其他接收服务后重试。"), color = MaterialTheme.colorScheme.error)
+                }
                 serverState.endpointCandidates.drop(1).forEach { StatusLine(t("Alternative", "备用地址"), "${it.ipv4}:${serverState.port}") }
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(t("Start receiver automatically", "自动启动接收服务"), modifier = Modifier.weight(1f))
+                    Text(t("Start when this page opens", "打开此页时启动接收"), modifier = Modifier.weight(1f))
                     Switch(checked = autoStartServer, onCheckedChange = onAutoStartChanged)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onStartService) { Text(t("Start", "启动")) }
-                    OutlinedButton(onClick = onStopService) { Text(t("Stop", "停止")) }
+                    FilledTonalButton(onClick = onStartService, enabled = !home.receiverReady, modifier = Modifier.testTag("recorder_start")) { Text(t("Start", "启动")) }
+                    OutlinedButton(onClick = onStopService, enabled = home.receiverReady, modifier = Modifier.testTag("recorder_stop")) { Text(t("Stop", "停止")) }
                     OutlinedButton(onClick = onRefreshAddresses) { Text(t("Refresh", "刷新")) }
                 }
             }
@@ -444,25 +462,26 @@ private fun ConnectionDetails(
         Spacer(Modifier.height(12.dp))
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp)) {
-                Text(t("Phone hotspot", "手机热点"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(t("Enable the phone hotspot, connect the car to it, then keep the receiver service running.", "开启手机热点，让车机加入该热点，并保持手机接收服务运行。"), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onOpenHotspot) { Text(t("Open settings", "打开设置")) }
-                    OutlinedButton(onClick = onCheckHotspot) { Text(t("Check", "检测")) }
-                }
-                if (hotspotStatus.isNotBlank()) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(hotspotStatus, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(18.dp)) {
                 Text(t("Vehicle pairing", "车辆配对"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(t("Enter this six-digit code on the car's Phone page.", "请在车机“手机”页面输入这里的六位配对码。"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(t("Update both apps for secure pairing. On the car Phone page, find this phone, compare the full fingerprint below, then enter the six-digit code. Reconnecting later is automatic.",
+                    "请先将两端更新为安全版。在车机「手机」页找到本机，核对下面的完整指纹一致，再输入六位码。以后自动重连。"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (serverState.identityFingerprint.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(t("Phone identity · SHA-256", "本机身份 · SHA-256"), style = MaterialTheme.typography.labelMedium)
+                    Text(com.dante.zeekrbridge.server.PhoneIdentityCertificate.displayFingerprint(serverState.identityFingerprint),
+                        modifier = Modifier.testTag("recorder_security_fingerprint"),
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodyMedium)
+                    Text(t("Check all 4 lines on both screens. If different, cancel on the car.",
+                        "请逐行核对两边的全部 4 行；不一致就在车机取消。"),
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                if (pairingLockedOut) Text(t("Too many failed attempts. Open a new window when you are ready.",
+                    "尝试次数过多，配对窗口已关闭。准备好后请重新打开。"), color = MaterialTheme.colorScheme.error)
+                if (devices.any { it.securityVersion != 2 || (serverState.identityFingerprint.isNotBlank() && it.phoneIdentityPin != serverState.identityFingerprint) }) {
+                    Text(t("An earlier pairing needs secure pairing again. Your recordings are kept.",
+                        "旧配对需要重新进行一次安全配对，已有录像保留。"), color = MaterialTheme.colorScheme.error)
+                }
                 Spacer(Modifier.height(10.dp))
                 if (home.receiverReady && pairingCode.isNotBlank() && pairingExpiresAt > now) {
                     Text(t("Pairing code", "配对码"), style = MaterialTheme.typography.labelMedium)
@@ -476,7 +495,12 @@ private fun ConnectionDetails(
                     Text(t("Generate a new code when the car is ready.", "车机准备好后，请生成新的配对码。"))
                 }
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onGeneratePairingCode) { Text(t("Generate new code", "生成新配对码")) }
+                Button(onClick = onGeneratePairingCode, modifier = Modifier.testTag("recorder_pair_code")) { Text(t("Open secure pairing", "开启安全配对")) }
+                if (home.receiverReady && pairingCode.isNotBlank() && pairingExpiresAt > now) {
+                    TextButton(onClick = { PairingManager.closePairingWindow() }, modifier = Modifier.testTag("recorder_pair_close")) {
+                        Text(t("Close pairing window", "关闭配对窗口"))
+                    }
+                }
                 if (devices.isNotEmpty()) {
                     Spacer(Modifier.height(14.dp))
                     HorizontalDivider()
@@ -495,7 +519,26 @@ private fun ConnectionDetails(
             }
         }
 
-        if (home.status == VehicleConnectionStatus.CONNECTED) {
+        Spacer(Modifier.height(12.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) {
+                Text(t("Connection steps", "连接步骤"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                RecorderConnectionGuide()
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onOpenHotspot) { Text(t("Open settings", "打开设置")) }
+                    OutlinedButton(onClick = onCheckHotspot) { Text(t("Check", "检测")) }
+                }
+                if (hotspotStatus.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(hotspotStatus, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+
+        if (REMOTE_CONTROLS_ENABLED && home.status == VehicleConnectionStatus.CONNECTED) {
             Spacer(Modifier.height(12.dp))
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
@@ -524,7 +567,7 @@ private fun ConnectionDetails(
             Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(t("Network diagnostics", "网络诊断"), style = MaterialTheme.typography.titleMedium)
-                    Text(t("Discovery, requests, devices and connection logs", "发现、请求、设备与连接日志"), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text(t("Cannot connect? Check the shared network, phone address and receiver here.", "连不上？先检查是否同网、手机地址和接收服务，再查看诊断。"), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
             }
@@ -559,7 +602,7 @@ private fun formatSpeed(bytesPerSec: Long): String = when {
     else -> "$bytesPerSec B/s"
 }
 
-/** Enabled with the car-side authenticated control channel in v2.4.0-alpha2. */
+/** Car-side recording controls remain hidden until that separate channel is verified. */
 private const val REMOTE_CONTROLS_ENABLED = false
 
 private const val PRODUCT_SETTINGS = "phone_product_settings"

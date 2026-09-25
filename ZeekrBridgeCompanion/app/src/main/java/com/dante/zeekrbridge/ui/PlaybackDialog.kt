@@ -21,9 +21,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -34,8 +36,15 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedSourceRole
+import com.dante.zeekrbridge.core.IndexedLane
+import com.dante.zeekrbridge.core.MediaIndexScanner
+import com.dante.zeekrbridge.core.ContinuousRasterSupport
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import com.dante.zeekrbridge.player.FourLaneGlView
 import com.dante.zeekrbridge.player.FourLaneLensMode
+import com.dante.zeekrbridge.player.FourLaneVideoSizeListener
 import com.dante.zeekrbridge.player.VideoDisplayGeometry
 import com.dante.zeekrbridge.player.canPreparePlayback
 import java.io.File
@@ -53,6 +62,8 @@ internal data class PlaybackEntry(
     val laneOrder: List<Int>,
     val originalWidth: Int?,
     val originalHeight: Int?,
+    val raster: RecordingRasterMetadata = RecordingRasterMetadata.Original,
+    val lanes: List<IndexedLane> = emptyList(),
 )
 
 @Composable
@@ -62,6 +73,11 @@ fun MediaPlaybackDialog(
     laneOrder: List<Int> = if (laneLabels.size == 4) listOf(1, 2, 3, 4) else emptyList(),
     onDismiss: () -> Unit,
 ) {
+    val indexed by produceState<Pair<String, IndexedMediaSegment>?>(null, file.absolutePath) {
+        value = withContext(Dispatchers.IO) { file.absolutePath to MediaIndexScanner.readSegment(file) }
+    }
+    val segment = indexed?.takeIf { it.first == file.absolutePath }?.second ?: return
+    val hasRaster = segment.raster != RecordingRasterMetadata.Original || segment.layoutKind != IndexedLayoutKind.UNKNOWN
     PlaylistPlaybackDialog(
         title = file.name,
         entries = listOf(
@@ -70,12 +86,13 @@ fun MediaPlaybackDialog(
                 uri = Uri.fromFile(file),
                 readable = file.isFile,
                 durationMs = 0L,
-                sourceRole = IndexedSourceRole.UNKNOWN,
-                layoutKind = if (laneLabels.size == 4) IndexedLayoutKind.FOUR_LANE_V1 else IndexedLayoutKind.UNKNOWN,
-                laneLabels = laneLabels,
-                laneOrder = laneOrder,
-                originalWidth = null,
-                originalHeight = null,
+                sourceRole = if (hasRaster) segment.sourceRole else IndexedSourceRole.UNKNOWN,
+                layoutKind = if (hasRaster) segment.layoutKind else if (laneLabels.size == 4) IndexedLayoutKind.FOUR_LANE_V1 else IndexedLayoutKind.UNKNOWN,
+                laneLabels = if (hasRaster) segment.playbackLabels else laneLabels,
+                laneOrder = if (hasRaster) segment.playbackLaneOrder else laneOrder,
+                originalWidth = segment.originalWidth,
+                originalHeight = segment.originalHeight,
+                raster = segment.raster, lanes = segment.lanes,
             ),
         ),
         initialIndex = 0,
@@ -98,6 +115,7 @@ internal fun MediaSessionPlayer(
                 layoutKind = segment.layoutKind, laneLabels = segment.playbackLabels,
                 laneOrder = segment.playbackLaneOrder, originalWidth = segment.originalWidth,
                 originalHeight = segment.originalHeight,
+                raster = segment.raster, lanes = segment.lanes,
             )
         }
     }
@@ -144,6 +162,8 @@ fun UriMediaPlaybackDialog(
     laneOrder: List<Int> = emptyList(),
     originalWidth: Int? = null,
     originalHeight: Int? = null,
+    raster: RecordingRasterMetadata = RecordingRasterMetadata.Original,
+    lanes: List<IndexedLane> = emptyList(),
     onDismiss: () -> Unit,
 ) {
     PlaylistPlaybackDialog(
@@ -160,6 +180,7 @@ fun UriMediaPlaybackDialog(
                 laneOrder = laneOrder,
                 originalWidth = originalWidth,
                 originalHeight = originalHeight,
+                raster = raster, lanes = lanes,
             ),
         ),
         initialIndex = 0,
@@ -209,15 +230,33 @@ internal fun FourLaneVideoSurface(
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
     val currentOnSurfaceReady by rememberUpdatedState(onSurfaceReady)
     val currentOnRenderError by rememberUpdatedState(onRenderError)
+    val detectedSize by produceState<Pair<PlaybackEntry, Pair<Int, Int>>?>(null, entry) {
+        value = withContext(Dispatchers.IO) { entry to readVideoSize(context, entry) }
+    }
+    val size = detectedSize?.takeIf { it.first == entry }?.second
     LaunchedEffect(mode, lensMode, entry.laneOrder) {
         glView.setMode(mode, entry.laneOrder)
         glView.setLensMode(lensMode)
         glView.requestRender()
     }
-    DisposableEffect(player, glView, entry) {
+    DisposableEffect(player, glView, entry, size) {
+        if (size == null) return@DisposableEffect onDispose { }
         var disposed = false
         var texture: SurfaceTexture? = null
         var surface: Surface? = null
+        glView.setPlaybackRaster(entry.raster, entry.lanes)
+        val formatListener = FourLaneVideoSizeListener(
+            raster = entry.raster,
+            layout = entry.layoutKind,
+            currentVideoSize = { player.videoSize },
+            onValidSize = glView::setVideoSize,
+            onInvalidSize = { issue ->
+                player.pause()
+                glView.setPlaybackRaster(RecordingRasterMetadata.Rejected(issue), entry.lanes)
+                currentOnRenderError(issue)
+            },
+        )
+        player.addListener(formatListener)
         glView.setModeChangedCallback { selectedMode -> currentOnModeChanged(selectedMode) }
         glView.setPlaybackCallbacks(
             onFirstFrame = { currentOnFirstFrame() },
@@ -232,7 +271,11 @@ internal fun FourLaneVideoSurface(
                 return@createSurfaceTexture
             }
             texture = created
-            val size = readVideoSize(context, entry)
+            ContinuousRasterSupport.trackError(entry.raster, entry.layoutKind, size.first, size.second)?.let {
+                currentOnRenderError(it)
+                glView.setPlaybackRaster(RecordingRasterMetadata.Rejected(it), entry.lanes)
+                return@createSurfaceTexture
+            }
             if (size.first > 0 && size.second > 0) {
                 created.setDefaultBufferSize(size.first, size.second)
                 glView.setVideoSize(size.first, size.second)
@@ -252,6 +295,7 @@ internal fun FourLaneVideoSurface(
         }
         onDispose {
             disposed = true
+            player.removeListener(formatListener)
             glView.setModeChangedCallback(null)
             glView.setPlaybackCallbacks(null, null, null, null, null)
             surface?.let { runCatching { player.clearVideoSurface(it) } }
@@ -261,7 +305,7 @@ internal fun FourLaneVideoSurface(
             glView.onPause()
         }
     }
-    AndroidView(factory = { glView }, modifier = modifier)
+    AndroidView(factory = { glView }, modifier = modifier.testTag("recorder_video_surface"))
 }
 
 @Composable
@@ -304,7 +348,7 @@ internal fun resolvedDurations(
 }
 
 private fun readVideoSize(context: android.content.Context, entry: PlaybackEntry): Pair<Int, Int> {
-    if (!entry.uri.scheme.equals("file", ignoreCase = true)) {
+    if (entry.raster == RecordingRasterMetadata.Original && !entry.uri.scheme.equals("file", ignoreCase = true)) {
         val known = (entry.originalWidth ?: 0) to (entry.originalHeight ?: 0)
         if (known.first > 0 && known.second > 0) return known
     }
@@ -317,6 +361,8 @@ private fun readVideoSize(context: android.content.Context, entry: PlaybackEntry
         }
         val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
         val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+        if (entry.raster is RecordingRasterMetadata.Repacked && rotation % 360 != 0) return 0 to 0
         width to height
     } catch (_: Throwable) {
         0 to 0
@@ -324,7 +370,8 @@ private fun readVideoSize(context: android.content.Context, entry: PlaybackEntry
         runCatching { retriever.release() }
     }
     return detected.takeIf { it.first > 0 && it.second > 0 }
-        ?: ((entry.originalWidth ?: 0) to (entry.originalHeight ?: 0))
+        ?: if (entry.raster is RecordingRasterMetadata.Repacked) (0 to 0)
+        else ((entry.originalWidth ?: 0) to (entry.originalHeight ?: 0))
 }
 
 internal fun formatPlaybackRange(segments: List<IndexedMediaSegment>): String {

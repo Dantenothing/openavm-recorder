@@ -3,10 +3,7 @@ package com.dante.zeekrcapabilitylab.ui.product
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
-import android.graphics.SurfaceTexture
 import android.graphics.Bitmap
-import android.media.MediaPlayer
-import android.view.Surface
 import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -56,6 +53,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +70,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dante.zeekrcapabilitylab.player.PlaybackDiagnostics
+import com.dante.zeekrcapabilitylab.player.PlaybackTimeline
+import com.dante.zeekrcapabilitylab.player.RecordingPlaylistPlayer
 import com.dante.zeekrcapabilitylab.player.PlaybackInspector
 import com.dante.zeekrcapabilitylab.player.PlaybackTrackText
 import com.dante.zeekrcapabilitylab.player.RecordingThumbnailCache
@@ -86,6 +87,10 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecarIO
+import com.dante.zeekrcapabilitylab.player.PlaybackRasterBatch
+import com.dante.zeekrcapabilitylab.player.RecordingRasterReader
+import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
+import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import com.dante.zeekrcapabilitylab.service.recorder.VideoTriggerMarker
 import java.io.File
 import java.text.SimpleDateFormat
@@ -123,6 +128,8 @@ private data class PlaybackSegmentItem(
     val sizeBytes: Long,
     val protected: Boolean,
     val triggerMarkers: List<VideoTriggerMarker> = emptyList(),
+    val modifiedAtEpochMs: Long = 0L,
+    val sidecar: SegmentSidecar? = null,
 )
 
 /**
@@ -136,6 +143,7 @@ fun FourLanePlayerDialog(
     files: List<File> = listOf(file),
     segmentDurationHintsMs: Map<String, Long> = emptyMap(),
     triggerMarkersByFile: Map<String, List<VideoTriggerMarker>> = emptyMap(),
+    manualEventEpochs: List<Long> = emptyList(),
     layoutKind: RecordingLayoutKind? = RecordingLayoutKind.FOUR_LANE_V1,
     sourceRole: RecordingSourceRole? = RecordingSourceRole.SURROUND,
     recordingMode: RecordingMode = RecordingMode.NORMAL,
@@ -156,16 +164,22 @@ fun FourLanePlayerDialog(
     val playlist = remember(file, files) {
         files.ifEmpty { listOf(file) }.distinctBy { it.absolutePath }
     }
-    val segmentItems = remember(playlist, recordedAtEpochMs, segmentDurationHintsMs, triggerMarkersByFile) {
-        playlist.mapIndexed { index, segmentFile ->
-            val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(segmentFile))
+    val initialItems = remember(playlist, recordedAtEpochMs, segmentDurationHintsMs, triggerMarkersByFile) {
+        playlist.mapIndexed { index, media -> PlaybackSegmentItem(media, index + 1,
+            recordedAtEpochMs ?: 0L, segmentDurationHintsMs[media.absolutePath] ?: 0L, 0L, false,
+            triggerMarkersByFile[media.absolutePath].orEmpty()) }
+    }
+    val segmentItems by produceState(initialItems, initialItems, manualEventEpochs) {
+        value = withContext(Dispatchers.IO) { playlist.mapIndexed { index, segmentFile ->
+            val sidecar = SegmentSidecarIO.readForMedia(segmentFile)
+            val modifiedAt = segmentFile.lastModified()
             PlaybackSegmentItem(
                 file = segmentFile,
                 segmentNumber = sidecar?.segmentNumber?.takeIf { it > 0 } ?: (index + 1),
                 startedAtEpochMs = sidecar?.startedAtEpochMs
                     ?: sidecar?.requestedAtEpochMs
                     ?: recordedAtEpochMs?.takeIf { playlist.size == 1 }
-                    ?: segmentFile.lastModified(),
+                    ?: modifiedAt,
                 durationMs = sidecar?.actualTrack?.durationMs
                     ?: sidecar?.realDurationMs?.let { real ->
                         if (sidecar.timeLapseMultiplier > 1) real / sidecar.timeLapseMultiplier else real
@@ -174,18 +188,19 @@ fun FourLanePlayerDialog(
                     ?: 0L,
                 sizeBytes = segmentFile.length(),
                 protected = sidecar?.protected == true,
-                triggerMarkers = triggerMarkersByFile[segmentFile.absolutePath] ?: sidecar?.triggerMarkers.orEmpty(),
+                triggerMarkers = (triggerMarkersByFile[segmentFile.absolutePath] ?: sidecar?.triggerMarkers.orEmpty()) +
+                    com.dante.zeekrcapabilitylab.player.ManualBookmarkTimeline.from(sidecar, manualEventEpochs),
+                modifiedAtEpochMs = modifiedAt,
+                sidecar = sidecar,
             )
-        }
+        } }
     }
+    val playableHints = remember(segmentItems) { segmentItems.associate { it.file.absolutePath to it.durationMs } }
     val thumbnailCache = remember(context) {
         RecordingThumbnailCache(File(context.cacheDir, "recording-covers"))
     }
     val settings = remember { SettingsStore.get(context) }
     val languageMode by AppLanguage.mode.collectAsState()
-    val diagnostics by produceState<PlaybackDiagnostics?>(initialValue = null, file) {
-        value = withContext(Dispatchers.IO) { PlaybackInspector.inspect(file) }
-    }
     val directionLabels = laneLabels?.takeIf { it.size == 4 } ?: productDirectionLabels()
     val isFourLane = layoutKind != RecordingLayoutKind.SINGLE_V1
 
@@ -210,6 +225,10 @@ fun FourLanePlayerDialog(
         mutableStateOf(Utils.t("Opening recording…", "正在打开录像…"))
     }
     var error by remember(file) { mutableStateOf<String?>(null) }
+    val inspectTrack = firstFrame || error != null
+    val diagnostics by produceState<PlaybackDiagnostics?>(initialValue = null, file, inspectTrack) {
+        value = if (inspectTrack) withContext(Dispatchers.IO) { PlaybackInspector.inspect(file) } else null
+    }
     var displayMode by remember(file) { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
     var lensMode by remember(file) { mutableStateOf(settings.lensMode) }
     var zoom by remember(file) { mutableStateOf(1f) }
@@ -278,7 +297,8 @@ fun FourLanePlayerDialog(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            Utils.formatEpoch(recordedAtEpochMs ?: file.lastModified()),
+                            (recordedAtEpochMs ?: segmentItems.firstOrNull()?.startedAtEpochMs)?.takeIf { it > 0L }
+                                ?.let(Utils::formatEpoch) ?: Utils.t("Reading…", "读取中"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -378,7 +398,7 @@ fun FourLanePlayerDialog(
                                 if (isFourLane) {
                                     FourLanePlaybackSurface(
                                         files = playlist,
-                                        segmentDurationHintsMs = segmentDurationHintsMs,
+                                        segmentDurationHintsMs = playableHints,
                                         container = playbackContainer,
                                         compositeWidth = compositeWidth ?: 1280,
                                         compositeHeight = compositeHeight ?: 5140,
@@ -414,7 +434,7 @@ fun FourLanePlayerDialog(
                                 } else {
                                     SinglePlaybackSurface(
                                         files = playlist,
-                                        segmentDurationHintsMs = segmentDurationHintsMs,
+                                        segmentDurationHintsMs = playableHints,
                                         textureView = singleTextureView,
                                         callbacks = playbackCallbacks,
                                         modifier = Modifier.fillMaxSize(),
@@ -444,7 +464,7 @@ fun FourLanePlayerDialog(
                     Column(Modifier.weight(0.93f).fillMaxHeight()) {
                         PlaybackInfoCard(
                             diagnostics = diagnostics,
-                            files = playlist,
+                            items = segmentItems,
                             durationMs = durationMs,
                             realDurationMs = realDurationMs,
                             recordingMode = recordingMode,
@@ -588,11 +608,13 @@ private fun PlaybackSegmentRail(
                 val thumbnail by produceState<Bitmap?>(
                     initialValue = null,
                     item.file.absolutePath,
-                    item.file.lastModified(),
+                    item.modifiedAtEpochMs,
                     layoutKind,
                 ) {
                     value = withContext(Dispatchers.IO) {
-                        thumbnailCache.loadOrCreate(item.file, layoutKind, laneSizePx = 88)
+                        // Resolve only visible rail items using the proven cover path.
+                        // Extraction is serialized across list and player cache instances.
+                        thumbnailCache.loadOrCreate(item.file, layoutKind)
                     }
                 }
                 val active = index == activeIndex
@@ -628,7 +650,8 @@ private fun PlaybackSegmentRail(
                                 contentScale = ContentScale.Fit,
                             )
                         } else {
-                            Text(formatSegmentClock(item.startedAtEpochMs), color = Color.LightGray)
+                            Text(Utils.t("Thumbnail unavailable", "缩略图暂不可用"), color = Color.LightGray,
+                                style = MaterialTheme.typography.labelSmall)
                         }
                         Checkbox(
                             checked = item.file.absolutePath in selectedPaths,
@@ -672,7 +695,7 @@ private fun PlaybackSegmentRail(
 }
 
 private fun formatSegmentClock(epochMs: Long): String =
-    SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(epochMs))
+    if (epochMs > 0L) SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(epochMs)) else "—"
 
 @Composable
 private fun PlaybackSequenceButton(
@@ -706,17 +729,15 @@ private fun PlaybackSequenceButton(
 @Composable
 private fun PlaybackInfoCard(
     diagnostics: PlaybackDiagnostics?,
-    files: List<File>,
+    items: List<PlaybackSegmentItem>,
     durationMs: Long,
     realDurationMs: Long?,
     recordingMode: RecordingMode,
     status: String,
     recordedAtEpochMs: Long?,
 ) {
-    val first = files.first()
-    val sidecar = remember(first.absolutePath, first.lastModified()) {
-        SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(first))
-    }
+    val first = items.first()
+    val sidecar = first.sidecar
     val actualBitrate = diagnostics?.bitrateBps?.toLong()
         ?: sidecar?.actualTrack?.bitrateBps
     val effectiveDurationMs = durationMs.takeIf { it > 0L }
@@ -726,7 +747,7 @@ private fun PlaybackInfoCard(
     val recordedAt = recordedAtEpochMs
         ?: sidecar?.startedAtEpochMs
         ?: sidecar?.requestedAtEpochMs
-        ?: first.lastModified()
+        ?: first.startedAtEpochMs
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text(
@@ -736,7 +757,8 @@ private fun PlaybackInfoCard(
             )
             Spacer(Modifier.height(10.dp))
             PlaybackInfoRow(Utils.t("Status", "状态"), status)
-            PlaybackInfoRow(Utils.t("Recorded", "录像时间"), Utils.formatEpoch(recordedAt))
+            PlaybackInfoRow(Utils.t("Recorded", "录像时间"),
+                if (recordedAt > 0L) Utils.formatEpoch(recordedAt) else Utils.t("Reading…", "读取中"))
             PlaybackInfoRow(Utils.t("Duration", "时长"), formatPlaybackTime(effectiveDurationMs))
             if (recordingMode == RecordingMode.TIME_LAPSE && realDurationMs != null) {
                 PlaybackInfoRow(Utils.t("Captured time", "实拍时长"), formatPlaybackTime(realDurationMs))
@@ -747,9 +769,9 @@ private fun PlaybackInfoCard(
                     )
                 }
             }
-            PlaybackInfoRow(Utils.t("File size", "文件大小"), formatPlaybackBytes(files.sumOf(File::length)))
-            if (files.size > 1) {
-                PlaybackInfoRow(Utils.t("Safety files", "安全分段"), files.size.toString())
+            PlaybackInfoRow(Utils.t("File size", "文件大小"), formatPlaybackBytes(items.sumOf { it.sizeBytes }))
+            if (items.size > 1) {
+                PlaybackInfoRow(Utils.t("Safety files", "安全分段"), items.size.toString())
             }
             PlaybackInfoRow(
                 Utils.t("Resolution", "分辨率"),
@@ -870,6 +892,10 @@ private fun FourLanePlaybackSurface(
     callbacks: PlaybackSurfaceCallbacks,
     modifier: Modifier = Modifier,
 ) {
+    DisposableEffect(files.map { it.absolutePath }, container) {
+        container.blockPlaybackRaster()
+        onDispose { container.blockPlaybackRaster() }
+    }
     AndroidView(
         factory = { container },
         update = {
@@ -881,7 +907,8 @@ private fun FourLanePlaybackSurface(
         modifier = modifier,
     )
 
-    PlaybackMediaBinding(files, segmentDurationHintsMs, container.textureView, callbacks)
+    PlaybackMediaBinding(files, segmentDurationHintsMs, container.textureView, callbacks,
+        onVideoFormat = { metadata, width, height -> container.setPlaybackRaster(metadata, width, height) })
 }
 
 @Composable
@@ -902,210 +929,71 @@ private fun PlaybackMediaBinding(
     segmentDurationHintsMs: Map<String, Long>,
     textureView: TextureView,
     callbacks: PlaybackSurfaceCallbacks,
+    onVideoFormat: ((RecordingRasterMetadata, Int, Int) -> Boolean)? = null,
 ) {
-    DisposableEffect(files.map { it.absolutePath }, segmentDurationHintsMs, textureView) {
-        val playlist = files.filter(File::isFile)
-        var player: MediaPlayer? = null
-        var outputSurface: Surface? = null
-        var currentIndex = 0
-        var desiredPlaying = true
-        var preparedReported = false
-        val durations = playlist.map { media ->
-            val sidecar = SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(media))
-            sidecar?.actualTrack?.durationMs
-                ?: sidecar?.realDurationMs?.let { real ->
-                    if (sidecar.timeLapseMultiplier > 1) real / sidecar.timeLapseMultiplier else real
-                }
-                ?: segmentDurationHintsMs[media.absolutePath]?.takeIf { it > 0L }
-                ?: 0L
-        }.toMutableList()
-
-        fun totalDuration(): Long = durations.sum().coerceAtLeast(0L)
-
-        fun releaseCurrentPlayer() {
-            runCatching { player?.stop() }
-            runCatching { player?.release() }
-            player = null
+    val context = LocalContext.current
+    val paths = remember(files) { files.map { it.absolutePath } }
+    val timeline = remember(paths) { PlaybackTimeline(paths.size) }
+    val latestCallbacks by rememberUpdatedState(callbacks)
+    val latestVideoFormat by rememberUpdatedState(onVideoFormat)
+    val rasterMetadata by produceState<PlaybackRasterBatch?>(null, paths) {
+        value = withContext(Dispatchers.IO) { PlaybackRasterBatch(paths, files.map(RecordingRasterReader::read)) }
+    }
+    SideEffect {
+        paths.forEachIndexed { index, path -> timeline.hint(index, segmentDurationHintsMs[path] ?: 0L) }
+    }
+    // Metadata and duration updates do not recreate a player or restart decoding.
+    val metadata = rasterMetadata?.forPaths(paths) ?: return
+    DisposableEffect(paths, textureView, metadata) {
+        var rasterError: String? = when {
+            metadata.any { it is RecordingRasterMetadata.Rejected } -> "INVALID_RASTER_METADATA"
+            metadata.distinct().size > 1 -> "MIXED_RECORDING_RASTERS"
+            else -> null
         }
-
-        fun releaseAll() {
-            callbacks.onControlsReady(null)
-            releaseCurrentPlayer()
-            runCatching { outputSurface?.release() }
-            outputSurface = null
+        fun playbackError() {
+            latestCallbacks.onControlsReady(null)
+            latestCallbacks.onError(if (rasterError != null)
+                Utils.t("This recording's layout cannot be read safely. Keep the original video and its metadata together.", "无法正确读取这段录像的画面布局，请保留原视频及其配套信息文件。")
+                else Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
         }
-
-        lateinit var openIndex: (Int, Long, Boolean) -> Unit
-        lateinit var seekGlobal: (Long) -> Unit
-
-        fun publishControls() {
-            callbacks.onControlsReady(
-                PlaybackControls(
-                    toggle = {
-                        val active = player
-                        if (active == null) {
-                            false
-                        } else if (runCatching { active.isPlaying }.getOrDefault(false)) {
-                            desiredPlaying = false
-                            runCatching { active.pause() }
-                            false
-                        } else {
-                            val atPlaylistEnd = currentIndex == playlist.lastIndex &&
-                                durations.getOrElse(currentIndex) { 0L } > 0L &&
-                                runCatching { active.currentPosition.toLong() }
-                                    .getOrDefault(0L) >= durations[currentIndex] - 250L
-                            desiredPlaying = true
-                            if (atPlaylistEnd) seekGlobal(0L) else runCatching { active.start() }
-                            true
-                        }
-                    },
-                    seekTo = { target -> seekGlobal(target) },
-                    currentPosition = {
-                        durations.take(currentIndex).sum() +
-                            runCatching { player?.currentPosition?.toLong() ?: 0L }.getOrDefault(0L)
-                    },
-                    duration = ::totalDuration,
-                    segmentDurations = { durations.toList() },
-                    seekToSegmentPosition = { index, local ->
-                        if (index in playlist.indices) {
-                            seekGlobal(durations.take(index).sum() + local.coerceIn(0L, durations[index].coerceAtLeast(0L)))
-                        }
-                    },
-                    isPlaying = { runCatching { player?.isPlaying == true }.getOrDefault(false) },
-                    segmentIndex = { currentIndex },
-                    seekToSegment = { index ->
-                        if (index in playlist.indices) {
-                            val wasPlaying = runCatching { player?.isPlaying == true }.getOrDefault(desiredPlaying)
-                            openIndex(index, 0L, wasPlaying)
-                        }
-                    },
-                ),
-            )
-        }
-
-        seekGlobal = seek@ { requested ->
-            if (playlist.isEmpty()) return@seek
-            val total = totalDuration()
-            if (total <= 0L) {
-                if (currentIndex == 0 && player != null) {
-                    runCatching { player?.seekTo(0) }
-                } else {
-                    openIndex(0, 0L, desiredPlaying)
-                }
-                return@seek
-            }
-            val target = requested.coerceIn(0L, total.coerceAtLeast(0L))
-            var remaining = target
-            var targetIndex = playlist.lastIndex
-            for (index in playlist.indices) {
-                val duration = durations[index].coerceAtLeast(0L)
-                if (remaining < duration || index == playlist.lastIndex) {
-                    targetIndex = index
-                    break
-                }
-                remaining -= duration
-            }
-            val localTarget = remaining.coerceIn(0L, durations[targetIndex].coerceAtLeast(0L))
-            val wasPlaying = runCatching { player?.isPlaying == true }.getOrDefault(desiredPlaying)
-            desiredPlaying = wasPlaying
-            if (targetIndex == currentIndex && player != null) {
-                runCatching { player?.seekTo(localTarget.toInt()) }
-            } else {
-                openIndex(targetIndex, localTarget, wasPlaying)
-            }
-        }
-
-        openIndex = open@ { index, localSeekMs, autoPlay ->
-            val surface = outputSurface ?: return@open
-            if (index !in playlist.indices) return@open
-            releaseCurrentPlayer()
-            currentIndex = index
-            desiredPlaying = autoPlay
-            try {
-                val mediaPlayer = MediaPlayer()
-                player = mediaPlayer
-                mediaPlayer.setSurface(surface)
-                mediaPlayer.setDataSource(playlist[index].absolutePath)
-                mediaPlayer.isLooping = false
-                mediaPlayer.setOnPreparedListener {
-                    val duration = runCatching { it.duration.toLong() }.getOrDefault(0L)
-                    if (duration > 0L) durations[index] = duration
-                    publishControls()
-                    if (localSeekMs > 0L) {
-                        runCatching { it.seekTo(localSeekMs.coerceAtMost(duration).toInt()) }
-                    }
-                    if (desiredPlaying) runCatching { it.start() }
-                    if (!preparedReported) {
-                        preparedReported = true
-                        callbacks.onPrepared(totalDuration())
-                    }
-                }
-                mediaPlayer.setOnInfoListener { _, what, _ ->
-                    if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
-                        callbacks.onFirstFrame()
-                    }
-                    false
-                }
-                mediaPlayer.setOnCompletionListener {
-                    if (currentIndex < playlist.lastIndex) {
-                        openIndex(currentIndex + 1, 0L, true)
-                    } else {
-                        desiredPlaying = false
-                        callbacks.onCompleted()
-                    }
-                }
-                mediaPlayer.setOnErrorListener { _, _, _ ->
-                    desiredPlaying = false
-                    callbacks.onControlsReady(null)
-                    callbacks.onError(Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
-                    true
-                }
-                mediaPlayer.prepareAsync()
-            } catch (_: Throwable) {
-                desiredPlaying = false
-                callbacks.onControlsReady(null)
-                callbacks.onError(Utils.t("This recording cannot currently be played on the head unit. Send it to your phone to view it.", "这段录像暂时无法在车机上播放，可以发送到手机查看。"))
-                releaseCurrentPlayer()
-            }
-        }
-
-        fun openPlaylist(texture: SurfaceTexture?) {
-            if (texture == null || outputSurface != null || playlist.isEmpty()) return
-            outputSurface = Surface(texture)
-            openIndex(0, 0L, true)
-        }
-
-        val listener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(
-                texture: SurfaceTexture,
-                width: Int,
-                height: Int,
-            ) {
-                openPlaylist(texture)
-            }
-
-            override fun onSurfaceTextureSizeChanged(
-                texture: SurfaceTexture,
-                width: Int,
-                height: Int,
-            ) = Unit
-
-            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-                releaseAll()
-                return true
-            }
-
-            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
-        }
-
-        textureView.surfaceTextureListener = listener
-        if (textureView.isAvailable) openPlaylist(textureView.surfaceTexture)
-
+        val binding = if (files.isEmpty()) null else runCatching {
+            require(metadata.none { it is RecordingRasterMetadata.Rejected }) { "INVALID_RASTER_METADATA" }
+            // A playlist may retain one decoder through equal-layout file boundaries. A mixed
+            // storage layout requires a separate playback selection, not a speculative size guess.
+            require(metadata.distinct().size == 1) { "MIXED_RECORDING_RASTERS" }
+            RecordingPlaylistPlayer(
+            context, files, textureView, timeline,
+            onPrepared = { latestCallbacks.onPrepared(it) },
+            onFirstFrame = { latestCallbacks.onFirstFrame() },
+            onCompleted = { latestCallbacks.onCompleted() },
+            onError = ::playbackError,
+            onVideoFormat = { index, width, height ->
+                val raster = metadata.getOrNull(index)
+                val valid = raster != null && raster.trackError(width, height) == null &&
+                    (latestVideoFormat?.invoke(raster, width, height)
+                        ?: (raster !is RecordingRasterMetadata.Repacked))
+                if (!valid) rasterError = "RASTER_TRACK_OR_PRESENTATION_MISMATCH"
+                valid
+            },
+        ) }.onFailure {
+            com.dante.zeekrcapabilitylab.event.EventLogger.markError(
+                com.dante.zeekrcapabilitylab.data.Categories.SYSTEM, "RECORDER_PLAYBACK_ERROR", "PLAYER_SETUP_FAILED", it)
+            playbackError()
+        }.getOrNull()
+        latestCallbacks.onControlsReady(binding?.let { active -> PlaybackControls(
+            toggle = active::toggle,
+            seekTo = active::seekGlobal,
+            currentPosition = active::currentPosition,
+            duration = timeline::total,
+            isPlaying = active::isPlaying,
+            segmentIndex = active::segmentIndex,
+            seekToSegment = { active.seekSegment(it) },
+            segmentDurations = timeline::durations,
+            seekToSegmentPosition = active::seekSegment,
+        ) })
         onDispose {
-            if (textureView.surfaceTextureListener === listener) {
-                textureView.surfaceTextureListener = null
-            }
-            releaseAll()
+            latestCallbacks.onControlsReady(null)
+            binding?.close()
         }
     }
 }

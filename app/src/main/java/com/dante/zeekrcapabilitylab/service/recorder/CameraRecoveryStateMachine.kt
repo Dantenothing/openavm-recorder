@@ -7,6 +7,8 @@ data class CameraRecoveryPolicy(
     val maxAttempts: Int = 5,
     val recoveryWindowMs: Long = 120_000L,
     val stabilityGraceMs: Long = 30_000L,
+    /** A known external owner may stay longer than one reopen attempt window. */
+    val availabilityWaitMs: Long = recoveryWindowMs,
 ) {
     init {
         require(availabilityDebounceMs >= 0L)
@@ -14,6 +16,7 @@ data class CameraRecoveryPolicy(
         require(maxAttempts > 0)
         require(recoveryWindowMs > 0L)
         require(stabilityGraceMs >= 0L)
+        require(availabilityWaitMs >= recoveryWindowMs)
     }
 
     fun retryDelayAfter(attemptsMade: Int): Long =
@@ -48,6 +51,8 @@ data class CameraRecoverySnapshot(
     val lastReason: String? = null,
     /** Higher-priority Session gate. Only a new manual Start may arm recovery. */
     val resumeAllowed: Boolean = false,
+    val waitingForAvailability: Boolean = false,
+    val occupancyDeadlineAtMs: Long? = null,
 )
 
 sealed interface CameraRecoveryAction {
@@ -74,6 +79,23 @@ class CameraRecoveryStateMachine(
     val maxAttempts: Int get() = policy.maxAttempts
     val recoveryWindowMs: Long get() = policy.recoveryWindowMs
 
+    /** Revalidated at the actual open boundary; a previously issued Attempt is not a lease. */
+    fun mayOpen(generation: Long, nowMs: Long): Boolean = isCurrent(generation) &&
+        snapshot.resumeAllowed && when (snapshot.phase) {
+            CameraRecoveryPhase.HEALTHY, CameraRecoveryPhase.PROBATION -> true
+            CameraRecoveryPhase.RESUMING -> !deadlineReached(nowMs) &&
+                snapshot.availability != CameraAvailabilityState.UNAVAILABLE
+            else -> false
+        }
+
+    /** Our own successful open makes availability UNAVAILABLE; it must not prohibit encoder start. */
+    fun mayStartRecording(generation: Long, nowMs: Long): Boolean = isCurrent(generation) && snapshot.resumeAllowed &&
+        when (snapshot.phase) {
+            CameraRecoveryPhase.HEALTHY, CameraRecoveryPhase.PROBATION -> true
+            CameraRecoveryPhase.RESUMING -> !deadlineReached(nowMs)
+            else -> false
+        }
+
     fun beginManualSession(generation: Long, targetCameraId: String) {
         snapshot = CameraRecoverySnapshot(
             generation = generation,
@@ -93,6 +115,7 @@ class CameraRecoveryStateMachine(
             probationUntilMs = null,
             lastReason = "SESSION_CANCELLED",
             resumeAllowed = false,
+            waitingForAvailability = false,
         )
     }
 
@@ -105,6 +128,7 @@ class CameraRecoveryStateMachine(
             probationUntilMs = null,
             lastReason = reason,
             resumeAllowed = false,
+            waitingForAvailability = false,
         )
     }
 
@@ -118,12 +142,17 @@ class CameraRecoveryStateMachine(
             nextAttemptKind = null,
             probationUntilMs = null,
             lastReason = reason,
+            waitingForAvailability = false,
         )
         return true
     }
 
     fun markRecordingStarted(generation: Long, nowMs: Long): RecordingStartOutcome {
         if (!isCurrent(generation) || !snapshot.resumeAllowed || snapshot.phase == CameraRecoveryPhase.TERMINAL) {
+            return RecordingStartOutcome.STALE
+        }
+        if (snapshot.phase == CameraRecoveryPhase.RESUMING && deadlineReached(nowMs)) {
+            abandon("RECOVERY_WINDOW_EXPIRED")
             return RecordingStartOutcome.STALE
         }
         return if (snapshot.phase == CameraRecoveryPhase.RESUMING) {
@@ -134,6 +163,7 @@ class CameraRecoveryStateMachine(
                 nextAttemptKind = null,
                 probationUntilMs = nowMs + policy.stabilityGraceMs,
                 lastReason = null,
+                waitingForAvailability = false,
             )
             RecordingStartOutcome.RESUMED
         } else if (snapshot.phase == CameraRecoveryPhase.PROBATION) {
@@ -171,6 +201,8 @@ class CameraRecoveryStateMachine(
             nextAttemptKind = null,
             probationUntilMs = null,
             lastReason = reason,
+            waitingForAvailability = false,
+            occupancyDeadlineAtMs = if (continuingEpisode) snapshot.occupancyDeadlineAtMs else nowMs + policy.availabilityWaitMs,
         )
         return true
     }
@@ -179,6 +211,7 @@ class CameraRecoveryStateMachine(
         if (!isCurrent(generation) || !snapshot.resumeAllowed || snapshot.phase != CameraRecoveryPhase.FINALIZING) {
             return CameraRecoveryAction.None
         }
+        if (holdForExternalOwner(nowMs)) return CameraRecoveryAction.None
         if (deadlineReached(nowMs)) return abandon("RECOVERY_WINDOW_EXPIRED")
         val nextAttemptAt = if (snapshot.availability == CameraAvailabilityState.AVAILABLE) {
             nowMs + policy.availabilityDebounceMs
@@ -212,8 +245,11 @@ class CameraRecoveryStateMachine(
             },
         )
         if (snapshot.phase != CameraRecoveryPhase.WAITING_CAMERA) return CameraRecoveryAction.None
+        if (!available && holdForExternalOwner(nowMs)) return CameraRecoveryAction.None
         if (deadlineReached(nowMs)) return abandon("RECOVERY_WINDOW_EXPIRED")
         if (available) {
+            if (snapshot.waitingForAvailability) snapshot = snapshot.copy(waitingForAvailability = false,
+                deadlineAtMs = minOf(requireNotNull(snapshot.occupancyDeadlineAtMs), nowMs + policy.recoveryWindowMs))
             val candidate = nowMs + policy.availabilityDebounceMs
             val current = snapshot.nextAttemptAtMs
             if (current == null || candidate < current) {
@@ -244,9 +280,13 @@ class CameraRecoveryStateMachine(
                     attemptsMade = 0,
                     probationUntilMs = null,
                     lastReason = null,
+                    occupancyDeadlineAtMs = null,
                 )
             }
             return CameraRecoveryAction.None
+        }
+        if (snapshot.phase == CameraRecoveryPhase.RESUMING) {
+            return if (deadlineReached(nowMs)) abandon("RECOVERY_WINDOW_EXPIRED") else CameraRecoveryAction.None
         }
         if (snapshot.phase != CameraRecoveryPhase.WAITING_CAMERA) {
             return CameraRecoveryAction.None
@@ -276,6 +316,10 @@ class CameraRecoveryStateMachine(
         }
         if (!recoverable) return abandon(reason)
         if (snapshot.attemptsMade >= policy.maxAttempts) return abandon("RECOVERY_ATTEMPT_LIMIT")
+        if (holdForExternalOwner(nowMs)) {
+            snapshot = snapshot.copy(lastReason = reason)
+            return CameraRecoveryAction.None
+        }
         if (deadlineReached(nowMs)) return abandon("RECOVERY_WINDOW_EXPIRED")
         snapshot = snapshot.copy(
             phase = CameraRecoveryPhase.WAITING_CAMERA,
@@ -287,6 +331,7 @@ class CameraRecoveryStateMachine(
     }
 
     fun nextWakeAtMs(): Long? = when (snapshot.phase) {
+        CameraRecoveryPhase.RESUMING -> snapshot.deadlineAtMs
         CameraRecoveryPhase.WAITING_CAMERA -> listOfNotNull(
             snapshot.deadlineAtMs,
             snapshot.nextAttemptAtMs,
@@ -298,6 +343,15 @@ class CameraRecoveryStateMachine(
     private fun deadlineReached(nowMs: Long): Boolean =
         snapshot.deadlineAtMs?.let { nowMs >= it } == true
 
+    private fun holdForExternalOwner(nowMs: Long): Boolean {
+        val deadline = snapshot.occupancyDeadlineAtMs ?: return false
+        if (policy.availabilityWaitMs == policy.recoveryWindowMs ||
+            snapshot.availability != CameraAvailabilityState.UNAVAILABLE || nowMs >= deadline) return false
+        snapshot = snapshot.copy(phase = CameraRecoveryPhase.WAITING_CAMERA, waitingForAvailability = true,
+            deadlineAtMs = deadline, nextAttemptAtMs = null, nextAttemptKind = null)
+        return true
+    }
+
     private fun isCurrent(generation: Long): Boolean = generation == snapshot.generation
 
     private fun abandon(reason: String): CameraRecoveryAction.Abandon {
@@ -308,6 +362,7 @@ class CameraRecoveryStateMachine(
             probationUntilMs = null,
             lastReason = reason,
             resumeAllowed = false,
+            waitingForAvailability = false,
         )
         return CameraRecoveryAction.Abandon(reason)
     }
