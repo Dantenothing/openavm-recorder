@@ -2,6 +2,8 @@
 
 Use **Recorder 5.0.0** on the head unit and **Phone 5.0.1** on Android. Phone downloads have resumed with user-supplied cloud configuration; local Recorder pairing, transfer and playback need no ZEEKR account or configuration file.
 
+**Already using Recorder 5.0.0?** Only update the phone. Recorder's current update checker compares GitHub release tags and may offer `v5.0.1`; that tag does not mean there is a Recorder 5.0.1 APK. The vehicle APK is unchanged.
+
 [Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1)
 
 For vehicle recording, start at section 1. For phone vehicle controls, start at section 2. Add section 3 only when you want to transfer recordings.

@@ -1,6 +1,6 @@
 # OpenAVM Phone V5
 
-> **Phone 5.0.1 is available for public testing.** Local Recorder pairing, recording transfer and playback work without cloud configuration. Optional cloud controls require a user-supplied configuration and authorised login. [Download](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1).
+> **Phone 5.0.1 is the current release, paired with the unchanged Recorder 5.0.0.** Local Recorder pairing, recording transfer and playback work without cloud configuration. Optional cloud controls require a user-supplied configuration and authorised login. [Download](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1).
 
 This is the current Android phone application: vehicle status and controls, preconditioning, factory Sentry rules, home-screen widgets, and the OpenAVM recording library.
 
