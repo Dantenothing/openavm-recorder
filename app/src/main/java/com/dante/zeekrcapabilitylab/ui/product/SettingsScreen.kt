@@ -133,6 +133,8 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
         Spacer(Modifier.height(8.dp))
         MirrorReturnSettingsEntry()
         if (BuildConfig.MIRROR_RETURN_ENABLED) Spacer(Modifier.height(10.dp))
+        TelemetrySettingsCard()
+        Spacer(Modifier.height(10.dp))
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {

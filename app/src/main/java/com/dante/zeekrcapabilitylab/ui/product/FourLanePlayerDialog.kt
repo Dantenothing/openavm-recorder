@@ -92,6 +92,10 @@ import com.dante.zeekrcapabilitylab.player.RecordingRasterReader
 import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import com.dante.zeekrcapabilitylab.service.recorder.SegmentSidecar
 import com.dante.zeekrcapabilitylab.service.recorder.VideoTriggerMarker
+import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetry
+import com.dante.zeekrcapabilitylab.telemetry.TelemetryTrack
+import com.dante.zeekrcapabilitylab.telemetry.TelemetryVideoWindow
+import com.dante.zeekrcapabilitylab.telemetry.TelemetryPlayback
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -218,6 +222,29 @@ fun FourLanePlayerDialog(
     var dragging by remember(playlist) { mutableStateOf(false) }
     var draggedPositionMs by remember(playlist) { mutableStateOf(0L) }
     var activeSegmentIndex by remember(playlist) { mutableStateOf(0) }
+    var showRoute by remember(playlist) { mutableStateOf(false) }
+    val routePosition = if (dragging) draggedPositionMs else positionMs
+    val routeSeek = remember(playableDurations, routePosition) {
+        PlaybackTimeline(playableDurations.size).apply {
+            playableDurations.forEachIndexed { index, duration -> hint(index, duration) }
+        }.seek(routePosition)
+    }
+    val routeSidecar = segmentItems.getOrNull(routeSeek?.index ?: activeSegmentIndex)?.sidecar
+    val routeSession = routeSidecar?.recordingSessionId
+    var routeLoadedSession by remember { mutableStateOf<String?>(null) }
+    // Keep only the current session in memory; opening old video never fabricates a track.
+    val routeTrack by produceState<TelemetryTrack?>(null, routeSession) {
+        value = null
+        value = routeSession?.let { id -> withContext(Dispatchers.IO) { RecordingTelemetry.store(context).load(id) } }
+        routeLoadedSession = routeSession
+    }
+    // The state can briefly still hold the previous session during a segment change.
+    val currentTrack = routeTrack?.takeIf { it.header.sessionId == routeSession }
+    val routeWindow = TelemetryVideoWindow(routeSidecar?.startedAtElapsedRealtimeMs,
+        playableDurations.getOrNull(routeSeek?.index ?: -1) ?: 0L,
+        routeSidecar?.recordingMode == RecordingMode.TIME_LAPSE || (routeSidecar?.timeLapseMultiplier ?: 1) > 1)
+    val routeAt = routeSeek?.positionMs?.let(routeWindow::at)
+    val routeSample = currentTrack?.let { TelemetryPlayback.sampleAt(it.points, routeAt) }
     var selectedSegmentPaths by remember(playlist) {
         mutableStateOf(playlist.firstOrNull()?.let { setOf(it.absolutePath) } ?: emptySet())
     }
@@ -303,6 +330,7 @@ fun FourLanePlayerDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    TextButton(onClick = { showRoute = true }) { Text(Utils.t("Route", "轨迹")) }
                     TextButton(onClick = onDismiss) { Text(Utils.t("Close", "关闭")) }
                 }
 
@@ -321,6 +349,7 @@ fun FourLanePlayerDialog(
                         thumbnailCache = thumbnailCache,
                         onJump = { index ->
                             controls?.seekToSegment?.invoke(index)
+                            positionMs = playableDurations.take(index).sum()
                             activeSegmentIndex = index
                             status = Utils.t(
                                 "Playing {0}", "正在播放 {0}", formatSegmentClock(segmentItems[index].startedAtEpochMs))
@@ -440,6 +469,13 @@ fun FourLanePlayerDialog(
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
+                                if (currentTrack?.points?.isNotEmpty() == true) {
+                                    Text(Utils.t("Location", "定位") + " · " + telemetrySpeedText(routeSample?.speedMps),
+                                        color = Color.White, fontSize = 12.sp,
+                                        modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp)
+                                            .background(Color(0xB3000000), RoundedCornerShape(6.dp))
+                                            .clickable { showRoute = true }.padding(horizontal = 8.dp, vertical = 4.dp))
+                                }
                                 if (!firstFrame && error == null) {
                                     Text(
                                         Utils.t("Loading video…", "正在载入画面…"),
@@ -558,7 +594,14 @@ fun FourLanePlayerDialog(
             }
         }
     }
-
+    if (showRoute) TelemetryRouteDialog(currentTrack, routeSample,
+        loading = routeSession != null && routeLoadedSession != routeSession,
+        aligned = routeWindow.at(0) != null,
+        positionMs = routePosition, durationMs = durationMs, playing = playing,
+        onScrub = { target -> draggedPositionMs = target; dragging = true },
+        onScrubEnd = { controls?.seekTo?.invoke(draggedPositionMs); positionMs = draggedPositionMs; dragging = false },
+        onToggle = { playing = controls?.toggle?.invoke() ?: false },
+        onDismiss = { showRoute = false; dragging = false })
 }
 
 @Composable

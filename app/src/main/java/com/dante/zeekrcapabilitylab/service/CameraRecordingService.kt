@@ -39,6 +39,9 @@ import com.dante.zeekrcapabilitylab.product.RecordingModeSwitchConfig
 import com.dante.zeekrcapabilitylab.product.RecordingQualityStore
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.usbexport.UsbExportVolumeResolver
+import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetry
+import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetryCapture
+import com.dante.zeekrcapabilitylab.telemetry.AndroidTelemetryLocationSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,6 +55,10 @@ class CameraRecordingService : Service() {
 
     private lateinit var session: RecorderSession
     private var foreground = false
+    private var locationForeground = false
+    private var telemetryStopped = false
+    private val telemetryOwner = Any()
+    private var telemetry: RecordingTelemetryCapture? = null
     private var removableStorageMonitor: RemovableStorageMonitor? = null
     private var statusOverlay: RecordingStatusOverlay? = null
     private var mirrorPreview: com.dante.zeekrcapabilitylab.mirror.MirrorPreviewController? = null
@@ -103,6 +110,13 @@ class CameraRecordingService : Service() {
             )
         }.also { it.start() }
         instance = this
+        RecordingTelemetry.claim(telemetryOwner)
+        // Optional telemetry cannot prevent the recorder from being created.
+        telemetry = runCatching {
+            RecordingTelemetryCapture(AndroidTelemetryLocationSource(applicationContext), RecordingTelemetry.store(this),
+                enabled = { SettingsStore.get(this).recordingTelemetryEnabled },
+                publish = { RecordingTelemetry.publish(telemetryOwner, it) })
+        }.getOrNull()
         statusOverlay = runCatching { RecordingStatusOverlay(this) }.getOrNull()
     }
 
@@ -207,10 +221,27 @@ class CameraRecordingService : Service() {
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
             )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // The two-argument overload would inherit every manifest type on Android 10,
+            // including location before opt-in. Camera typing itself starts at Android 11.
+            startForeground(RecorderNotification.NOTIFICATION_ID, notification, 0)
         } else {
             startForeground(RecorderNotification.NOTIFICATION_ID, notification)
         }
         foreground = true
+        // Keep camera foreground setup independent: an OEM/location permission rejection
+        // disables only telemetry. Background wake-up may require opening the app first.
+        locationForeground = false
+        if (SettingsStore.get(this).recordingTelemetryEnabled && RecordingTelemetry.hasPermission(this)) {
+            locationForeground = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val cameraType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0
+                    startForeground(RecorderNotification.NOTIFICATION_ID, notification,
+                        cameraType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+                }
+                true
+            }.getOrDefault(false)
+        }
     }
 
     private fun refreshNotification() {
@@ -231,6 +262,7 @@ class CameraRecordingService : Service() {
             runCatching { com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.recordFault(applicationContext, s) }
         }
         _state.value = s
+        telemetry?.follow(s.recordingSessionId, !telemetryStopped && s.status == RecorderStatus.RECORDING, locationForeground)
         presentationHandler.post {
             if (instance !== this || sessionEpoch != publishedEpoch) return@post
             val progress = _modeSwitchProgress.value ?: return@post
@@ -277,6 +309,8 @@ class CameraRecordingService : Service() {
     }
 
     private fun onStopped() {
+        telemetryStopped = true
+        telemetry?.follow(null, false, false)
         com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.recorderStopped(state.value)
         modeSwitchGate.cancel()
         presentationHandler.removeCallbacks(modeSwitchWatchdog)
@@ -286,6 +320,8 @@ class CameraRecordingService : Service() {
     }
 
     private fun stopRecording(manual: Boolean = true) {
+        telemetryStopped = true
+        telemetry?.follow(null, false, false)
         if (manual) com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.onManualStop(state.value)
         cancelModeSwitch("MANUAL_STOP", notify = false)
         mirrorConfig = null
@@ -408,6 +444,7 @@ class CameraRecordingService : Service() {
     }
 
     override fun onDestroy() {
+        telemetry?.close(); telemetry = null
         sessionEpoch++
         modeSwitchGate.cancel()
         handoffSession = null
@@ -430,6 +467,12 @@ class CameraRecordingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        fun refreshTelemetrySetting() {
+            instance?.let { service -> service.presentationHandler.post {
+                val current = state.value
+                service.telemetry?.follow(current.recordingSessionId, !service.telemetryStopped && current.status == RecorderStatus.RECORDING, service.locationForeground)
+            } }
+        }
         private val _modeSwitchProgress = MutableStateFlow<RecordingModeSwitchProgress?>(null)
         val modeSwitchProgress: StateFlow<RecordingModeSwitchProgress?> = _modeSwitchProgress.asStateFlow()
         @Volatile var keepFloatingControls: Boolean = false; private set

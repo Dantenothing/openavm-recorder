@@ -85,8 +85,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 102
-        versionName = "5.0.0"
+        versionCode = 103
+        versionName = "5.1.0-telemetry1"
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("String", "DIAGNOSTIC_ENDPOINT", "\"https://openavm-diagnostics.dantenothing.workers.dev\"")

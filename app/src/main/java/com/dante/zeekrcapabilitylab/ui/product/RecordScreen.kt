@@ -586,6 +586,7 @@ fun RecordScreen() {
 
             Spacer(Modifier.height(8.dp))
             QuickStartEntry()
+            RecordingTelemetryLabel()
             Spacer(Modifier.height(8.dp))
             modeSwitchProgress?.let { progress ->
                 Text(com.dante.zeekrcapabilitylab.service.RecordingModeOverlayMenu.progressLabel(progress))
