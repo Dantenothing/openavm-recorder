@@ -1,6 +1,6 @@
 # Phone 5.0.1 verification
 
-Date: 2026-09-26. Verification record for the Phone 5.0.1 public testing release. The exact APK checked below is unchanged from the locally verified candidate.
+Date: 2026-09-26. Verification record for Phone 5.0.1, initially published as a prerelease and subsequently promoted to the regular V5 release. The exact APK checked below is unchanged from the locally verified candidate; the release-status change adds no new physical-vehicle verification. Recorder remains 5.0.0.
 
 ## Artifact
 

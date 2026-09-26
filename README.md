@@ -1,6 +1,6 @@
 # OpenAVM V5
 
-> **Phone downloads are back with 5.0.1.** Pair with OpenAVM Recorder, receive recordings and play them without a ZEEKR account or cloud configuration. Optional cloud controls require your own imported connection configuration. The old bundled Phone 5.0.0 APK remains withdrawn.
+> **Current release: Recorder 5.0.0 + Phone 5.0.1.** The 5.0.1 update changes only the phone app; existing Recorder 5.0.0 users do not need to reinstall the vehicle app. Local pairing, recording transfer and playback need no ZEEKR account or cloud configuration. Optional cloud controls require your own imported configuration. The old bundled Phone 5.0.0 APK remains withdrawn.
 
 **Surround-camera recording and a floating live mirror for compatible ZEEKR head units, with an optional Android companion.**
 
@@ -83,6 +83,8 @@ Grant permissions for the features you use, such as camera, storage, overlay dis
 ## Feedback
 
 [Report an issue](https://github.com/Dantenothing/openavm-recorder/issues) with the affected app, both app versions, vehicle and firmware, time, steps and exact message. Hide account details, plates, locations and pairing information in screenshots.
+
+For vulnerabilities or sensitive evidence, [report privately](https://github.com/Dantenothing/openavm-recorder/security/advisories/new). See the [security policy](SECURITY.md) for supported versions and reporting guidance.
 
 ## Source availability and licence status
 

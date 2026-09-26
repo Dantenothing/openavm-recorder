@@ -1,8 +1,8 @@
-# OpenAVM V5.0.1 — Phone download restored
+# OpenAVM V5 — Recorder 5.0.0 + Phone 5.0.1
 
-**Phone 5.0.1 is the replacement for the withdrawn Phone 5.0.0 APK.** It keeps the complete phone client while removing bundled manufacturer connection parameters. OpenAVM Recorder pairing, recording transfer and playback require no cloud configuration or ZEEKR account.
+**This is a phone-only update. Phone 5.0.1 replaces the withdrawn Phone 5.0.0 APK.** It keeps the complete phone client while removing bundled manufacturer connection parameters. OpenAVM Recorder pairing, recording transfer and playback require no cloud configuration or ZEEKR account.
 
-This is a **public testing release** for compatible ZEEKR vehicles. The vehicle APK is the unchanged Recorder **5.0.0 / 102**; the phone APK is **5.0.1 / 52**. Existing Recorder 5.0.0 users only need to update the phone.
+This is the **current regular V5 release** for compatible ZEEKR vehicles. The vehicle APK is the unchanged Recorder **5.0.0 / 102**; the phone APK is **5.0.1 / 52**. Existing Recorder 5.0.0 users only need to update the phone. Promotion from prerelease does not change either APK or expand the verified compatibility scope below.
 
 ## Downloads
 
@@ -40,6 +40,8 @@ Cloud controls are optional: independently prepare a compatible configuration, i
 **Phone cloud controls currently target the Australian ZEEKR 7X, using the AU 1.6.6 integration.** Other regions and models are not generally verified, and shared accounts keep only the permissions granted by the owner. This limitation concerns cloud vehicle controls; local recording transfer and playback do not require a ZEEKR account.
 
 ## Upgrading from an earlier version
+
+**Recorder 5.0.0 users:** its in-app update checker compares GitHub release tags, so it may offer this `v5.0.1` release even though the Recorder APK is still 5.0.0. Skip reinstalling Recorder for this phone-only update; check the app-specific versions in the download table.
 
 1. **Install over the existing app; do not uninstall first.** Use the official matching-signature APK. Early standalone-assistant users should follow the setup guide before changing installations.
 2. **Check camera directions while parked.** The first V5 launch applies the right-hand-drive preset once: Front 1, Rear 2, Left 3, Right 4; Cabin 1, Infrared 0. Later manual adjustments are retained.

@@ -11,4 +11,4 @@ Package identity remains com.dante.zeekrbridge, version code 52. The vehicle Rec
 
 See [cloud setup](CLOUD_SETUP.md) and the [empty template](connection-config.template.json). The template contains no working parameters.
 
-Download the [V5.0.1 public testing release](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1). The exact signed phone APK was checked with Recorder 5.0.0 transport code for secure pairing, reconnecting and MP4 transfer on an Android emulator. See [verification scope and limits](PHONE_5_0_1_VERIFICATION.md); this is not a claim that every physical vehicle/phone combination has been tested.
+Download the [current V5 release: Recorder 5.0.0 + Phone 5.0.1](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1). Only the phone app changed in this update. The exact signed phone APK was checked with Recorder 5.0.0 transport code for secure pairing, reconnecting and MP4 transfer on an Android emulator. See [verification scope and limits](PHONE_5_0_1_VERIFICATION.md); this is not a claim that every physical vehicle/phone combination has been tested.
