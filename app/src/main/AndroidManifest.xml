@@ -65,6 +65,12 @@
             android:exported="false" android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
 
+        <activity android:name=".enhancement.field.FieldTestActivity"
+            android:exported="false" android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <service android:name=".enhancement.field.FieldTestService"
+            android:exported="false" android:foregroundServiceType="dataSync|location" />
+
         <service
             android:name=".transfer.TransferService"
             android:exported="false"

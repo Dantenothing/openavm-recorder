@@ -376,6 +376,20 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
             }
         }
 
+        if (BuildConfig.VEHICLE_FIELD_TEST_ENABLED) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(Utils.t("Vehicle field test", "车辆实测"), style = MaterialTheme.typography.titleMedium)
+                    Text(Utils.t("Read-only vehicle signals and GPS. Save one report with recent camera tests. Starts only when you choose.",
+                        "只读检查车辆信号和 GPS，并将近期相机测试合并为一份报告。由你手动开始。"), style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = {
+                        context.startActivity(android.content.Intent(context,
+                            com.dante.zeekrcapabilitylab.enhancement.field.FieldTestActivity::class.java))
+                    }) { Text(Utils.t("Open field test", "打开车辆实测")) }
+                }
+            }
+        }
+
         if (BuildConfig.CAMERA_CONCURRENCY_PROBE_ENABLED) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

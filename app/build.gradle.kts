@@ -12,6 +12,7 @@ plugins {
 // V5 includes the owner-tested return behaviour. Recording still requires an explicit user choice.
 val publicUiCheck = providers.gradleProperty("publicUiCheck").orNull == "true"
 val cameraConcurrencyProbe = providers.gradleProperty("cameraConcurrencyProbe").orNull == "true"
+val vehicleFieldTest = providers.gradleProperty("vehicleFieldTest").orNull == "true"
 val preflightAssets = layout.buildDirectory.dir("generated/preflightAssets")
 val generatePreflightEvidence by tasks.registering {
     outputs.dir(preflightAssets)
@@ -47,6 +48,7 @@ val generatePreflightEvidence by tasks.registering {
                 "PRODUCT_CONTINUOUS_TRIAL_AVAILABLE" to true,"PRODUCT_CONTINUOUS_DEFAULT" to true,
                 "EXPERIMENTAL_TOOLS_ENABLED_IN_PUBLIC_RELEASE" to false,
                 "CAMERA_CONCURRENCY_PREVIEW_PROBE" to cameraConcurrencyProbe,
+                "VEHICLE_FIELD_TEST" to vehicleFieldTest,
                 "DIAGNOSTIC_CLOUD_UPLOAD" to false,"DIAGNOSTIC_REMOTE_COMMANDS" to false,
                 "DIAGNOSTIC_REMOTE_RECIPES_V1" to false,"DIAGNOSTIC_EXACT_EVIDENCE_REVIEW" to true,
                 "AWAY_SINGLE_EXPORT_RECORDER_FAULT" to true,"RECORDER_TERMINAL_STATE_FENCE" to true,
@@ -87,11 +89,12 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 104
-        versionName = "5.1.0-camera1"
+        versionCode = 105
+        versionName = "5.1.0-field1"
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("boolean", "CAMERA_CONCURRENCY_PROBE_ENABLED", cameraConcurrencyProbe.toString())
+        buildConfigField("boolean", "VEHICLE_FIELD_TEST_ENABLED", vehicleFieldTest.toString())
         buildConfigField("String", "DIAGNOSTIC_ENDPOINT", "\"https://openavm-diagnostics.dantenothing.workers.dev\"")
         buildConfigField("boolean", "C0_PARKING_EXPERIMENT_ENABLED", "false")
         // Beta12 exited at its first native handoff in the vehicle. Preserve recovery, disable new runs.

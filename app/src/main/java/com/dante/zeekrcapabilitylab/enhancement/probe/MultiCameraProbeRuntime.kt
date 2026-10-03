@@ -268,12 +268,19 @@ object MultiCameraProbeRuntime {
             }.toString()
             mutable.value = mutable.value.copy(report = report, reportSaved = false)
             journal.post {
-                val saved = runCatching {
+                val saved = runCatching { synchronized(com.dante.zeekrcapabilitylab.enhancement.field.FieldReportIoLock) {
                     val file = AtomicFile(File(context.noBackupFilesDir, "multi-preview-last.json"))
                     val out = file.startWrite()
                     try { out.write(report.toByteArray(Charsets.UTF_8)); file.finishWrite(out) }
                     catch (error: Throwable) { file.failWrite(out); throw error }
-                }.isSuccess
+                    val history = File(context.noBackupFilesDir, "multi-preview-history").apply { mkdirs() }
+                    val archive = AtomicFile(File(history, "${owner.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(100)}.json"))
+                    val archiveOut = archive.startWrite()
+                    try { archiveOut.write(report.toByteArray(Charsets.UTF_8)); archive.finishWrite(archiveOut) }
+                    catch (error: Throwable) { archive.failWrite(archiveOut); throw error }
+                    com.dante.zeekrcapabilitylab.enhancement.field.FieldReportFiles.list(history)
+                        .drop(8).forEach { AtomicFile(it).delete() }
+                } }.isSuccess
                 control.post { if (mutable.value.report == report) mutable.value = mutable.value.copy(reportSaved = saved) }
             }
         }
