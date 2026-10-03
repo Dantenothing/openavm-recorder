@@ -72,6 +72,7 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
     val languageMode by AppLanguage.mode.collectAsState()
     var showDiagnostics by remember { mutableStateOf(false) }
     var showGuide by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var setupRevision by remember { mutableStateOf(0) }
     if (showGuide) QuickStartGuide(onDismiss = { showGuide = false })
 
     var segment by remember { mutableStateOf(settings.segmentSeconds) }
@@ -131,12 +132,16 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { showGuide = true }) { Text(Utils.t("Quick start & help", "新手教程与帮助")) }
         Spacer(Modifier.height(8.dp))
-        MirrorReturnSettingsEntry()
+        MirrorReturnSettingsEntry(onSaved = { setupRevision++ })
         if (BuildConfig.MIRROR_RETURN_ENABLED) Spacer(Modifier.height(10.dp))
-        TelemetrySettingsCard()
-        VehicleTelemetrySettingsCard()
-        Spacer(Modifier.height(10.dp))
-        RecordingChannelSettings()
+        androidx.compose.runtime.key(setupRevision) {
+            TelemetrySettingsCard()
+            VehicleTelemetrySettingsCard()
+            Spacer(Modifier.height(10.dp))
+            RecordingChannelSettings()
+            Spacer(Modifier.height(10.dp))
+            PlaybackMapSettings()
+        }
         Spacer(Modifier.height(10.dp))
 
         Card(Modifier.fillMaxWidth()) {

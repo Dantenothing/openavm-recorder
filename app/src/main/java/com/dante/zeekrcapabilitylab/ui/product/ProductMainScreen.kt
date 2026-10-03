@@ -53,6 +53,7 @@ fun ProductMainScreen(openReturnSettings: Boolean = false, onReturnSettingsHandl
     val context = androidx.compose.ui.platform.LocalContext.current
     val returnSettings = remember(context) { com.dante.zeekrcapabilitylab.mirror.MirrorReturnSettings(context) }
     var showReturnSetup by remember { mutableStateOf(returnSettings.needsReview) }
+    var externalSetupRevision by remember { mutableStateOf(0) }
     if (showReturnSetup) {
         // Do not mount the home page's automatic preview/permission effects behind this decision.
         MirrorReturnSetupDialog(returnSettings, installationPrompt = true, onDismiss = {},
@@ -60,7 +61,8 @@ fun ProductMainScreen(openReturnSettings: Boolean = false, onReturnSettingsHandl
         return
     }
     if (openReturnSettings) MirrorReturnSetupDialog(returnSettings, installationPrompt = false,
-        onDismiss = onReturnSettingsHandled, onSaved = onReturnSettingsHandled)
+        onDismiss = onReturnSettingsHandled,
+        onSaved = { externalSetupRevision++; onReturnSettingsHandled() })
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "record"
@@ -100,7 +102,10 @@ fun ProductMainScreen(openReturnSettings: Boolean = false, onReturnSettingsHandl
             composable("events") { EventsScreen() }
             composable("phone") { PhoneScreen() }
             composable("settings") {
-                SettingsScreen(onOpenUsbManagement = { navController.navigate("usb_storage") })
+                // The floating-window shortcut can edit preferences while this screen is mounted.
+                androidx.compose.runtime.key(externalSetupRevision) {
+                    SettingsScreen(onOpenUsbManagement = { navController.navigate("usb_storage") })
+                }
             }
             composable("usb_storage") {
                 UsbManagementScreen(

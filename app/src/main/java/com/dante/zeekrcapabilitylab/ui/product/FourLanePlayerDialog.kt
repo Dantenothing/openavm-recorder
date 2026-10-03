@@ -239,7 +239,8 @@ fun FourLanePlayerDialog(
     var dragging by remember(playlist) { mutableStateOf(false) }
     var draggedPositionMs by remember(playlist) { mutableStateOf(0L) }
     var activeSegmentIndex by remember(playlist) { mutableStateOf(0) }
-    var showRoute by remember(playlist) { mutableStateOf(false) }
+    // A playlist opens with the saved display choice; hiding it here is temporary.
+    var showRoute by remember(playlist) { mutableStateOf(settings.playbackMapDefaultOpen) }
     val routeWindows = remember(segmentItems, confirmedDurations) { segmentItems.mapIndexed { index, item ->
         val sidecar = item.sidecar
         TelemetryPlaylistWindow(sidecar?.recordingSessionId, sidecar?.startedAtElapsedRealtimeMs,

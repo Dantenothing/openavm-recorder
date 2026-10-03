@@ -72,8 +72,8 @@ val generatePreflightEvidence by tasks.registering {
             "returnFeatureAcceptance" to mapOf("version" to "5.0.0-sleep4", "versionCode" to 101,
                 "reportedOn" to "2026-09-25", "evidenceType" to "OWNER_CONFIRMATION",
                 "scope" to "Latest delivered sleep4 reported working; no independent final-binary vehicle recording claimed"),
-            "drivePreview" to mapOf("version" to "5.1.0-drive5", "versionCode" to 110,
-                "scope" to "Drive4 features retained; stop-to-preview recovery distinguishes confirmed resource release from historical recording errors, continuous backends use bounded shutdown budgets, established library covers and fitted video proportions are restored, and boot/transfer diagnostics are added. New binary awaits vehicle verification; long-duration three-camera recording and pedal units are not established.",
+            "drivePreview" to mapOf("version" to "5.1.0-drive6", "versionCode" to 111,
+                "scope" to "Drive5 recovery and presentation changes retained. Installation/update setup adds explicit cabin, infrared, vehicle HUD data, GPS route and playback map choices; map visibility remains separate from online tile consent. Saving does not start recording. New binary awaits vehicle verification; long-duration three-camera recording and pedal units are not established.",
                 "drive4OwnerEvidence" to "Owner supplied about 45 seconds of three finalized camera files, 44 GPS and 178 vehicle samples, and successful local map rendering. Surround runtime reported CAMERA_UNAVAILABLE with cleanup confirmed. Owner reported home preview black after stop, playback proportions/library cover regressions, and an unconfirmed head-unit reboot when returning and unlocking the car. This does not verify the fixes or online road tiles in this binary.",
                 "predecessorFieldEvidence" to "Owner report from 5.1.0-field1: vehicle speed 0-3 km/h, gear/indicator/brake changes, 120 fresh GPS fixes, three simultaneous camera previews for about 20 seconds. Recorder was idle during the vehicle/GPS check. Does not establish concurrent telemetry recording, multi-camera encoding or this binary's vehicle acceptance."),
             "notImplemented" to listOf("final_binary_vehicle_run", "broader_camera_contention_acceptance", "phone_android_raster_acceptance", "real_source_overload"),
@@ -100,8 +100,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 110
-        versionName = "5.1.0-drive5"
+        versionCode = 111
+        versionName = "5.1.0-drive6"
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("boolean", "CAMERA_CONCURRENCY_PROBE_ENABLED", cameraConcurrencyProbe.toString())

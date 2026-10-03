@@ -97,6 +97,7 @@ internal fun SessionReviewDialog(
 private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
     onSendToPhone: (suspend (List<File>, Boolean) -> Boolean)?, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val settings = remember { SettingsStore.get(context) }
     val timeline = data.timeline
     val initial = data.entries[initialFile?.absolutePath] ?: timeline.segments.firstOrNull()?.let { data.entries[it.id] }
     var channel by remember { mutableStateOf(initial?.segment?.channelId ?: timeline.channelIds.first()) }
@@ -104,7 +105,8 @@ private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
     var seekSerial by remember { mutableIntStateOf(0) }
     var wantsPlay by remember { mutableStateOf(false) }
     var overview by remember { mutableStateOf(false) }
-    var showDetails by remember { mutableStateOf(false) }
+    // This is an opening preference; the player's temporary toggle does not change it.
+    var showDetails by remember { mutableStateOf(settings.playbackMapDefaultOpen) }
     var dragging by remember { mutableStateOf(false) }
     var dragged by remember { mutableFloatStateOf(0f) }
     val hudPrefs = remember { context.getSharedPreferences("playback_ui", android.content.Context.MODE_PRIVATE) }
@@ -322,6 +324,9 @@ private fun SessionReviewDetails(data: SessionReviewData, channel: String, posit
         Text(Utils.t("Map & recorded data", "地图与录像数据"), style = MaterialTheme.typography.titleMedium)
         RecordedRoadMap(data.route, gps?.let { RoadMapPoint(it.latitude, it.longitude, it.elapsedMs - data.timeline.originElapsedMs) },
             Modifier.fillMaxWidth().height(270.dp), AppLanguage.usesChinese(), seek)
+        if (data.route.isEmpty()) Text(Utils.t(
+            "No GPS route is available for this session. Enable Location & speed before your next recording; video playback is still available.",
+            "这次录像没有可用的 GPS 轨迹。下次录像前可开启“位置与速度”；当前视频仍可正常回放。"), style = MaterialTheme.typography.bodySmall)
         val summary = data.summary
         Text(String.format(Locale.getDefault(), Utils.t("Recorded path %.2f km · GPS %.0f%% · vehicle %.0f%%", "已记录轨迹 %.2f km · GPS %.0f%% · 车辆 %.0f%%"),
             summary.distanceM / 1000, summary.gpsCoveredMs * 100.0 / summary.durationMs.coerceAtLeast(1),
@@ -408,8 +413,8 @@ private fun SessionReviewDetails(data: SessionReviewData, channel: String, posit
 }
 
 internal fun sessionChannelLabel(channel: String) = when (channel) {
-    "FRONT_CABIN" -> Utils.t("Front cabin", "前排车内")
-    "REAR_CABIN" -> Utils.t("Rear cabin", "后排车内")
+    "FRONT_CABIN" -> Utils.t("Cabin camera", "舱内摄像头")
+    "REAR_CABIN" -> Utils.t("Infrared camera", "红外摄像头")
     else -> Utils.t("Surround", "环视")
 }
 

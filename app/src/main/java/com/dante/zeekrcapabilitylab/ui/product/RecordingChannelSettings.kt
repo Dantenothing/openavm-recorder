@@ -27,12 +27,12 @@ fun RecordingChannelSettings() {
             Text(Utils.t("Surround stays on. Add optional cabin cameras to normal recording; the same choice applies when recording resumes after returning to the car.",
                 "保留环视录像，可为普通录像增加车内摄像头；回车后恢复录像也沿用此选择。"), style = MaterialTheme.typography.bodyMedium)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(Utils.t("Front cabin", "前排车内"), Modifier.weight(1f))
+                Text(Utils.t("Cabin camera", "舱内摄像头"), Modifier.weight(1f))
                 Switch(front, { front = it; settings.setRecordFrontCabin(it) }, enabled = !busy,
                     modifier = Modifier.testTag("record-front-cabin"))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(Utils.t("Rear cabin", "后排车内"), Modifier.weight(1f))
+                Text(Utils.t("Infrared camera", "红外摄像头"), Modifier.weight(1f))
                 Switch(rear, { rear = it; settings.setRecordRearCabin(it) }, enabled = !busy,
                     modifier = Modifier.testTag("record-rear-cabin"))
             }
@@ -51,8 +51,8 @@ fun RecordingChannelStatus(modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         channels.sortedBy { RecordingChannelId.all.indexOf(it.channelId) }.forEach { channel ->
             val name = when (channel.channelId) {
-                RecordingChannelId.FRONT_CABIN -> Utils.t("Front cabin", "前排车内")
-                RecordingChannelId.REAR_CABIN -> Utils.t("Rear cabin", "后排车内")
+                RecordingChannelId.FRONT_CABIN -> Utils.t("Cabin camera", "舱内摄像头")
+                RecordingChannelId.REAR_CABIN -> Utils.t("Infrared camera", "红外摄像头")
                 else -> Utils.t("Surround", "环视")
             }
             val phase = when (channel.status) {
