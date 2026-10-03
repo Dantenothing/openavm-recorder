@@ -257,8 +257,8 @@ internal fun FieldTestScreen(
                         "标记仅记录您的标签，不能自动证明车辆状态。"), style = MaterialTheme.typography.bodySmall)
                     HorizontalDivider()
                     Text(Utils.t("Saved reports · {0}", "已保存报告 · {0}", state.savedReports), style = MaterialTheme.typography.titleSmall)
-                    Text(Utils.t("Copy or save the combined JSON after stopping. It includes saved field and camera-preview reports.",
-                        "停止后可复制或保存合并 JSON，包含已保存的车辆检查和相机预览报告。"), style = MaterialTheme.typography.bodySmall)
+                    Text(Utils.t("After stopping, copy the combined JSON: saved field/camera checks, recent recording-data counts and map environment. Recording-data counts contain no coordinates; older field checks may include locations you opted to save.",
+                        "停止后复制合并 JSON：包含车辆／相机检查、最近录像数据统计和地图环境。录像统计不含坐标；旧车辆检查仍可能包含您之前选择保存的位置。"), style = MaterialTheme.typography.bodySmall)
                     Text(Utils.t("Recording status comes from the recorder. This check does not verify saved videos or playback.",
                         "录像状态由录像器报告；此检查不验证已保存视频或回放。"), style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

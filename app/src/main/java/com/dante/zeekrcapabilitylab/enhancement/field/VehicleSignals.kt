@@ -5,6 +5,7 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.lang.reflect.UndeclaredThrowableException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
 enum class VehicleReadKind { FUNCTION, FUNCTION_ZONE, SENSOR_EVENT, SENSOR_VALUE }
@@ -138,7 +139,11 @@ data class VehicleSignalReading(
 
 /** Pure value interpretation. All output numbers are finite and safe for JSON. */
 object VehicleSignalDecode {
-    private val sentinelValues = setOf(255.0, 254.0, 253.0, -1.0, -65535.0)
+    private val enumSentinelValues = setOf(255.0, 254.0, 253.0, -1.0, -65535.0)
+    // Numeric sensors use a different placeholder set: -1 can be a temperature or
+    // steering value, while 253/254 can be a real distance. Match the getter kind,
+    // not the boxed Number type returned by an OEM implementation.
+    private val sensorSentinelValues = setOf(255.0, -65535.0)
     private val binaryKeys = setOf(
         "brake_pedal", "auto_hold", "auto_hold_active", "turn_left", "turn_right", "low_beam", "high_beam",
         "drl", "front_fog", "rear_fog", "front_position_lamp", "rear_position_lamp", "reverse_lamp", "stop_lamp",
@@ -151,7 +156,8 @@ object VehicleSignalDecode {
         if (raw == null) return invalid(spec, null, "NO_VALUE")
         val number = raw.toDouble()
         if (!number.isFinite()) return invalid(spec, null, "NON_FINITE")
-        if (number in sentinelValues) return invalid(spec, number, "SENTINEL")
+        val sentinels = if (spec.kind == VehicleReadKind.SENSOR_VALUE) sensorSentinelValues else enumSentinelValues
+        if (number in sentinels) return invalid(spec, number, "SENTINEL")
         if (number != 0.0 && abs(number) < 1e-6) return invalid(spec, number, "TINY_SENTINEL")
         if (spec.kind == VehicleReadKind.SENSOR_VALUE) {
             val value = if (spec.key == "speed") number * 3.6 else number
@@ -179,11 +185,7 @@ object VehicleSignalDecode {
             spec.key.startsWith("door_") || spec.key == "charge_port" ->
                 when (code) { 0 -> "closed"; 1 -> "open"; else -> null }
             spec.key.startsWith("belt_") -> when (code) { 0 -> "unfastened"; 1 -> "fastened"; else -> null }
-            spec.key.startsWith("seat_") -> when (code) {
-                spec.id + 1 -> "unoccupied"
-                spec.id + 2 -> "occupied"
-                else -> null
-            }
+            spec.key.startsWith("seat_") -> seatState(spec, code)
             spec.key == "stock_360" -> when (code) {
                 1 -> "shown"
                 2 -> "hidden"
@@ -213,6 +215,17 @@ object VehicleSignalDecode {
         return VehicleSignalReading(spec.key, number, number, text, true, "OK", true)
     }
 
+    private fun seatState(spec: VehicleSignalSpec, code: Int): String? = when (code) {
+        spec.id + 1 -> "unoccupied"
+        spec.id + 2 -> "occupied"
+        // field1's passenger getter (0x00203400) returned the shared seat enum
+        // 0x00203301. Accept only this known family, not arbitrary low-byte 1/2.
+        // This is decoder compatibility; physical occupancy remains unconfirmed.
+        0x00203301 -> if (spec.key == "seat_passenger") "unoccupied" else null
+        0x00203302 -> if (spec.key == "seat_passenger") "occupied" else null
+        else -> null
+    }
+
     fun unavailable(spec: VehicleSignalSpec, status: String) =
         VehicleSignalReading(spec.key, null, null, null, false, status, false)
 
@@ -227,6 +240,20 @@ interface VehicleSignalReader {
     fun read(spec: VehicleSignalSpec): VehicleSignalReading
 }
 
+/** No queue or wait: a blocked OEM call cannot make another SDK consumer wait for it. */
+internal class VehicleSdkAdmission {
+    private val entered = AtomicBoolean(false)
+
+    fun <T> tryCall(onBusy: () -> T, call: () -> T): T {
+        if (!entered.compareAndSet(false, true)) return onBusy()
+        return try {
+            call()
+        } finally {
+            entered.set(false)
+        }
+    }
+}
+
 /** Only the fixed getters below are resolved. No writable SDK API or listener is used. */
 class EcarxSignalReader(context: Context) : VehicleSignalReader {
     private val appContext = context.applicationContext ?: context
@@ -234,8 +261,9 @@ class EcarxSignalReader(context: Context) : VehicleSignalReader {
     private var connectionStatus = "NOT_CONNECTED"
     private var access: VehicleSignalAccess? = null
 
-    override fun connect(): String {
-        if (connectAttempted) return connectionStatus
+    override fun connect(): String = sdkAdmission.tryCall({ "SDK_BUSY" }) {
+        // Admission must precede this flag: a busy caller may try again later.
+        if (connectAttempted) return@tryCall connectionStatus
         connectAttempted = true
         connectionStatus = try {
             val car = synchronized(carLock) {
@@ -264,15 +292,19 @@ class EcarxSignalReader(context: Context) : VehicleSignalReader {
         } catch (error: Throwable) {
             "CONNECT_FAILED:${VehicleSignalAccess.errorClass(error)}"
         }
-        return connectionStatus
+        connectionStatus
     }
 
     override fun read(spec: VehicleSignalSpec): VehicleSignalReading {
         if (!VehicleSignalCatalog.allows(spec)) return VehicleSignalDecode.unavailable(spec, "NOT_ALLOWLISTED")
-        return access?.read(spec) ?: VehicleSignalDecode.unavailable(spec, connectionStatus)
+        return sdkAdmission.tryCall({ VehicleSignalDecode.unavailable(spec, "SDK_BUSY") }) {
+            access?.read(spec) ?: VehicleSignalDecode.unavailable(spec, connectionStatus)
+        }
     }
 
     private companion object {
+        // Shared by field diagnostics and recorded telemetry, across all reader instances.
+        val sdkAdmission = VehicleSdkAdmission()
         val carLock = Any()
         @Volatile var cachedCar: Any? = null
         @Volatile var carAttempted = false

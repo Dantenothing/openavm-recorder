@@ -1,6 +1,10 @@
 package com.dante.zeekrcapabilitylab.enhancement.field
 
 import java.lang.reflect.InvocationTargetException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -54,8 +58,8 @@ class VehicleSignalTests {
         }
     }
 
-    @Test fun sentinelsAreNeverInterpretedAsVehicleValues() {
-        for (key in listOf("gear", "speed", "steering", "temp_outside")) {
+    @Test fun enumSentinelsAreNeverInterpretedAsVehicleStates() {
+        for (key in listOf("gear", "indicator", "belt_driver")) {
             for (raw in listOf(255, 254, 253, -1, -65535)) {
                 val reading = decode(key, raw)
                 assertFalse("$key / $raw", reading.valid)
@@ -65,6 +69,45 @@ class VehicleSignalTests {
                 assertTrue(reading.sourceAvailable)
                 assertEquals(raw.toDouble(), reading.raw!!, 0.0)
             }
+        }
+    }
+
+    @Test fun sensorValueSentinelsKeepRawEvidenceWithoutBecomingValues() {
+        for (key in listOf("speed", "steering", "temp_outside", "range")) {
+            for (raw in listOf(255.0, -65535.0)) {
+                val reading = decode(key, raw)
+                assertFalse("$key / $raw", reading.valid)
+                assertNull(reading.value)
+                assertEquals("SENTINEL", reading.status)
+                assertTrue(reading.sourceAvailable)
+                assertEquals(raw, reading.raw!!, 0.0)
+            }
+        }
+    }
+
+    @Test fun numericSensorValuesDoNotUseIntegerEnumSentinels() {
+        for (key in listOf("temp_outside", "temp_inside", "battery_temp", "steering")) {
+            val reading = decode(key, -1.0)
+            assertTrue("$key may legitimately report minus one", reading.valid)
+            assertEquals(-1.0, reading.value!!, 0.0)
+        }
+        for (key in listOf("range", "odometer")) {
+            for (raw in listOf(253, 254.0)) {
+                val reading = decode(key, raw)
+                assertTrue("$key / $raw", reading.valid)
+                assertEquals(raw.toDouble(), reading.value!!, 0.0)
+            }
+        }
+        assertEquals("PROVISIONAL_RAW", decode("steering", -1.0).status)
+    }
+
+    @Test fun removingIntegerSentinelsDoesNotAdmitNegativeSpeedOrDistance() {
+        for (key in listOf("speed", "range", "odometer")) {
+            val reading = decode(key, -1.0)
+            assertFalse(reading.valid)
+            assertNull(reading.value)
+            assertEquals("OUT_OF_RANGE", reading.status)
+            assertEquals(-1.0, reading.raw!!, 0.0)
         }
     }
 
@@ -96,12 +139,26 @@ class VehicleSignalTests {
         assertEquals("UNKNOWN_ENUM", decode("door_driver", 0x21020101).status)
     }
 
-    @Test fun seatEventsMustMatchTheirOwnFullType() {
+    @Test fun seatEventsAcceptDocumentedFullTypesWithoutGuessingLowBytes() {
         assertEquals("occupied", decode("seat_driver", 0x00203302).text)
         assertEquals("unoccupied", decode("seat_passenger", 0x00203401).text)
+        assertEquals("occupied", decode("seat_passenger", 0x00203402).text)
         assertFalse(decode("seat_driver", 2).valid)
         assertFalse(decode("seat_driver", 0x00203402).valid)
-        assertFalse(decode("seat_passenger", 0x00203301).valid)
+        for (raw in listOf(1, 2, 0x00203300, 0x00203303, 0x11203301, 0x00203502)) {
+            assertEquals("UNKNOWN_ENUM", decode("seat_passenger", raw).status)
+        }
+    }
+
+    @Test fun passengerSeatAcceptsSharedOccupancyEnumObservedInFieldReport() {
+        // The passenger getter returned the shared 0x00203301 enum in field1.
+        // This verifies compatibility, not the occupant's physical presence during that test.
+        val empty = decode("seat_passenger", 0x00203301)
+        assertTrue(empty.valid)
+        assertEquals("unoccupied", empty.text)
+        assertEquals(0x00203301.toDouble(), empty.raw!!, 0.0)
+        assertEquals("occupied", decode("seat_passenger", 0x00203302).text)
+        assertEquals("reference_observed", spec("seat_passenger").confidence)
     }
 
     @Test fun provisionalPedalAndSteeringScalesStayRaw() {
@@ -142,6 +199,65 @@ class VehicleSignalTests {
         assertFalse(missing.valid)
         assertFalse(missing.sourceAvailable)
         assertEquals("SDK_UNAVAILABLE", missing.status)
+    }
+
+    @Test fun sdkAdmissionRejectsSecondCallerWithoutWaitingForBlockedSdk() {
+        val admission = VehicleSdkAdmission()
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondFinished = CountDownLatch(1)
+        val secondEnteredSdk = AtomicBoolean(false)
+        val firstResult = AtomicReference<String?>()
+        val secondResult = AtomicReference<String?>()
+        val first = Thread {
+            firstResult.set(admission.tryCall({ "SDK_BUSY" }) {
+                firstEntered.countDown()
+                releaseFirst.await()
+                "FIRST_DONE"
+            })
+        }
+        val second = Thread {
+            try {
+                secondResult.set(admission.tryCall({ "SDK_BUSY" }) {
+                    secondEnteredSdk.set(true)
+                    "SECOND_ENTERED"
+                })
+            } finally {
+                secondFinished.countDown()
+            }
+        }
+        try {
+            first.start()
+            assertTrue("First caller entered the simulated SDK", firstEntered.await(2, TimeUnit.SECONDS))
+            second.start()
+            assertTrue("Busy caller returns while first is still blocked", secondFinished.await(2, TimeUnit.SECONDS))
+            assertEquals("SDK_BUSY", secondResult.get())
+            assertFalse(secondEnteredSdk.get())
+            assertEquals(1L, releaseFirst.count)
+        } finally {
+            releaseFirst.countDown()
+            first.join(2_000)
+            second.join(2_000)
+        }
+        assertFalse(first.isAlive)
+        assertFalse(second.isAlive)
+        assertEquals("FIRST_DONE", firstResult.get())
+        assertEquals("NEXT_DONE", admission.tryCall({ "SDK_BUSY" }) { "NEXT_DONE" })
+    }
+
+    @Test fun sdkAdmissionReleasesAfterAnExceptionAndRejectsReentrantCall() {
+        val admission = VehicleSdkAdmission()
+        val failure = IllegalStateException("simulated SDK failure")
+        try {
+            admission.tryCall({ "SDK_BUSY" }) { throw failure }
+            fail("Expected the original failure")
+        } catch (caught: IllegalStateException) {
+            assertSame(failure, caught)
+        }
+        assertEquals("SDK_BUSY", admission.tryCall({ "UNEXPECTED_BUSY" }) {
+            admission.tryCall({ "SDK_BUSY" }) { "UNEXPECTED_REENTRY" }
+        })
+        assertEquals("NEXT_DONE", admission.tryCall({ "SDK_BUSY" }) { "NEXT_DONE" })
     }
 
     @Test fun exactGettersRouteToIdsAndZonesWithoutSideEffects() {

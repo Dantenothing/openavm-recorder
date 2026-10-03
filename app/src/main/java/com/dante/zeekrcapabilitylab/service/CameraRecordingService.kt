@@ -42,6 +42,7 @@ import com.dante.zeekrcapabilitylab.usbexport.UsbExportVolumeResolver
 import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetry
 import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetryCapture
 import com.dante.zeekrcapabilitylab.telemetry.AndroidTelemetryLocationSource
+import com.dante.zeekrcapabilitylab.telemetry.RecordingVehicleTelemetryCapture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +60,7 @@ class CameraRecordingService : Service() {
     private var telemetryStopped = false
     private val telemetryOwner = Any()
     private var telemetry: RecordingTelemetryCapture? = null
+    private var vehicleTelemetry: RecordingVehicleTelemetryCapture? = null
     private var removableStorageMonitor: RemovableStorageMonitor? = null
     private var statusOverlay: RecordingStatusOverlay? = null
     private var mirrorPreview: com.dante.zeekrcapabilitylab.mirror.MirrorPreviewController? = null
@@ -118,6 +120,8 @@ class CameraRecordingService : Service() {
                 publish = { RecordingTelemetry.publish(telemetryOwner, it) })
         }.getOrNull()
         statusOverlay = runCatching { RecordingStatusOverlay(this) }.getOrNull()
+        vehicleTelemetry = runCatching { RecordingVehicleTelemetryCapture(applicationContext,
+            enabled = { SettingsStore.get(this).recordingVehicleTelemetryEnabled }) }.getOrNull()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -263,6 +267,7 @@ class CameraRecordingService : Service() {
         }
         _state.value = s
         telemetry?.follow(s.recordingSessionId, !telemetryStopped && s.status == RecorderStatus.RECORDING, locationForeground)
+        vehicleTelemetry?.follow(s.recordingSessionId, !telemetryStopped && s.status == RecorderStatus.RECORDING)
         presentationHandler.post {
             if (instance !== this || sessionEpoch != publishedEpoch) return@post
             val progress = _modeSwitchProgress.value ?: return@post
@@ -311,6 +316,7 @@ class CameraRecordingService : Service() {
     private fun onStopped() {
         telemetryStopped = true
         telemetry?.follow(null, false, false)
+        vehicleTelemetry?.follow(null, false)
         com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.recorderStopped(state.value)
         modeSwitchGate.cancel()
         presentationHandler.removeCallbacks(modeSwitchWatchdog)
@@ -322,6 +328,7 @@ class CameraRecordingService : Service() {
     private fun stopRecording(manual: Boolean = true) {
         telemetryStopped = true
         telemetry?.follow(null, false, false)
+        vehicleTelemetry?.follow(null, false)
         if (manual) com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.onManualStop(state.value)
         cancelModeSwitch("MANUAL_STOP", notify = false)
         mirrorConfig = null
@@ -445,6 +452,7 @@ class CameraRecordingService : Service() {
 
     override fun onDestroy() {
         telemetry?.close(); telemetry = null
+        vehicleTelemetry?.close(); vehicleTelemetry = null
         sessionEpoch++
         modeSwitchGate.cancel()
         handoffSession = null
@@ -471,6 +479,7 @@ class CameraRecordingService : Service() {
             instance?.let { service -> service.presentationHandler.post {
                 val current = state.value
                 service.telemetry?.follow(current.recordingSessionId, !service.telemetryStopped && current.status == RecorderStatus.RECORDING, service.locationForeground)
+                service.vehicleTelemetry?.follow(current.recordingSessionId, !service.telemetryStopped && current.status == RecorderStatus.RECORDING)
             } }
         }
         private val _modeSwitchProgress = MutableStateFlow<RecordingModeSwitchProgress?>(null)

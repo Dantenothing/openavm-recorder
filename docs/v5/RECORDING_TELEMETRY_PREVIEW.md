@@ -1,5 +1,7 @@
 # Location and speed recording — private development preview
 
+Historical baseline below. **2026-10-03 update:** the owner's `5.1.0-field1` manual test received 120 fresh GPS fixes while the recorder was idle. GPS during actual recording still needs acceptance. The newer [drive playback preview](DRIVE_PLAYBACK_AND_MAP_PLAN.md) adds optional vehicle data and explicit GPX export; consult it for current scope and the dual-end map plan.
+
 Recorder **5.1.0-telemetry1**, version code **103**. This is an internal test build, not a published V5 update. The current public Recorder and Phone releases are unchanged.
 
 ## What is implemented

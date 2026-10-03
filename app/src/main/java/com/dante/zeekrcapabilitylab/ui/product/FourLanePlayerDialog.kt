@@ -96,6 +96,9 @@ import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetry
 import com.dante.zeekrcapabilitylab.telemetry.TelemetryTrack
 import com.dante.zeekrcapabilitylab.telemetry.TelemetryVideoWindow
 import com.dante.zeekrcapabilitylab.telemetry.TelemetryPlayback
+import com.dante.zeekrcapabilitylab.telemetry.RecordingVehicleTelemetry
+import com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryTrack
+import com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryPlayback
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -240,11 +243,19 @@ fun FourLanePlayerDialog(
     }
     // The state can briefly still hold the previous session during a segment change.
     val currentTrack = routeTrack?.takeIf { it.header.sessionId == routeSession }
+    var vehicleLoadedSession by remember { mutableStateOf<String?>(null) }
+    val vehicleTrack by produceState<VehicleTelemetryTrack?>(null, routeSession) {
+        value = null
+        value = routeSession?.let { id -> withContext(Dispatchers.IO) { RecordingVehicleTelemetry.store(context).load(id) } }
+        vehicleLoadedSession = routeSession
+    }
+    val currentVehicleTrack = vehicleTrack?.takeIf { it.header.sessionId == routeSession }
     val routeWindow = TelemetryVideoWindow(routeSidecar?.startedAtElapsedRealtimeMs,
         playableDurations.getOrNull(routeSeek?.index ?: -1) ?: 0L,
         routeSidecar?.recordingMode == RecordingMode.TIME_LAPSE || (routeSidecar?.timeLapseMultiplier ?: 1) > 1)
     val routeAt = routeSeek?.positionMs?.let(routeWindow::at)
     val routeSample = currentTrack?.let { TelemetryPlayback.sampleAt(it.points, routeAt) }
+    val vehicleSample = currentVehicleTrack?.let { VehicleTelemetryPlayback.sampleAt(it.samples, routeAt) }
     var selectedSegmentPaths by remember(playlist) {
         mutableStateOf(playlist.firstOrNull()?.let { setOf(it.absolutePath) } ?: emptySet())
     }
@@ -330,7 +341,7 @@ fun FourLanePlayerDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = { showRoute = true }) { Text(Utils.t("Route", "轨迹")) }
+                    TextButton(onClick = { showRoute = true }) { Text(Utils.t("Drive data", "行车数据")) }
                     TextButton(onClick = onDismiss) { Text(Utils.t("Close", "关闭")) }
                 }
 
@@ -469,8 +480,9 @@ fun FourLanePlayerDialog(
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
-                                if (currentTrack?.points?.isNotEmpty() == true) {
-                                    Text(Utils.t("Location", "定位") + " · " + telemetrySpeedText(routeSample?.speedMps),
+                                if (currentTrack?.points?.isNotEmpty() == true || currentVehicleTrack?.samples?.isNotEmpty() == true) {
+                                    Text(if (currentVehicleTrack?.samples?.isNotEmpty() == true) vehiclePlaybackText(vehicleSample)
+                                        else Utils.t("GPS", "GPS") + " · " + telemetrySpeedText(routeSample?.speedMps),
                                         color = Color.White, fontSize = 12.sp,
                                         modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp)
                                             .background(Color(0xB3000000), RoundedCornerShape(6.dp))
@@ -595,13 +607,14 @@ fun FourLanePlayerDialog(
         }
     }
     if (showRoute) TelemetryRouteDialog(currentTrack, routeSample,
-        loading = routeSession != null && routeLoadedSession != routeSession,
+        loading = routeSession != null && (routeLoadedSession != routeSession || vehicleLoadedSession != routeSession),
         aligned = routeWindow.at(0) != null,
         positionMs = routePosition, durationMs = durationMs, playing = playing,
         onScrub = { target -> draggedPositionMs = target; dragging = true },
         onScrubEnd = { controls?.seekTo?.invoke(draggedPositionMs); positionMs = draggedPositionMs; dragging = false },
         onToggle = { playing = controls?.toggle?.invoke() ?: false },
-        onDismiss = { showRoute = false; dragging = false })
+        onDismiss = { showRoute = false; dragging = false },
+        vehicleSample = vehicleSample, vehicleAvailable = currentVehicleTrack?.samples?.isNotEmpty() == true)
 }
 
 @Composable

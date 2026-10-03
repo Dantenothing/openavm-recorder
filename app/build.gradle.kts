@@ -49,6 +49,9 @@ val generatePreflightEvidence by tasks.registering {
                 "EXPERIMENTAL_TOOLS_ENABLED_IN_PUBLIC_RELEASE" to false,
                 "CAMERA_CONCURRENCY_PREVIEW_PROBE" to cameraConcurrencyProbe,
                 "VEHICLE_FIELD_TEST" to vehicleFieldTest,
+                "OPTIONAL_RECORDING_VEHICLE_TELEMETRY" to true,
+                "LOCAL_GPX_EXPORT" to true,
+                "EMBEDDED_STREET_MAP_PLAYBACK" to false,
                 "DIAGNOSTIC_CLOUD_UPLOAD" to false,"DIAGNOSTIC_REMOTE_COMMANDS" to false,
                 "DIAGNOSTIC_REMOTE_RECIPES_V1" to false,"DIAGNOSTIC_EXACT_EVIDENCE_REVIEW" to true,
                 "AWAY_SINGLE_EXPORT_RECORDER_FAULT" to true,"RECORDER_TERMINAL_STATE_FENCE" to true,
@@ -65,6 +68,9 @@ val generatePreflightEvidence by tasks.registering {
             "returnFeatureAcceptance" to mapOf("version" to "5.0.0-sleep4", "versionCode" to 101,
                 "reportedOn" to "2026-09-25", "evidenceType" to "OWNER_CONFIRMATION",
                 "scope" to "Latest delivered sleep4 reported working; no independent final-binary vehicle recording claimed"),
+            "drivePreview" to mapOf("version" to "5.1.0-drive1", "versionCode" to 106,
+                "scope" to "Optional read-only vehicle journal, local approximate playback alignment, explicit GPX export and Google Maps selected-point link. No embedded street map or phone telemetry transfer.",
+                "predecessorFieldEvidence" to "Owner report from 5.1.0-field1: vehicle speed 0-3 km/h, gear/indicator/brake changes, 120 fresh GPS fixes, three simultaneous camera previews for about 20 seconds. Recorder was idle during the vehicle/GPS check. Does not establish concurrent telemetry recording, multi-camera encoding or this binary's vehicle acceptance."),
             "notImplemented" to listOf("final_binary_vehicle_run", "broader_camera_contention_acceptance", "phone_android_raster_acceptance", "real_source_overload"),
             "localTestResults" to null, "localTestResultsReason" to "See separately hashed delivery validation; this asset does not self-certify tests.",
             "r8MappingSha256" to null, "r8MappingReason" to "Generated after this asset; linked in external delivery manifest to avoid circular hashes.")
@@ -89,8 +95,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 105
-        versionName = "5.1.0-field1"
+        versionCode = 106
+        versionName = "5.1.0-drive1"
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("boolean", "CAMERA_CONCURRENCY_PROBE_ENABLED", cameraConcurrencyProbe.toString())

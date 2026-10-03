@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.AtomicFile
 import java.io.File
 import kotlinx.serialization.json.*
+import com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryStore
 
 /** AtomicFile requires mutual exclusion between its recovery reader and writer. */
 internal object FieldReportIoLock
@@ -29,7 +30,9 @@ internal class FieldReportStore(context: Context) {
         return files(directory).size
     }
     fun count(): Int = files(directory).size
-    fun hasReport(): Boolean = count() > 0 || synchronized(FieldReportIoLock) {
+    fun hasReport(): Boolean = count() > 0 || listOf("recording-telemetry", "recording-vehicle-telemetry").any { name ->
+        File(base, name).listFiles().orEmpty().any { it.isFile && it.extension == "jsonl" && VehicleTelemetryStore.validId(it.nameWithoutExtension) }
+    } || synchronized(FieldReportIoLock) {
         read(File(base, "multi-preview-last.json")) != null || files(File(base, "multi-preview-history")).isNotEmpty()
     }
     fun export(metadata: JsonObject): String = synchronized(FieldReportIoLock) {

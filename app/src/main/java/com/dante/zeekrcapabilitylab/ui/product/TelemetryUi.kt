@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -194,12 +195,37 @@ internal fun TelemetryRouteDialog(
     track: TelemetryTrack?, sample: TelemetryFix?, loading: Boolean, aligned: Boolean,
     positionMs: Long, durationMs: Long, playing: Boolean, onScrub: (Long) -> Unit,
     onScrubEnd: () -> Unit, onToggle: () -> Unit, onDismiss: () -> Unit,
+    vehicleSample: VehicleTelemetrySample? = null, vehicleAvailable: Boolean = false,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingSession by rememberSaveable { mutableStateOf<String?>(null) }
+    var exportBusy by remember { mutableStateOf(false) }
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    val exportGpx = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/gpx+xml")) { uri ->
+        val session = pendingSession
+        pendingSession = null
+        if (uri != null && session != null) {
+            exportBusy = true
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) { runCatching {
+                    val saved = requireNotNull(RecordingTelemetry.store(context).load(session))
+                    require(saved.points.isNotEmpty())
+                    requireNotNull(context.contentResolver.openOutputStream(uri, "wt")).use {
+                        it.write(TelemetryRouteExport.gpx(saved).toByteArray(Charsets.UTF_8))
+                    }
+                }.isSuccess }
+                exportBusy = false
+                exportMessage = if (ok) Utils.t("GPX saved with recorded coordinates", "GPX 已保存，包含已记录的位置")
+                    else Utils.t("Could not save GPX", "未能保存 GPX")
+            }
+        }
+    }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Card(Modifier.widthIn(max = 1080.dp).fillMaxWidth(0.94f).heightIn(max = 760.dp).fillMaxHeight(0.94f)) {
             Column(Modifier.fillMaxSize().padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(Utils.t("Speed & route", "速度与轨迹"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    Text(Utils.t("Drive playback", "行车回放"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                     TextButton(onClick = onDismiss) { Text(Utils.t("Close", "关闭")) }
                 }
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -208,6 +234,12 @@ internal fun TelemetryRouteDialog(
                         Text(telemetrySpeedText(sample?.speedMps), style = MaterialTheme.typography.headlineMedium,
                             modifier = Modifier.testTag("telemetry-speed"))
                         Text(Utils.t("GPS/location speed · approximate video alignment", "定位速度 · 与视频近似对齐"), style = MaterialTheme.typography.bodySmall)
+                        if (vehicleAvailable) {
+                            Text(vehiclePlaybackText(vehicleSample), style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.testTag("vehicle-playback-data"))
+                            Text(Utils.t("Vehicle readings · independently timestamped · missing data stays unknown", "车辆读数 · 独立时间戳 · 缺失数据保留为未知"),
+                                style = MaterialTheme.typography.bodySmall)
+                        }
                         when {
                             loading -> Text(Utils.t("Loading route…", "正在读取轨迹…"))
                             track == null || track.points.isEmpty() -> Text(Utils.t("No location was recorded for this video, or its local history has been cleared.", "此视频没有位置记录，或本地轨迹已被清除。"))
@@ -216,8 +248,28 @@ internal fun TelemetryRouteDialog(
                                 else if (sample == null) Text(Utils.t("No fresh location at this point in the video.", "此视频时刻没有有效定位。"))
                                 TelemetryRouteCanvas(track.points, sample, Modifier.fillMaxWidth().height(routeHeight))
                                 Text(Utils.t("Local trace, without a map background. Breaks indicate missing or rejected location data.", "本地轨迹，不含地图底图。断线表示定位缺失或数据未通过检查。"), style = MaterialTheme.typography.bodySmall)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = {
+                                        pendingSession = track.header.sessionId
+                                        exportGpx.launch("OpenAVM-${track.header.sessionId.take(8)}.gpx")
+                                    }, enabled = !exportBusy && pendingSession == null,
+                                        modifier = Modifier.testTag("telemetry-export-gpx")) { Text(Utils.t("Save session GPX", "保存本次录像 GPX")) }
+                                    val pointUrl = sample?.let(TelemetryRouteExport::googleMapsPointUrl)
+                                    OutlinedButton(onClick = {
+                                        if (playing) onToggle()
+                                        if (pointUrl != null && runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, pointUrl.toUri())) }.isFailure) {
+                                            exportMessage = Utils.t("No map app or browser available", "没有可用的地图应用或浏览器")
+                                        }
+                                    }, enabled = pointUrl != null, modifier = Modifier.testTag("telemetry-google-point")) {
+                                        Text(Utils.t("Google Maps · this point", "Google 地图 · 此时位置"))
+                                    }
+                                }
+                                Text(Utils.t("GPX includes all saved locations from this recording session, including other segments. Google Maps opens only the selected point and receives that coordinate; it is not synchronized route playback.",
+                                    "GPX 包含本次录像所有已保存的位置，也包含其他分段。Google 地图只打开所选位置点，并会收到该坐标；它不是同步轨迹回放。"), style = MaterialTheme.typography.bodySmall)
                             }
                         }
+                        if (exportBusy) Text(Utils.t("Saving GPX…", "正在保存 GPX…"))
+                        exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
                 }
                 Slider(value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),

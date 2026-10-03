@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import com.dante.zeekrcapabilitylab.BuildConfig
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
+import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetryDiagnostics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.*
@@ -113,8 +114,9 @@ object FieldTestRuntime {
                 if (!run.connected && !run.cancelled.get()) {
                     pendingGetter = "Car.create/managers"
                     val status = run.reader.connect()
-                    run.connected = true
+                    run.connected = status != "SDK_BUSY"
                     main.post { if (current === run) run.evidence.sdkStatus = status }
+                    if (!run.connected) return@execute
                 }
                 for (spec in VehicleSignalCatalog.signals) {
                     if (run.cancelled.get()) break
@@ -195,7 +197,14 @@ object FieldTestRuntime {
             put("vehicleHardwareValidation", "USER_FIELD_TEST_NOT_LAB_CERTIFICATION")
         }
         journal.execute {
-            val result = runCatching { target.export(metadata) }.getOrNull()
+            val result = runCatching {
+                val supplemental = buildJsonObject {
+                    metadata.forEach { (key, value) -> put(key, value) }
+                    put("mapEnvironment", MapEnvironmentProbe.inspect(context.applicationContext))
+                    put("recordingTelemetry", RecordingTelemetryDiagnostics.inspect(context.applicationContext))
+                }
+                target.export(supplemental)
+            }.getOrNull()
             main.post { callback(result) }
         }
     } }

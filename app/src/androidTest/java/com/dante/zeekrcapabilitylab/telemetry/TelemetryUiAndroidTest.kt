@@ -16,6 +16,7 @@ import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.ui.product.TelemetryRouteDialog
 import com.dante.zeekrcapabilitylab.ui.product.TelemetrySettingsCard
+import com.dante.zeekrcapabilitylab.ui.product.VehicleTelemetrySettingsCard
 import com.dante.zeekrcapabilitylab.ui.theme.ZeekrCapabilityLabTheme
 import org.junit.*
 import org.junit.Assert.*
@@ -31,10 +32,50 @@ class TelemetryUiAndroidTest {
         assumeTrue(Build.HARDWARE == "ranchu")
         // V5 has no such key; prior camera settings and granted permissions must not opt it in.
         context.getSharedPreferences("zeekr_product_settings_v2", android.content.Context.MODE_PRIVATE)
-            .edit().remove(SettingsStore.KEY_RECORDING_TELEMETRY).commit()
+            .edit().remove(SettingsStore.KEY_RECORDING_TELEMETRY).remove(SettingsStore.KEY_RECORDING_VEHICLE_TELEMETRY).commit()
         assertFalse(SettingsStore.get(context).recordingTelemetryEnabled)
+        assertFalse(SettingsStore.get(context).recordingVehicleTelemetryEnabled)
     }
-    @After fun cleanup() { SettingsStore.get(context).setRecordingTelemetryEnabled(false) }
+    @After fun cleanup() {
+        SettingsStore.get(context).setRecordingTelemetryEnabled(false)
+        SettingsStore.get(context).setRecordingVehicleTelemetryEnabled(false)
+    }
+
+    @Test fun vehicleDataOptInIsIndependentFromLocationAndCanBeDisabled() {
+        var generation by mutableIntStateOf(0)
+        compose.setContent { ZeekrCapabilityLabTheme { key(generation) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { VehicleTelemetrySettingsCard() }
+        } } }
+        languages.forEach { language ->
+            compose.runOnIdle { AppLanguage.setMode(context, language); generation++ }
+            compose.onNodeWithTag("vehicle-telemetry-switch").assertIsOff().performClick().assertIsOn()
+            assertTrue(SettingsStore.get(context).recordingVehicleTelemetryEnabled)
+            assertFalse(SettingsStore.get(context).recordingTelemetryEnabled)
+            compose.onNodeWithTag("vehicle-telemetry-switch").performClick().assertIsOff()
+            compose.onNodeWithTag("vehicle-telemetry-clear").performScrollTo().assertIsDisplayed().performClick()
+            compose.onNodeWithText(AppLanguage.text("Cancel", "取消")).performClick()
+        }
+    }
+
+    @Test fun playbackKeepsVehicleSpeedSeparateFromGpsAndUnknownDoesNotBecomeZero() {
+        val fix = TelemetryFix(1_000, 1_790_000_000_000, 0.0, 0.0, 5f, "gps", 10f)
+        val track = TelemetryTrack(TelemetryHeader(sessionId = "00000000-0000-4000-8000-000000000003", startedElapsedMs = 1_000), listOf(fix))
+        val vehicle = VehicleTelemetrySample(1_000, fix.epochMs, mapOf(
+            "speed" to VehicleTelemetryValue(1_000, number = 0.0),
+            "gear" to VehicleTelemetryValue(1_000, text = "P")))
+        var sample by mutableStateOf<VehicleTelemetrySample?>(vehicle)
+        compose.runOnIdle { AppLanguage.setMode(context, AppLanguageMode.ENGLISH) }
+        compose.setContent { ZeekrCapabilityLabTheme {
+            TelemetryRouteDialog(track, fix, false, true, 0, 1_000, false, {}, {}, {}, {},
+                vehicleSample = sample, vehicleAvailable = true)
+        } }
+        compose.onNodeWithTag("telemetry-speed").assertTextEquals("36 km/h")
+        compose.onNodeWithTag("vehicle-playback-data").performScrollTo().assertTextEquals("Vehicle · 0 km/h · P")
+        compose.runOnIdle { sample = null }
+        compose.onNodeWithTag("vehicle-playback-data").assertTextEquals("Vehicle · Speed unavailable · —")
+        compose.onNodeWithTag("telemetry-export-gpx").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("telemetry-google-point").performScrollTo().assertIsEnabled()
+    }
 
     @Test fun settingsDefaultsOffAndHasReachableEnglishAndChineseControls() {
         var generation by mutableIntStateOf(0)
