@@ -6,8 +6,6 @@ import android.net.Uri
 import android.view.Surface
 import android.view.SurfaceView
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -37,6 +35,7 @@ import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.IndexedMediaSegment
 import com.dante.zeekrbridge.core.IndexedSourceRole
 import com.dante.zeekrbridge.core.IndexedLane
+import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.MediaIndexScanner
 import com.dante.zeekrbridge.core.ContinuousRasterSupport
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +63,7 @@ internal data class PlaybackEntry(
     val originalHeight: Int?,
     val raster: RecordingRasterMetadata = RecordingRasterMetadata.Original,
     val lanes: List<IndexedLane> = emptyList(),
+    val recordingMode: IndexedRecordingMode = IndexedRecordingMode.NORMAL,
 )
 
 @Composable
@@ -85,7 +85,7 @@ fun MediaPlaybackDialog(
                 id = file.absolutePath,
                 uri = Uri.fromFile(file),
                 readable = file.isFile,
-                durationMs = 0L,
+                durationMs = segment.durationMs,
                 sourceRole = if (hasRaster) segment.sourceRole else IndexedSourceRole.UNKNOWN,
                 layoutKind = if (hasRaster) segment.layoutKind else if (laneLabels.size == 4) IndexedLayoutKind.FOUR_LANE_V1 else IndexedLayoutKind.UNKNOWN,
                 laneLabels = if (hasRaster) segment.playbackLabels else laneLabels,
@@ -93,6 +93,7 @@ fun MediaPlaybackDialog(
                 originalWidth = segment.originalWidth,
                 originalHeight = segment.originalHeight,
                 raster = segment.raster, lanes = segment.lanes,
+                recordingMode = segment.recordingMode,
             ),
         ),
         initialIndex = 0,
@@ -106,6 +107,8 @@ internal fun MediaSessionPlayer(
     seekRequest: com.dante.zeekrbridge.player.PlaybackSeekRequest?,
     obstructed: Boolean,
     onActiveMediaChanged: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    additionalContent: @Composable () -> Unit = {},
 ) {
     val entries = remember(segments) {
         segments.map { segment ->
@@ -116,11 +119,12 @@ internal fun MediaSessionPlayer(
                 laneOrder = segment.playbackLaneOrder, originalWidth = segment.originalWidth,
                 originalHeight = segment.originalHeight,
                 raster = segment.raster, lanes = segment.lanes,
+                recordingMode = segment.recordingMode,
             )
         }
     }
     InlineMediaPlayer(entries = entries, seekRequest = seekRequest, obstructed = obstructed,
-        onActiveMediaChanged = onActiveMediaChanged)
+        onActiveMediaChanged = onActiveMediaChanged, modifier = modifier, additionalContent = additionalContent)
 }
 
 /** Plays a factory Sentry recording directly from a user-authorized USB tree. */
@@ -204,8 +208,8 @@ private fun PlaylistPlaybackDialog(
                     Text(title, Modifier.weight(1f).padding(end = 12.dp), style = MaterialTheme.typography.titleMedium,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-                    InlineMediaPlayer(entries, initialIndex)
+                Box(Modifier.weight(1f).padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
+                    InlineMediaPlayer(entries, initialIndex, modifier = Modifier.fillMaxSize())
                 }
             }
         }
@@ -339,12 +343,26 @@ internal fun resolvedDurations(
     entries: List<PlaybackEntry>,
     player: ExoPlayer,
     playerIndex: Int,
+    measuredDurations: Map<String, Long> = emptyMap(),
 ): List<Long> = entries.mapIndexed { index, entry ->
+    val windowDuration = if (index < player.currentTimeline.windowCount)
+        player.currentTimeline.getWindow(index, androidx.media3.common.Timeline.Window()).durationMs else 0L
     when {
         index == playerIndex && player.duration > 0L -> player.duration
-        entry.durationMs > 0L -> entry.durationMs
+        windowDuration > 0L -> windowDuration
+        (measuredDurations[entry.id] ?: 0L) > 0L -> measuredDurations.getValue(entry.id)
         else -> 0L
     }
+}
+
+/** Read the media container, never infer playback duration from recording wall-clock timestamps. */
+internal fun readPlaybackDuration(context: android.content.Context, entry: PlaybackEntry): Long {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, entry.uri)
+        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+    } catch (_: Exception) { 0L }
+    finally { runCatching { retriever.release() } }
 }
 
 private fun readVideoSize(context: android.content.Context, entry: PlaybackEntry): Pair<Int, Int> {

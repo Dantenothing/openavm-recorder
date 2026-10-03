@@ -6,6 +6,8 @@ dependencyResolutionManagement {
 }
 rootProject.name = "OpenAVMUnifiedPhone"
 include(":app", ":openavm-companion", ":transfer-protocol", ":sound-core", ":localization")
+include(":drive-map")
+project(":drive-map").projectDir = file("../drive-map")
 project(":transfer-protocol").projectDir = file("../transfer-protocol")
 project(":sound-core").projectDir = file("../sound-core")
 project(":localization").projectDir = file("../localization")

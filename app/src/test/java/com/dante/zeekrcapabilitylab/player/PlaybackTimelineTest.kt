@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PlaybackTimelineTest {
+    @Test fun routeOffsetsExcludeHintsUntilTheMediaDurationIsConfirmed() {
+        val timeline = PlaybackTimeline(3)
+        timeline.hint(0, 60_000)
+        timeline.hint(1, 60_000)
+        timeline.confirm(1, 58_000)
+        assertEquals(listOf(0L, 58_000L, 0L), timeline.confirmedDurations())
+        timeline.confirm(0, 59_000)
+        timeline.hint(0, 60_000)
+        assertEquals(listOf(59_000L, 58_000L, 0L), timeline.confirmedDurations())
+    }
     @Test fun seekAtMinuteBoundarySelectsNextItemWithoutOpeningANewPlaylist() {
         val timeline = PlaybackTimeline(3)
         listOf(60_000L, 60_000L, 7_000L).forEachIndexed(timeline::hint)

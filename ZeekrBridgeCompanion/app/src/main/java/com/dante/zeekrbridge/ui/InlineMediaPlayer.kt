@@ -5,13 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
@@ -27,6 +27,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
+import com.dante.zeekrbridge.core.IndexedRecordingMode
 import com.dante.zeekrbridge.core.isFourLane
 import com.dante.zeekrbridge.core.ContinuousRasterSupport
 import com.dante.zeekrbridge.core.DriveDataFiles
@@ -34,7 +35,9 @@ import io.github.dantenothing.avmtransfer.protocol.DriveDataBundle
 import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import com.dante.zeekrbridge.player.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -46,6 +49,8 @@ internal fun InlineMediaPlayer(
     seekRequest: PlaybackSeekRequest? = null,
     obstructed: Boolean = false,
     onActiveMediaChanged: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+    additionalContent: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -109,7 +114,8 @@ internal fun InlineMediaPlayer(
         mutableIntStateOf(playableIndexForId(ids, resumeId) ?: 0)
     }
     var currentGlobalMs by remember(player) { mutableLongStateOf(0L) }
-    var totalDurationMs by remember(player) { mutableLongStateOf(playable.sumOf { it.durationMs.coerceAtLeast(0L) }) }
+    var totalDurationMs by remember(player) { mutableLongStateOf(0L) }
+    var driveDurationsMs by remember(player) { mutableStateOf(playable.map { 0L }) }
     var sliderMs by remember(player) { mutableFloatStateOf(0f) }
     var dragging by remember(player) { mutableStateOf(false) }
     var speed by rememberSaveable(ids) { mutableFloatStateOf(1f) }
@@ -122,18 +128,58 @@ internal fun InlineMediaPlayer(
     var surfaceAttached by remember(player) { mutableStateOf(false) }
     var decodedSize by remember(player) { mutableStateOf<PlaybackDisplaySize?>(null) }
     val activeEntry = playable[currentIndex.coerceIn(playable.indices)]
-    val loadedDriveData by produceState<Pair<String, DriveDataBundle?>?>(null, activeEntry.id, activeEntry.uri) {
+    val loadedDriveData by produceState<Pair<PlaybackEntry, LoadedDriveAttachment>?>(null, activeEntry) {
         value = withContext(Dispatchers.IO) {
-            activeEntry.id to if (activeEntry.uri.scheme.equals("file", ignoreCase = true)) {
-                activeEntry.uri.path?.let { DriveDataFiles.load(File(it)) }
-            } else null
+            currentCoroutineContext().ensureActive()
+            val loaded = loadDriveAttachment(activeEntry)
+            currentCoroutineContext().ensureActive()
+            activeEntry to loaded
         }
     }
-    // A previous segment's attachment must disappear while the next one is being checked.
-    val driveData = loadedDriveData?.takeIf { it.first == activeEntry.id }?.second
+    val loadedRoute by produceState<LoadedDriveRoute?>(null, entries, playable) {
+        value = withContext(Dispatchers.IO) {
+            val sourcePositions = entries.mapIndexed { index, entry -> entry.id to index }.toMap()
+            val budget = (MAX_DRIVE_ROUTE_POINTS / minOf(playable.size, MAX_DRIVE_ROUTE_SEGMENTS).coerceAtLeast(1)).coerceAtLeast(1)
+            val durations = linkedMapOf<String, Long>()
+            val summaries = playable.mapIndexed { index, entry ->
+                currentCoroutineContext().ensureActive()
+                durations[entry.id] = readPlaybackDuration(context, entry)
+                currentCoroutineContext().ensureActive()
+                val sourceIndex = sourcePositions[entry.id] ?: index
+                if (index >= MAX_DRIVE_ROUTE_SEGMENTS) RecordedDriveSegment(entry.id, sourceIndex, DriveAttachmentStatus.ROUTE_LIMIT)
+                else {
+                    val loaded = loadDriveAttachment(entry)
+                    currentCoroutineContext().ensureActive()
+                    loaded.bundle?.let { summarizeRecordedDrive(entry.id, sourceIndex, it, budget) }
+                        ?: RecordedDriveSegment(entry.id, sourceIndex, loaded.status)
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            LoadedDriveRoute(entries, playable, summaries, durations)
+        }
+    }
+    // Old results never survive a segment/playlist change while the new attachment is being verified.
+    val driveData = loadedDriveData?.takeIf { it.first == activeEntry }?.second
+    val checkedRoute = loadedRoute?.takeIf { it.entries == entries && it.playable == playable }
+    val driveSegments = checkedRoute?.segments
+    val measuredDurations = checkedRoute?.durations.orEmpty()
+    val currentMeasuredDurations by rememberUpdatedState(measuredDurations)
+    val driveRoute = remember(driveSegments, driveDurationsMs) { driveSegments?.let { recordedPlaylistRoute(it, driveDurationsMs) } }
     var metadataSize by remember(activeEntry.id) { mutableStateOf<PlaybackDisplaySize?>(null) }
     val currentOnActiveMediaChanged by rememberUpdatedState(onActiveMediaChanged)
     SideEffect { resumePlaying = intent.wantsToPlay }
+
+    fun updatePosition(index: Int, positionMs: Long) {
+        currentIndex = index.coerceIn(playable.indices)
+        resumeId = playable[currentIndex].id
+        resumePositionMs = positionMs.coerceAtLeast(0L)
+        val durations = resolvedDurations(playable, player, currentIndex, currentMeasuredDurations)
+        driveDurationsMs = durations
+        val timeline = PlaybackTimeline(durations)
+        currentGlobalMs = timeline.globalPosition(currentIndex, resumePositionMs)
+        totalDurationMs = timeline.totalDurationMs
+    }
+    LaunchedEffect(player, measuredDurations) { updatePosition(player.currentMediaItemIndex, player.currentPosition) }
 
     BackHandler(enabled = mode != FourLaneGlView.MODE_GRID && !obstructed) { mode = FourLaneGlView.MODE_GRID }
     LaunchedEffect(activeEntry.id) { currentOnActiveMediaChanged(activeEntry.id) }
@@ -178,15 +224,14 @@ internal fun InlineMediaPlayer(
                 }
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                currentIndex = player.currentMediaItemIndex.coerceIn(playable.indices)
-                resumeId = playable[currentIndex].id
-                resumePositionMs = player.currentPosition.coerceAtLeast(0L)
+                updatePosition(player.currentMediaItemIndex, player.currentPosition)
                 decodedSize = null
             }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
-                currentIndex = newPosition.mediaItemIndex.coerceIn(playable.indices)
-                resumeId = playable[currentIndex].id
-                resumePositionMs = newPosition.positionMs.coerceAtLeast(0L)
+                updatePosition(newPosition.mediaItemIndex, newPosition.positionMs)
+            }
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                updatePosition(player.currentMediaItemIndex, player.currentPosition)
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 val id = player.currentMediaItem?.mediaId ?: return
@@ -226,28 +271,27 @@ internal fun InlineMediaPlayer(
     LaunchedEffect(player, dragging) {
         while (true) {
             val index = player.currentMediaItemIndex.coerceIn(playable.indices)
-            val timeline = PlaybackTimeline(resolvedDurations(playable, player, index))
-            currentIndex = index
-            resumeId = playable[index].id
-            resumePositionMs = player.currentPosition.coerceAtLeast(0L)
-            currentGlobalMs = timeline.globalPosition(index, player.currentPosition.coerceAtLeast(0L))
-            totalDurationMs = timeline.totalDurationMs
+            updatePosition(index, player.currentPosition)
             if (!dragging) sliderMs = currentGlobalMs.toFloat()
             delay(250L)
         }
     }
     fun seekGlobal(targetMs: Long) {
         val index = player.currentMediaItemIndex.coerceIn(playable.indices)
-        val position = PlaybackTimeline(resolvedDurations(playable, player, index)).resolve(targetMs)
+        val position = PlaybackTimeline(resolvedDurations(playable, player, index, currentMeasuredDurations)).resolve(targetMs)
         player.seekTo(position.mediaItemIndex, position.positionMs)
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val landscape = maxWidth >= 600.dp && maxWidth > maxHeight
+        val viewportHeight = maxHeight.value
+        val videoContent: @Composable () -> Unit = {
         Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Column {
                 val ratio = if (activeEntry.layoutKind.isFourLane) 1f else
                     decodedSize?.aspectRatioFor(activeEntry.id) ?: metadataSize?.aspectRatioFor(activeEntry.id)
-                val maxHeight = LocalConfiguration.current.screenHeightDp * 0.50f
+                val maxHeight = if (landscape) (viewportHeight - 170f).coerceAtLeast(80f)
+                    else (viewportHeight * 0.32f).coerceIn(100f, 260f)
                 // Only physical video/time controls are LTR; surrounding text follows the selected locale.
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     BoxWithConstraints(Modifier.fillMaxWidth().background(Color.Black)) {
@@ -295,9 +339,12 @@ internal fun InlineMediaPlayer(
                 }
             }
         }
-        driveData?.let { bundle ->
-            RecordedDrivePanel(bundle, resumePositionMs.takeIf { resumeId == activeEntry.id }, activeEntry.id)
         }
+        val detailsContent: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        RecordedDrivePanel(ids, driveRoute, driveData?.bundle,
+            driveData?.status ?: DriveAttachmentStatus.LOADING, resumePositionMs.takeIf { resumeId == activeEntry.id },
+            currentIndex, driveDurationsMs.getOrNull(currentIndex) ?: 0L, onSeek = ::seekGlobal)
         if (first.layoutKind.isFourLane) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(lensMode == FourLaneLensMode.FISHEYE, { lensMode = FourLaneLensMode.FISHEYE }, label = { Text(t("Fisheye", "鱼眼")) })
@@ -331,7 +378,29 @@ internal fun InlineMediaPlayer(
                 }
             }
         }
+        additionalContent()
+        }
+        }
+        if (landscape) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(0.56f).fillMaxHeight()) { videoContent() }
+            Column(Modifier.weight(0.44f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) { detailsContent() }
+        } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            videoContent()
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) { detailsContent() }
+        }
     }
+}
+
+private data class LoadedDriveAttachment(val status: DriveAttachmentStatus, val bundle: DriveDataBundle? = null)
+private data class LoadedDriveRoute(val entries: List<PlaybackEntry>, val playable: List<PlaybackEntry>,
+    val segments: List<RecordedDriveSegment>, val durations: Map<String, Long>)
+
+/** Called only from IO producers, one bounded attachment at a time. */
+private fun loadDriveAttachment(entry: PlaybackEntry): LoadedDriveAttachment {
+    if (entry.recordingMode == IndexedRecordingMode.TIME_LAPSE) return LoadedDriveAttachment(DriveAttachmentStatus.TIME_LAPSE)
+    if (!entry.uri.scheme.equals("file", ignoreCase = true)) return LoadedDriveAttachment(DriveAttachmentStatus.NOT_LOCAL)
+    val bundle = entry.uri.path?.let { DriveDataFiles.load(File(it)) }
+    return LoadedDriveAttachment(if (bundle == null) DriveAttachmentStatus.MISSING else DriveAttachmentStatus.AVAILABLE, bundle)
 }
 
 @Composable

@@ -1,0 +1,23 @@
+OpenAVM recorded street maps
+
+Renderer: MapLibre Native Android (OpenGL ES) 11.13.5
+https://github.com/maplibre/maplibre-native/releases/tag/android-v11.13.5
+The accompanying maplibre-native-LICENSE.md and maplibre-android-LICENSE.md
+are unmodified upstream license texts for that release, including the
+Android distribution's bundled third-party notices.
+
+Street tiles and Liberty style: OpenFreeMap public instance
+https://openfreemap.org/
+https://openfreemap.org/quick_start/
+Provider privacy policy: https://openfreemap.org/privacy/
+
+Map attribution:
+OpenFreeMap: https://openfreemap.org/
+Copyright OpenMapTiles: https://openmaptiles.org/
+Copyright OpenStreetMap contributors: https://www.openstreetmap.org/copyright
+
+The public map service is optional. The app requests tiles only while the
+user has selected street maps in a visible, foreground playback panel.
+Requested tiles reveal the viewed area to the provider. Recorded route
+data is supplied directly to the local renderer, never uploaded as a
+route file. The local trace view needs no map provider or network.

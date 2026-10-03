@@ -19,7 +19,7 @@ val generatePreflightEvidence by tasks.registering {
     outputs.upToDateWhen { false }
     doLast {
         fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        val files = (listOf("app", "transfer-protocol", "sound-core", "localization").flatMap { module ->
+        val files = (listOf("app", "transfer-protocol", "sound-core", "localization", "drive-map").flatMap { module ->
             rootProject.fileTree(module) {
                 include("src/**/*.kt", "src/**/*.xml", "src/androidTest/assets/playback/*", "build.gradle.kts", "proguard-rules.pro")
             }.files
@@ -52,7 +52,7 @@ val generatePreflightEvidence by tasks.registering {
                 "OPTIONAL_RECORDING_VEHICLE_TELEMETRY" to true,
                 "LOCAL_GPX_EXPORT" to true,
                 "OPTIONAL_PHONE_DRIVE_DATA_TRANSFER" to true,
-                "EMBEDDED_STREET_MAP_PLAYBACK" to false,
+                "EMBEDDED_STREET_MAP_PLAYBACK" to true,
                 "DIAGNOSTIC_CLOUD_UPLOAD" to false,"DIAGNOSTIC_REMOTE_COMMANDS" to false,
                 "DIAGNOSTIC_REMOTE_RECIPES_V1" to false,"DIAGNOSTIC_EXACT_EVIDENCE_REVIEW" to true,
                 "AWAY_SINGLE_EXPORT_RECORDER_FAULT" to true,"RECORDER_TERMINAL_STATE_FENCE" to true,
@@ -69,8 +69,8 @@ val generatePreflightEvidence by tasks.registering {
             "returnFeatureAcceptance" to mapOf("version" to "5.0.0-sleep4", "versionCode" to 101,
                 "reportedOn" to "2026-09-25", "evidenceType" to "OWNER_CONFIRMATION",
                 "scope" to "Latest delivered sleep4 reported working; no independent final-binary vehicle recording claimed"),
-            "drivePreview" to mapOf("version" to "5.1.0-drive2", "versionCode" to 107,
-                "scope" to "Optional read-only vehicle journal, approximate segment-relative playback alignment, GPX export, Google Maps selected-point link and opt-in per-segment GPS/vehicle-data phone transfer. No embedded street map. New binary awaits owner verification.",
+            "drivePreview" to mapOf("version" to "5.1.0-drive3", "versionCode" to 108,
+                "scope" to "Recorded GPS and vehicle data, opt-in paired transfer, playlist-aware approximate playback on both ends, embedded OpenFreeMap street maps with follow/route seeking and local fallback. New binary awaits full owner verification.",
                 "predecessorFieldEvidence" to "Owner report from 5.1.0-field1: vehicle speed 0-3 km/h, gear/indicator/brake changes, 120 fresh GPS fixes, three simultaneous camera previews for about 20 seconds. Recorder was idle during the vehicle/GPS check. Does not establish concurrent telemetry recording, multi-camera encoding or this binary's vehicle acceptance."),
             "notImplemented" to listOf("final_binary_vehicle_run", "broader_camera_contention_acceptance", "phone_android_raster_acceptance", "real_source_overload"),
             "localTestResults" to null, "localTestResultsReason" to "See separately hashed delivery validation; this asset does not self-certify tests.",
@@ -96,8 +96,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 107
-        versionName = "5.1.0-drive2"
+        versionCode = 108
+        versionName = "5.1.0-drive3"
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("boolean", "CAMERA_CONCURRENCY_PROBE_ENABLED", cameraConcurrencyProbe.toString())
@@ -153,6 +153,7 @@ dependencies {
     implementation(project(":transfer-protocol"))
     implementation(project(":sound-core"))
     implementation(project(":localization"))
+    implementation(project(":drive-map"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

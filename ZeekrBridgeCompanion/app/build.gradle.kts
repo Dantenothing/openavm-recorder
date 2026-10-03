@@ -51,6 +51,7 @@ dependencies {
     implementation(project(":transfer-protocol"))
     implementation(project(":sound-core"))
     implementation(project(":localization"))
+    implementation(project(":drive-map"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

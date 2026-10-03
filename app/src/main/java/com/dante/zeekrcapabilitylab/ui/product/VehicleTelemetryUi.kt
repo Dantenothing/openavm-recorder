@@ -74,8 +74,8 @@ internal fun VehicleTelemetrySettingsCard() {
             if (enabled) Text(vehicleTelemetryStatusText(if (busy) state.status.name else "IDLE"),
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("vehicle-telemetry-status"))
             else if (busy) Text(Utils.t("Stop recording before enabling this option.", "请停止录像后再开启此选项。"))
-            Text(Utils.t("Stored only on this head unit, up to 64 MB and 30 days. This preview does not transfer vehicle history to the phone or burn it into videos. Readings are approximately aligned with playback.",
-                "仅保存在此车机，最多 64 MB、30 天。此测试版尚不将车辆记录传给手机或烧录进画面，回放数据与视频近似对齐。"), style = MaterialTheme.typography.bodySmall)
+            Text(Utils.t("Kept on this head unit for up to 30 days and 64 MB. When sending a recording, choose Include route & vehicle data to copy that recording's readings to your paired phone. Readings are approximately aligned with playback and are not burned into exported video.",
+                "车机最多保留 30 天、64 MB。发送录像时，可勾选「附带轨迹与车辆数据」，将所选录像的数据传给已配对手机。数据与回放近似对齐，不会烧录进导出的视频。"), style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = { confirmClear = true }, enabled = !busy && !clearing,
                 modifier = Modifier.testTag("vehicle-telemetry-clear")) { Text(Utils.t("Clear vehicle data history", "清除车辆数据记录")) }
             message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -83,7 +83,7 @@ internal fun VehicleTelemetrySettingsCard() {
     }
     if (confirmClear) AlertDialog(onDismissRequest = { confirmClear = false },
         title = { Text(Utils.t("Clear vehicle data history?", "清除车辆数据记录？")) },
-        text = { Text(Utils.t("Videos and GPS tracks are kept. Stop recording before clearing.", "录像和 GPS 轨迹会保留。请在停止录像后清除。")) },
+        text = { Text(Utils.t("Videos and GPS tracks are kept. Copies already queued for transfer or received on your phone are kept too. Stop recording before clearing.", "录像和 GPS 轨迹会保留。已加入传输队列或已传到手机的副本也会保留。请在停止录像后清除。")) },
         confirmButton = { TextButton(onClick = {
             confirmClear = false; clearing = true
             scope.launch {

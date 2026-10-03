@@ -16,6 +16,10 @@ class PlaybackTimeline(count: Int) {
         }
     }
     fun durations(): List<Long> = durations.toList()
+    /** Unresolved media must not move a route onto an estimated playlist offset. */
+    fun confirmedDurations(): List<Long> = durations.mapIndexed { index, duration ->
+        if (confirmed[index]) duration else 0L
+    }
     fun total(): Long = durations.sum()
     fun position(index: Int, localMs: Long): Long = durations.take(index.coerceIn(0, durations.size)).sum() + localMs.coerceAtLeast(0L)
     fun seek(globalMs: Long): PlaybackSeek? {

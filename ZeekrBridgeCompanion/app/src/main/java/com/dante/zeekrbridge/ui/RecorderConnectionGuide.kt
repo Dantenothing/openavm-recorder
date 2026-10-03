@@ -23,6 +23,9 @@ import androidx.compose.ui.unit.dp
         t("4 · Send an existing recording", "4 · 发送一段已有录像") to
             t("Choose a recording on the car and send it to the phone. When transfer finishes, open Media here to play it. Keep both devices on the network until it finishes.",
                 "在车机录像列表选择一段录像并发送到手机，完成后在手机「影像」里播放。传输期间保持同网和接收服务运行。"),
+        t("5 · Bring the route along", "5 · 一起回看行车轨迹") to
+            t("For new recordings, enable Location & speed and Vehicle data with recordings on the car. In the player's send panel, select Include route & vehicle data. On either device, open the route during playback; choose Street map to load roads online, or keep the local trace offline. Tap a recorded route point to jump to that part of the video. Old videos without recorded data still play normally.",
+                "录制新视频前，在车机开启「位置与速度」和「随录像记录车辆数据」。通过播放器发送时，勾选「附带轨迹与车辆数据」。两端回放时均可打开轨迹，选择「道路地图」联网加载道路，或离线查看本地轨迹。点一下已记录的轨迹点即可跳到对应视频。没有数据的旧录像仍可正常播放。"),
     )
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         steps.forEach { (title, description) ->

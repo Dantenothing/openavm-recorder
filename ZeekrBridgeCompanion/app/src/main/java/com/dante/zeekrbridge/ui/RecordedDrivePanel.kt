@@ -1,41 +1,52 @@
 package com.dante.zeekrbridge.ui
 
-import androidx.compose.foundation.Canvas
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.dante.zeekrbridge.player.RecordedTrace
-import com.dante.zeekrbridge.player.RecordedTracePoint
-import com.dante.zeekrbridge.player.recordedDriveFrame
-import com.dante.zeekrbridge.player.recordedDriveTrace
-import com.dante.zeekrbridge.player.recordedDriveTurn
-import com.dante.zeekrbridge.player.recordedDriveValue
+import com.dante.zeekrbridge.player.*
+import com.dante.zeekrbridge.OpenAvmHost
 import io.github.dantenothing.avmtransfer.protocol.DriveDataBundle
+import io.github.dantenothing.drivemap.RecordedRoadMap
+import io.github.dantenothing.drivemap.RoadMapPoint
+import io.github.dantenothing.drivemap.RoadMapDiagnostics
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
 
-/** Uses only a verified received attachment. It never requests the phone's location. */
+/** Received recording data only. The shared map owns its explicit street-map choice and offline fallback. */
 @Composable
-internal fun RecordedDrivePanel(bundle: DriveDataBundle, positionMs: Long?, mediaId: String) {
-    var expanded by rememberSaveable(mediaId) { mutableStateOf(false) }
+internal fun RecordedDrivePanel(
+    playlistKey: List<String>,
+    route: RecordedDriveRoute?,
+    bundle: DriveDataBundle?,
+    attachmentStatus: DriveAttachmentStatus,
+    positionMs: Long?,
+    mediaIndex: Int,
+    durationMs: Long,
+    onSeek: (Long) -> Unit,
+) {
+    val context = LocalContext.current
+    // Keep the user's choice while playback advances to another segment in the same playlist.
+    var expanded by rememberSaveable(playlistKey) { mutableStateOf(false) }
+    val frame = remember(bundle, positionMs, durationMs) { recordedPlaylistFrame(bundle, positionMs, durationMs) }
+    val roadPoints = remember(route) { route?.points?.map { RoadMapPoint(it.latitude, it.longitude, it.playbackMs, it.breakBefore) }.orEmpty() }
+    val marker = remember(bundle, frame, route, mediaIndex, durationMs) {
+        route?.let { recordedPlaylistMarker(bundle, frame, it, mediaIndex, durationMs) }
+            ?.let { RoadMapPoint(it.latitude, it.longitude, it.playbackMs, it.breakBefore) }
+    }
     Card(Modifier.fillMaxWidth().testTag("recorded-drive-panel")) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(t("Drive data", "行驶数据"), style = MaterialTheme.typography.titleMedium)
-                    Text(t("Recorded with this video · approximate timing", "随视频记录 · 时间近似对齐"),
+                    Text(t("Transferred playlist · approximate timing", "已传输播放列表 · 时间近似对齐"),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("recorded-drive-toggle")) {
@@ -43,29 +54,52 @@ internal fun RecordedDrivePanel(bundle: DriveDataBundle, positionMs: Long?, medi
                 }
             }
             if (expanded) {
-                val frame = remember(bundle, positionMs) { recordedDriveFrame(bundle, positionMs) }
-                val trace = remember(bundle, frame) { recordedDriveTrace(bundle.gps, frame) }
-                val vehicleSpeed = recordedDriveValue(frame, "speed")?.number
-                val gpsSpeed = frame.gps?.speedMps?.times(3.6)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    DriveValue(t("Vehicle speed", "车辆速度"), driveSpeed(vehicleSpeed), Modifier.weight(1f), "recorded-vehicle-speed")
-                    DriveValue(t("GPS speed", "GPS 速度"), driveSpeed(gpsSpeed), Modifier.weight(1f), "recorded-gps-speed")
+                    DriveValue(t("Vehicle speed", "车辆速度"), driveSpeed(recordedDriveValue(frame, "speed")?.number), Modifier.weight(1f), "recorded-vehicle-speed")
+                    DriveValue(t("GPS speed", "GPS 速度"), driveSpeed(frame.gps?.speedMps?.times(3.6)), Modifier.weight(1f), "recorded-gps-speed")
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     DriveValue(t("Gear", "挡位"), recordedDriveValue(frame, "gear")?.text ?: "—", Modifier.weight(1f), "recorded-gear")
                     DriveValue(t("Turn signal", "转向灯"), driveTurnLabel(recordedDriveTurn(frame)), Modifier.weight(1f), "recorded-turn")
                     DriveValue(t("Brake pedal", "制动踏板"), driveSwitch(recordedDriveValue(frame, "brake_pedal")?.number), Modifier.weight(1f), "recorded-brake")
                 }
-                Text(when {
-                    frame.elapsedMs == null -> t("No drive data at this playback position.", "当前播放位置没有可用行驶数据。")
-                    frame.gps == null && frame.vehicle == null -> t("No fresh data here · — means unavailable", "此处无新鲜数据 · — 表示不可用")
-                    bundle.gps.isEmpty() -> t("No recorded GPS · — means unavailable", "未记录 GPS · — 表示不可用")
-                    trace.current == null -> t("Current GPS point unavailable · — means unavailable", "当前 GPS 点不可用 · — 表示不可用")
-                    else -> t("Dot: latest recorded GPS point · — means unavailable", "圆点：最近的已记录 GPS 点 · — 表示不可用")
+                Text(when (attachmentStatus) {
+                    DriveAttachmentStatus.LOADING -> t("Loading this segment's drive data…", "正在读取此分段的行驶数据…")
+                    DriveAttachmentStatus.TIME_LAPSE -> t("Synchronized drive data is unavailable for time-lapse video.", "缩时视频暂不支持同步行驶数据。")
+                    DriveAttachmentStatus.NOT_LOCAL, DriveAttachmentStatus.MISSING -> t("No verified drive data attached to this segment.", "此分段未附带已验证的行驶数据。")
+                    DriveAttachmentStatus.ROUTE_LIMIT -> t("Route limit reached. Open fewer segments to see the whole route.", "已达到轨迹上限，请减少播放分段以查看完整轨迹。")
+                    DriveAttachmentStatus.AVAILABLE -> when {
+                        frame.elapsedMs == null -> t("No drive data at this position · — unavailable", "此播放位置无行驶数据 · — 表示不可用")
+                        bundle?.gps.isNullOrEmpty() -> t("No GPS recorded for this segment · — unavailable", "此分段未记录 GPS · — 表示不可用")
+                        frame.gps == null -> t("GPS missing or in a gap · — unavailable", "GPS 缺失或中断 · — 表示不可用")
+                        else -> t("Recorded readings at the playhead · — unavailable", "播放位置对应的已记录读数 · — 表示不可用")
+                    }
                 }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("recorded-drive-status"))
-                if (trace.pointCount > 0) {
-                    Text(t("GPS trace · north up · no street map", "GPS 轨迹 · 上方为北 · 无街道底图"), style = MaterialTheme.typography.titleSmall)
-                    RecordedTraceCanvas(trace)
+                if (route == null) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(t("Loading the playlist route…", "正在读取播放列表轨迹…"), style = MaterialTheme.typography.bodySmall)
+                } else {
+                    if (roadPoints.isNotEmpty()) {
+                        RecordedRoadMap(roadPoints, marker, Modifier.fillMaxWidth().testTag("recorded-drive-map"),
+                            chinese = PhoneLanguage.locale.language == "zh", onSeek = onSeek)
+                    } else Text(t("No recorded GPS route is available for this playlist.", "此播放列表没有可用的已记录 GPS 轨迹。"), style = MaterialTheme.typography.bodySmall)
+                    if (route.missingSegments > 0 || route.unsupportedSegments > 0) Text(t(
+                        "Route gaps: {0} segments without data · {1} time-lapse segments", "轨迹缺口：{0} 个分段无数据 · {1} 个缩时分段",
+                        route.missingSegments, route.unsupportedSegments), style = MaterialTheme.typography.bodySmall)
+                    if (route.limitedSegments > 0) Text(t("This playlist exceeds the route limit. Open fewer segments for the full route.",
+                        "此播放列表超过轨迹上限，请减少播放分段以查看完整轨迹。"), style = MaterialTheme.typography.bodySmall)
+                    if (route.timingIncomplete) Text(t("Some video durations are still unavailable; their route points cannot be placed yet.",
+                        "部分视频时长暂不可用，尚无法定位相应轨迹点。"), style = MaterialTheme.typography.bodySmall)
+                    if (route.simplified && roadPoints.isNotEmpty()) Text(t("Route overview simplified; current readings keep their original timing.",
+                        "轨迹总览已简化，当前读数仍使用原始时间。"), style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = {
+                    val report = recordedPlaybackReport(runCatching { OpenAvmHost.version(context) }.getOrNull(), route,
+                        playlistKey.size, mediaIndex, positionMs, attachmentStatus, frame, RoadMapDiagnostics.snapshot())
+                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("OpenAVM playback report", report))
+                    Toast.makeText(context, t("Playback report copied", "回放报告已复制"), Toast.LENGTH_SHORT).show()
+                }, modifier = Modifier.align(Alignment.End).testTag("recorded-drive-copy-report")) {
+                    Text(t("Copy playback report", "复制回放报告"))
                 }
             }
         }
@@ -77,44 +111,6 @@ private fun DriveValue(label: String, value: String, modifier: Modifier, tag: St
     Column(modifier) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag(tag))
-    }
-}
-
-@Composable
-private fun RecordedTraceCanvas(trace: RecordedTrace) {
-    val line = MaterialTheme.colorScheme.primary
-    val marker = MaterialTheme.colorScheme.tertiary
-    val grid = MaterialTheme.colorScheme.outlineVariant
-    val background = MaterialTheme.colorScheme.surfaceContainerLow
-    val description = t("Recorded GPS trace through the playback position, {0} points. {1}", "播放位置之前的 GPS 轨迹，共 {0} 个点。{1}",
-        trace.pointCount, if (trace.current == null) t("Current marker unavailable.", "当前标记不可用。") else t("Current marker shown.", "已显示当前标记。"))
-    Canvas(Modifier.fillMaxWidth().height(180.dp).testTag("recorded-drive-trace").semantics { contentDescription = description }) {
-        drawRect(background)
-        val points = trace.strokes.flatten()
-        if (points.isEmpty()) return@Canvas
-        val minX = points.minOf { it.eastM }; val maxX = points.maxOf { it.eastM }
-        val minY = points.minOf { it.northM }; val maxY = points.maxOf { it.northM }
-        val padding = 18.dp.toPx()
-        val scale = min((size.width - padding * 2).coerceAtLeast(1f) / max(10.0, maxX - minX),
-            (size.height - padding * 2).coerceAtLeast(1f) / max(10.0, maxY - minY))
-        val centerX = (minX + maxX) / 2.0; val centerY = (minY + maxY) / 2.0
-        fun location(point: RecordedTracePoint) = Offset(
-            (size.width / 2.0 + (point.eastM - centerX) * scale).toFloat(),
-            (size.height / 2.0 - (point.northM - centerY) * scale).toFloat())
-        drawLine(grid, Offset(size.width / 2, padding), Offset(size.width / 2, size.height - padding), 1.dp.toPx())
-        drawLine(grid, Offset(padding, size.height / 2), Offset(size.width - padding, size.height / 2), 1.dp.toPx())
-        trace.strokes.forEach { stroke ->
-            if (stroke.size == 1) drawCircle(line, 2.dp.toPx(), location(stroke.first()))
-            else if (stroke.isNotEmpty()) {
-                val path = Path()
-                stroke.forEachIndexed { index, point ->
-                    val pointAt = location(point)
-                    if (index == 0) path.moveTo(pointAt.x, pointAt.y) else path.lineTo(pointAt.x, pointAt.y)
-                }
-                drawPath(path, line, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
-            }
-        }
-        trace.current?.let { drawCircle(background, 8.dp.toPx(), location(it)); drawCircle(marker, 5.dp.toPx(), location(it)) }
     }
 }
 

@@ -99,6 +99,9 @@ import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetry
 import com.dante.zeekrcapabilitylab.telemetry.TelemetryTrack
 import com.dante.zeekrcapabilitylab.telemetry.TelemetryVideoWindow
 import com.dante.zeekrcapabilitylab.telemetry.TelemetryPlayback
+import com.dante.zeekrcapabilitylab.telemetry.TelemetryPlaylistWindow
+import com.dante.zeekrcapabilitylab.telemetry.TelemetryPlaylistRoute
+import com.dante.zeekrcapabilitylab.telemetry.TelemetryPlaylistRoutes
 import com.dante.zeekrcapabilitylab.telemetry.RecordingVehicleTelemetry
 import com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryTrack
 import com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryPlayback
@@ -120,6 +123,7 @@ private data class PlaybackControls(
     val segmentIndex: () -> Int,
     val seekToSegment: (Int) -> Unit,
     val segmentDurations: () -> List<Long>,
+    val confirmedSegmentDurations: () -> List<Long>,
     val seekToSegmentPosition: (Int, Long) -> Unit,
 )
 
@@ -223,6 +227,7 @@ fun FourLanePlayerDialog(
     var positionMs by remember(playlist) { mutableStateOf(0L) }
     var durationMs by remember(playlist) { mutableStateOf(0L) }
     var playableDurations by remember(segmentItems) { mutableStateOf(segmentItems.map { it.durationMs }) }
+    var confirmedDurations by remember(playlist) { mutableStateOf(List(playlist.size) { 0L }) }
     val triggerMarkers = remember(segmentItems, playableDurations) {
         TriggerTimeline.assemble(segmentItems.mapIndexed { index, item ->
             TriggerTimelineSegment(playableDurations.getOrElse(index) { item.durationMs }, item.triggerMarkers)
@@ -232,6 +237,23 @@ fun FourLanePlayerDialog(
     var draggedPositionMs by remember(playlist) { mutableStateOf(0L) }
     var activeSegmentIndex by remember(playlist) { mutableStateOf(0) }
     var showRoute by remember(playlist) { mutableStateOf(false) }
+    val routeWindows = remember(segmentItems, confirmedDurations) { segmentItems.mapIndexed { index, item ->
+        val sidecar = item.sidecar
+        TelemetryPlaylistWindow(sidecar?.recordingSessionId, sidecar?.startedAtElapsedRealtimeMs,
+            sidecar?.stoppedAtElapsedRealtimeMs,
+            confirmedDurations.getOrNull(index)?.takeIf { it > 0 }
+                ?: sidecar?.actualTrack?.durationMs?.takeIf { it > 0 } ?: 0L,
+            sidecar?.recordingMode == RecordingMode.NORMAL && sidecar.timeLapseMultiplier == 1)
+    } }
+    val playlistRoute by produceState<TelemetryPlaylistRoute?>(null, routeWindows, showRoute) {
+        value = null
+        if (showRoute) value = withContext(Dispatchers.IO) {
+            val store = RecordingTelemetry.store(context)
+            TelemetryPlaylistRoutes.build(routeWindows, store::load)
+        }
+    }
+    // Never briefly render a route from the previous selection while its replacement is loading.
+    val displayedRoute = playlistRoute?.takeIf { it.windows == routeWindows.take(TelemetryPlaylistRoutes.MAX_SEGMENTS) }
     val routePosition = if (dragging) draggedPositionMs else positionMs
     val routeSeek = remember(playableDurations, routePosition) {
         PlaybackTimeline(playableDurations.size).apply {
@@ -240,24 +262,26 @@ fun FourLanePlayerDialog(
     }
     val routeSidecar = segmentItems.getOrNull(routeSeek?.index ?: activeSegmentIndex)?.sidecar
     val routeSession = routeSidecar?.recordingSessionId
-    var routeLoadedSession by remember { mutableStateOf<String?>(null) }
     // Keep only the current session in memory; opening old video never fabricates a track.
     val routeTrack by produceState<TelemetryTrack?>(null, routeSession) {
         value = null
         value = routeSession?.let { id -> withContext(Dispatchers.IO) { RecordingTelemetry.store(context).load(id) } }
-        routeLoadedSession = routeSession
     }
     // The state can briefly still hold the previous session during a segment change.
     val currentTrack = routeTrack?.takeIf { it.header.sessionId == routeSession }
-    var vehicleLoadedSession by remember { mutableStateOf<String?>(null) }
     val vehicleTrack by produceState<VehicleTelemetryTrack?>(null, routeSession) {
         value = null
         value = routeSession?.let { id -> withContext(Dispatchers.IO) { RecordingVehicleTelemetry.store(context).load(id) } }
-        vehicleLoadedSession = routeSession
     }
     val currentVehicleTrack = vehicleTrack?.takeIf { it.header.sessionId == routeSession }
+    val currentRouteWindow = routeWindows.getOrNull(routeSeek?.index ?: -1)
     val routeWindow = TelemetryVideoWindow(routeSidecar?.startedAtElapsedRealtimeMs,
-        playableDurations.getOrNull(routeSeek?.index ?: -1) ?: 0L,
+        currentRouteWindow?.let { window ->
+            val start = window.startedElapsedMs
+            val end = window.endedElapsedMs
+            if (start != null && end != null && end > start && routeWindows.take((routeSeek?.index ?: 0) + 1).all { it.durationMs > 0 })
+                minOf(window.durationMs, end - start) else 0L
+        } ?: 0L,
         routeSidecar?.recordingMode == RecordingMode.TIME_LAPSE || (routeSidecar?.timeLapseMultiplier ?: 1) > 1)
     val routeAt = routeSeek?.positionMs?.let(routeWindow::at)
     val routeSample = currentTrack?.let { TelemetryPlayback.sampleAt(it.points, routeAt) }
@@ -308,6 +332,7 @@ fun FourLanePlayerDialog(
             positionMs = runCatching { active.currentPosition() }.getOrDefault(positionMs)
             durationMs = runCatching { active.duration() }.getOrDefault(durationMs)
             playableDurations = runCatching { active.segmentDurations() }.getOrDefault(playableDurations)
+            confirmedDurations = runCatching { active.confirmedSegmentDurations() }.getOrDefault(confirmedDurations)
             playing = runCatching { active.isPlaying() }.getOrDefault(false)
             activeSegmentIndex = runCatching { active.segmentIndex() }.getOrDefault(activeSegmentIndex)
             delay(250L)
@@ -358,7 +383,9 @@ fun FourLanePlayerDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = { showRoute = true }) { Text(Utils.t("Drive data", "行车数据")) }
+                    TextButton(onClick = { showRoute = !showRoute }) {
+                        Text(if (showRoute) Utils.t("Segments & details", "分段与详情") else Utils.t("Route & drive data", "路线与行车数据"))
+                    }
                     TextButton(onClick = onDismiss) { Text(Utils.t("Close", "关闭")) }
                 }
 
@@ -369,7 +396,21 @@ fun FourLanePlayerDialog(
                         .weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    PlaybackSegmentRail(
+                    if (showRoute) TelemetryRoutePanel(
+                        route = displayedRoute,
+                        sample = displayedRoute?.sampleAt(routePosition),
+                        loading = displayedRoute == null,
+                        onSeek = { target ->
+                            controls?.seekTo?.invoke(target)
+                            positionMs = target
+                            dragging = false
+                        },
+                        onDismiss = { showRoute = false },
+                        onLeaveApp = { if (playing) playing = controls?.toggle?.invoke() ?: false },
+                        modifier = Modifier.weight(1.35f).fillMaxHeight(),
+                        vehicleSample = vehicleSample,
+                        vehicleAvailable = currentVehicleTrack?.samples?.isNotEmpty() == true,
+                    ) else PlaybackSegmentRail(
                         items = segmentItems,
                         activeIndex = activeSegmentIndex,
                         selectedPaths = selectedSegmentPaths,
@@ -526,7 +567,7 @@ fun FourLanePlayerDialog(
                         }
                     }
 
-                    Column(Modifier.weight(0.93f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                    if (!showRoute) Column(Modifier.weight(0.93f).fillMaxHeight().verticalScroll(rememberScrollState())) {
                         PlaybackInfoCard(
                             diagnostics = diagnostics,
                             items = segmentItems,
@@ -639,15 +680,6 @@ fun FourLanePlayerDialog(
             }
         }
     }
-    if (showRoute) TelemetryRouteDialog(currentTrack, routeSample,
-        loading = routeSession != null && (routeLoadedSession != routeSession || vehicleLoadedSession != routeSession),
-        aligned = routeWindow.at(0) != null,
-        positionMs = routePosition, durationMs = durationMs, playing = playing,
-        onScrub = { target -> draggedPositionMs = target; dragging = true },
-        onScrubEnd = { controls?.seekTo?.invoke(draggedPositionMs); positionMs = draggedPositionMs; dragging = false },
-        onToggle = { playing = controls?.toggle?.invoke() ?: false },
-        onDismiss = { showRoute = false; dragging = false },
-        vehicleSample = vehicleSample, vehicleAvailable = currentVehicleTrack?.samples?.isNotEmpty() == true)
 }
 
 @Composable
@@ -1078,6 +1110,7 @@ private fun PlaybackMediaBinding(
             segmentIndex = active::segmentIndex,
             seekToSegment = { active.seekSegment(it) },
             segmentDurations = timeline::durations,
+            confirmedSegmentDurations = timeline::confirmedDurations,
             seekToSegmentPosition = active::seekSegment,
         ) })
         onDispose {

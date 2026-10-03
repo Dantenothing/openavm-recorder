@@ -870,9 +870,8 @@ private fun MediaDetailScreen(
                 onSave = { onSave(active) }, onShare = { onShare(active) },
                 onNote = { onNote(active) }, onDelete = { onDelete(active) })
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            MediaSessionPlayer(detail.segments, seekRequest, playbackObstructed, onActiveMediaChanged = { activeId = it })
+        MediaSessionPlayer(detail.segments, seekRequest, playbackObstructed, onActiveMediaChanged = { activeId = it },
+            modifier = Modifier.weight(1f).padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 DetailBadge(sourceLabel(detail.sourceRole))
                 DetailBadge(formatDuration(detail.durationMs))

@@ -15,6 +15,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "ZeekrBridgeCompanion"
+include(":drive-map")
+project(":drive-map").projectDir = file("../drive-map")
 include(":app")
 include(":transfer-protocol")
 project(":transfer-protocol").projectDir = file("../transfer-protocol")

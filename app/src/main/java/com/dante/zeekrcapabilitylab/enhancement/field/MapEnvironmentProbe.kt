@@ -3,16 +3,20 @@ package com.dante.zeekrcapabilitylab.enhancement.field
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import io.github.dantenothing.drivemap.RoadMapDiagnostics
 import kotlinx.serialization.json.*
 
-/** Read-only package presence, not a claim that a map SDK or Google account works. No network calls. */
+/** Local package presence and map outcomes. Collecting this summary makes no network calls. */
 internal object MapEnvironmentProbe {
     fun inspect(context: Context): JsonObject = buildJsonObject {
-        put("scope", "PACKAGE_PRESENCE_ONLY")
+        put("scope", "LOCAL_ENVIRONMENT_AND_MAP_RUNTIME_SUMMARY")
         put("androidSdk", Build.VERSION.SDK_INT)
         put("googleMapRuntime", "NOT_TESTED")
-        put("networkRequests", 0)
+        put("probeNetworkRequests", 0)
         put("coordinatesIncluded", false)
+        put("recordedMapPlayback", buildJsonObject {
+            RoadMapDiagnostics.snapshot().forEach { (name, value) -> put(name, value) }
+        })
         put("packages", buildJsonArray {
             for (id in listOf("com.google.android.gms", "com.android.vending", "com.google.android.apps.maps")) {
                 add(buildJsonObject {

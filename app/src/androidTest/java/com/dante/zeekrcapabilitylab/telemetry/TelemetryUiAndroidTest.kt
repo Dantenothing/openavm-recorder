@@ -7,6 +7,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.compose.material3.Slider
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,7 +17,7 @@ import com.dante.zeekrcapabilitylab.mirror.MirrorSleepTestHostActivity
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.product.AppLanguageMode
 import com.dante.zeekrcapabilitylab.product.SettingsStore
-import com.dante.zeekrcapabilitylab.ui.product.TelemetryRouteDialog
+import com.dante.zeekrcapabilitylab.ui.product.TelemetryRoutePanel
 import com.dante.zeekrcapabilitylab.ui.product.TelemetrySettingsCard
 import com.dante.zeekrcapabilitylab.ui.product.VehicleTelemetrySettingsCard
 import com.dante.zeekrcapabilitylab.ui.theme.ZeekrCapabilityLabTheme
@@ -64,17 +67,19 @@ class TelemetryUiAndroidTest {
             "speed" to VehicleTelemetryValue(1_000, number = 0.0),
             "gear" to VehicleTelemetryValue(1_000, text = "P")))
         var sample by mutableStateOf<VehicleTelemetrySample?>(vehicle)
+        val route = TelemetryPlaylistRoutes.build(listOf(TelemetryPlaylistWindow(track.header.sessionId, 1_000, 2_000, 1_000, true))) { track }
         compose.runOnIdle { AppLanguage.setMode(context, AppLanguageMode.ENGLISH) }
         compose.setContent { ZeekrCapabilityLabTheme {
-            TelemetryRouteDialog(track, fix, false, true, 0, 1_000, false, {}, {}, {}, {},
-                vehicleSample = sample, vehicleAvailable = true)
+            TelemetryRoutePanel(route, route.sampleAt(0), false, {}, {}, {},
+                modifier = Modifier.fillMaxWidth().height(400.dp), vehicleSample = sample, vehicleAvailable = true)
         } }
-        compose.onNodeWithTag("telemetry-speed").assertTextEquals("36 km/h")
-        compose.onNodeWithTag("vehicle-playback-data").performScrollTo().assertTextEquals("Vehicle · 0 km/h · P")
+        compose.onNodeWithTag("telemetry-speed").assertTextEquals("GPS · 36 km/h")
+        compose.onNodeWithTag("vehicle-playback-data").assertTextEquals("Vehicle · 0 km/h · P")
         compose.runOnIdle { sample = null }
         compose.onNodeWithTag("vehicle-playback-data").assertTextEquals("Vehicle · Speed unavailable · —")
-        compose.onNodeWithTag("telemetry-export-gpx").performScrollTo().assertIsEnabled()
-        compose.onNodeWithTag("telemetry-google-point").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("More").performClick()
+        compose.onNodeWithTag("telemetry-export-gpx").assertIsEnabled()
+        compose.onNodeWithTag("telemetry-google-point").assertIsEnabled()
     }
 
     @Test fun settingsDefaultsOffAndHasReachableEnglishAndChineseControls() {
@@ -108,35 +113,42 @@ class TelemetryUiAndroidTest {
             -34.9 + index * 0.00001, 138.6 + kotlin.math.sin(index * 0.1) * 0.0004,
             5f, "gps", if (index < 20) null else 0f, breakBefore = index == 0 || index == 35) }
         val track = TelemetryTrack(TelemetryHeader(sessionId = "00000000-0000-4000-8000-000000000003", startedElapsedMs = 1_000), points)
+        val route = TelemetryPlaylistRoutes.build(listOf(TelemetryPlaylistWindow(track.header.sessionId, 1_000, 61_000, 60_000, true))) { track }
         var position by mutableLongStateOf(0)
         var session by mutableIntStateOf(0)
         var closed = false
         var seeks = 0
         compose.setContent { ZeekrCapabilityLabTheme { key(session) {
-            TelemetryRouteDialog(track, TelemetryPlayback.sampleAt(points, 1_000 + position), false, true,
-                position, 60_000, false, { position = it }, { seeks++ }, {}, { closed = true })
+            Column(Modifier.fillMaxSize()) {
+                TelemetryRoutePanel(route, route.sampleAt(position), false,
+                    onSeek = { position = it; seeks++ }, onDismiss = { closed = true }, onLeaveApp = {},
+                    modifier = Modifier.fillMaxWidth().weight(1f))
+                Slider(value = position.toFloat(), valueRange = 0f..60_000f, onValueChange = { position = it.toLong() },
+                    onValueChangeFinished = { seeks++ }, modifier = Modifier.testTag("telemetry-seek"))
+            }
         } } }
         languages.forEach { language ->
             compose.runOnIdle { AppLanguage.setMode(context, language); session++; position = 0; seeks = 0 }
-            compose.onNodeWithTag("telemetry-speed").assertTextEquals(AppLanguage.text("Speed unavailable", "暂无速度"))
-            compose.onNodeWithTag("telemetry-route").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithTag("telemetry-speed").assertTextEquals("GPS · " + AppLanguage.text("Speed unavailable", "暂无速度"))
+            compose.onNodeWithTag("telemetry-route").assertIsDisplayed()
             capture(language.storedValue + "-route-missing")
             compose.onNodeWithTag("telemetry-seek").performTouchInput { click(androidx.compose.ui.geometry.Offset(width * 0.7f, height / 2f)) }
             compose.waitUntil { position > 20_000 }
             compose.runOnIdle { assertEquals(1, seeks) }
-            compose.onNodeWithTag("telemetry-speed").performScrollTo().assertTextEquals("0 km/h")
+            compose.onNodeWithTag("telemetry-speed").assertTextEquals("GPS · 0 km/h")
             capture(language.storedValue + "-route-zero")
-            compose.onNodeWithText(AppLanguage.text("Close", "关闭")).performClick()
+            compose.onNodeWithText(AppLanguage.text("Hide map", "收起地图")).performClick()
             compose.runOnIdle { assertTrue(closed); closed = false }
         }
     }
     @Test fun legacyVideoHasAnHonestEmptyState() {
         compose.runOnIdle { AppLanguage.setMode(context, AppLanguageMode.ENGLISH) }
         compose.setContent { ZeekrCapabilityLabTheme {
-            TelemetryRouteDialog(null, null, false, false, 0, 0, false, {}, {}, {}, {})
+            TelemetryRoutePanel(TelemetryPlaylistRoutes.build(emptyList()) { null }, null, false, {}, {}, {},
+                modifier = Modifier.fillMaxWidth().height(400.dp))
         } }
-        compose.onNodeWithText("No location was recorded for this video, or its local history has been cleared.").assertIsDisplayed()
-        compose.onNodeWithTag("telemetry-seek").assertIsNotEnabled()
+        compose.onNodeWithText("No GPS recorded for these videos. Enable Location & speed before your next recording; video works without GPS.").assertIsDisplayed()
+        compose.onNodeWithTag("telemetry-export-gpx").assertDoesNotExist()
         capture("legacy-no-location")
     }
     private fun capture(name: String) {

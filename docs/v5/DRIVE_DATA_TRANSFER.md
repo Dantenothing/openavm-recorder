@@ -1,13 +1,13 @@
 # Recorded drive data transfer — private preview
 
-Target build: 5.1.0-drive2. This extends the existing paired video transfer. It adds no cloud dependency, map API key or location upload service.
+Target build: 5.1.0-drive3. This extends the existing paired video transfer. It adds no cloud dependency, map API key or location upload service.
 
 ## User flow
 
 1. On the car, enable **Location & speed** and/or **Vehicle data with recordings** before recording. Both are optional and independent.
 2. Make a normal recording and stop it. Open playback, select the desired segments and select **Include route & vehicle data** before sending.
-3. Receive on the updated paired phone. Open the video and its drive-data panel. Scrubbing follows the current segment's recorded samples; missing values remain unknown.
-4. The drawing is a recorded GPS trace. It is not a street map, navigation route or proof of exact position. Both ends label alignment as approximate.
+3. Receive on the updated paired phone. Open the video and its drive-data panel. Scrubbing and map taps follow recorded samples across the current playlist; missing values remain unknown. The phone uses the recording's coordinates, not its current position.
+4. Choose **Street map** to load a road basemap on either device, or keep the offline local trace. Drag to explore, then use **Recenter** to follow playback again. **Fit route** shows the playlist route; tapping a measured point seeks the video. Both ends label alignment as approximate. This is recorded-route review, not navigation.
 
 The checkbox resets for a new playback session. List-menu quick-send remains video-only. Time-lapse, factory Sentry recordings and videos without a valid normal-recording clock are not eligible. A recording with no retained samples may transfer an empty attachment and display no recorded data.
 
@@ -37,4 +37,4 @@ The transport does not log or place coordinates in diagnostics. Data are sent on
 - Try old video-only receiver behavior, missing GPS permission, an empty data history and Trash/restore with a filename collision.
 - Verify English and Chinese layout on the actual head unit and phone. JVM tests and UI compilation do not replace device rendering or a vehicle run.
 
-No embedded Google/MapLibre street-map SDK or multi-camera recording is included in this step.
+Both ends include MapLibre Native with OpenFreeMap street tiles. Online map requests reveal the viewed area to the provider; the actual route file stays local. Internet failure falls back to a local trace. Three-camera recording and time-lapse data synchronization are not included.
