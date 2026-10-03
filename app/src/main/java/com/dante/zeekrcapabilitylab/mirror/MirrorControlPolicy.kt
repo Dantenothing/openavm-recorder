@@ -1,7 +1,8 @@
 package com.dante.zeekrcapabilitylab.mirror
 
 /** A pending handoff is an in-memory user command, never a persisted recording permit. */
-class MirrorHandoffGate(private val timeoutMs: Long = 20_000) {
+class MirrorHandoffGate(private val timeoutMs: Long = 20_000,
+                        private val stoppedPreviewTimeoutMs: Long = timeoutMs) {
     enum class Target { PREVIEW, CABIN, RECORD }
     enum class Decision { WAIT, START, CANCEL }
     data class Request(val token: Long, val target: Target, val deadlineMs: Long, val stoppedSession: String?)
@@ -9,7 +10,8 @@ class MirrorHandoffGate(private val timeoutMs: Long = 20_000) {
     var pending: Request? = null; private set
     fun begin(target: Target, now: Long, stoppedSession: String? = null): Request? {
         if (pending != null) return null
-        return Request(++serial, target, now + timeoutMs, stoppedSession).also { pending = it }
+        val budget = if (stoppedSession != null && target != Target.RECORD) stoppedPreviewTimeoutMs else timeoutMs
+        return Request(++serial, target, now + budget, stoppedSession).also { pending = it }
     }
     fun cancel() { pending = null; serial++ }
     fun poll(token: Long, now: Long, allowed: Boolean, recorderGone: Boolean,

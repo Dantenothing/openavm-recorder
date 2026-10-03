@@ -1,6 +1,7 @@
 package com.dante.zeekrcapabilitylab.ui.product
 
 import android.view.TextureView
+import android.media.MediaMetadataRetriever
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -9,10 +10,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -28,6 +31,8 @@ import com.dante.zeekrcapabilitylab.service.recorder.PlaybackPinRegistry
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
 import com.dante.zeekrcapabilitylab.telemetry.*
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.player.fitSessionPreview
+import com.dante.zeekrcapabilitylab.player.sessionVideoAspect
 import io.github.dantenothing.avmtransfer.protocol.SessionPlaybackTimeline
 import io.github.dantenothing.drivemap.*
 import kotlinx.coroutines.CancellationException
@@ -99,7 +104,7 @@ private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
     var seekSerial by remember { mutableIntStateOf(0) }
     var wantsPlay by remember { mutableStateOf(false) }
     var overview by remember { mutableStateOf(false) }
-    var showDetails by remember { mutableStateOf(true) }
+    var showDetails by remember { mutableStateOf(false) }
     var dragging by remember { mutableStateOf(false) }
     var dragged by remember { mutableFloatStateOf(0f) }
     val hudPrefs = remember { context.getSharedPreferences("playback_ui", android.content.Context.MODE_PRIVATE) }
@@ -153,12 +158,15 @@ private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
                                 onCompleted = {
                                     position = timeline.mediaToSession(entry.segment.id, entry.segment.mediaDurationMs) ?: position
                                     if (timeline.seek(channel, position) == null) wantsPlay = false
-                                }, onError = { wantsPlay = false }, modifier = Modifier.fillMaxSize())
+                                }, onError = { wantsPlay = false }, modifier = Modifier.fillMaxSize(), overlay = {
+                                    DriveHud(frame, hudVisible, { hudVisible = it; hudPrefs.edit().putBoolean("drive_hud", it).apply() },
+                                        Modifier.align(Alignment.BottomStart).padding(6.dp).widthIn(max = 330.dp), chinese, compact = compactHud)
+                                })
                         } else Text(if (!foreground) Utils.t("Playback paused", "回放已暂停")
                             else if (position >= timeline.durationMs) Utils.t("End of session", "行程结束")
                             else Utils.t("No video from this camera at this time", "此时没有该摄像头的录像"),
                             Modifier.align(Alignment.Center).padding(12.dp), color = Color.White)
-                        DriveHud(frame, hudVisible, { hudVisible = it; hudPrefs.edit().putBoolean("drive_hud", it).apply() },
+                        if (entry == null) DriveHud(frame, hudVisible, { hudVisible = it; hudPrefs.edit().putBoolean("drive_hud", it).apply() },
                             Modifier.align(Alignment.BottomStart).padding(6.dp).widthIn(max = 330.dp), chinese, compact = compactHud)
                     }
                     if (overview) Row(Modifier.fillMaxWidth().height(if (wide) 116.dp else 90.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -206,7 +214,8 @@ private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
 /** The established raster-aware renderer is retained; one ordinary decoder per visible channel. */
 @Composable
 private fun SessionCameraPane(entry: SessionReviewEntry, targetMs: Long, seekSerial: Int, playing: Boolean,
-    primary: Boolean, onProgress: (Long) -> Unit, onCompleted: () -> Unit, onError: () -> Unit, modifier: Modifier) {
+    primary: Boolean, onProgress: (Long) -> Unit, onCompleted: () -> Unit, onError: () -> Unit, modifier: Modifier,
+    overlay: @Composable BoxScope.() -> Unit = {}) {
     key(entry.segment.id) {
         val context = LocalContext.current
         val settings = remember { SettingsStore.get(context) }
@@ -218,6 +227,24 @@ private fun SessionCameraPane(entry: SessionReviewEntry, targetMs: Long, seekSer
         var mode by remember { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
         var lensMode by remember { mutableStateOf(settings.lensMode) }
         var zoom by remember { mutableFloatStateOf(1f) }
+        val fourLane = entry.sidecar.layoutKind != RecordingLayoutKind.SINGLE_V1
+        val fallbackAspect = if (fourLane) 1f else sessionVideoAspect(
+            entry.sidecar.actualTrack?.width?.takeIf { it > 0 } ?: entry.sidecar.profile.size.width,
+            entry.sidecar.actualTrack?.height?.takeIf { it > 0 } ?: entry.sidecar.profile.size.height, 0)
+        val aspect by produceState(fallbackAspect, entry.file.absolutePath, fourLane) {
+            if (!fourLane) value = withContext(Dispatchers.IO) {
+                val reader = MediaMetadataRetriever()
+                try {
+                    reader.setDataSource(entry.file.absolutePath)
+                    val width = reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                    val height = reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                    val rotation = reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                    if (width > 0 && height > 0) sessionVideoAspect(width, height, rotation) else fallbackAspect
+                } catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { fallbackAspect }
+                finally { runCatching { reader.release() } }
+            }
+        }
         val currentTarget by rememberUpdatedState(targetMs)
         val currentPlaying by rememberUpdatedState(playing)
         val currentProgress by rememberUpdatedState(onProgress)
@@ -239,21 +266,25 @@ private fun SessionCameraPane(entry: SessionReviewEntry, targetMs: Long, seekSer
                 delay(100)
             }
         }
-        Box(modifier) {
-            val hints = remember(entry) { mapOf(entry.file.absolutePath to entry.segment.mediaDurationMs) }
-            if (entry.sidecar.layoutKind != RecordingLayoutKind.SINGLE_V1) {
-                FourLanePlaybackSurface(listOf(entry.file), hints, container,
-                    entry.sidecar.profile.size.width, entry.sidecar.profile.size.height, mode, lensMode,
-                    settings.fisheyeCorrection, callbacks, Modifier.fillMaxSize())
-                if (primary) FourLaneDirectionOverlay(productDirectionLabels(), mode, firstFrame,
-                    zoom = zoom, onLaneTapped = { mode = mode.toggleLane(it); zoom = container.resetViewport() },
-                    onTransformGesture = { z, x, y -> zoom = container.applyViewportGesture(z, x, y) })
-                if (primary) FourLaneLensToggle(lensMode, { selected -> lensMode = selected; settings.setLensMode(selected) },
-                    Modifier.align(Alignment.TopEnd).padding(6.dp))
-            } else SinglePlaybackSurface(listOf(entry.file), hints, texture, callbacks, Modifier.fillMaxSize())
-            if (!firstFrame || error != null) Text(error ?: Utils.t("Loading video…", "载入画面…"),
-                Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = 0.75f)).padding(8.dp), color = Color.White,
-                style = MaterialTheme.typography.bodySmall)
+        BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+            val size = fitSessionPreview(maxWidth.value, maxHeight.value, aspect)
+            Box(Modifier.size(size.width.dp, size.height.dp).clip(RoundedCornerShape(14.dp)).background(Color.Black)) {
+                val hints = remember(entry) { mapOf(entry.file.absolutePath to entry.segment.mediaDurationMs) }
+                if (fourLane) {
+                    FourLanePlaybackSurface(listOf(entry.file), hints, container,
+                        entry.sidecar.profile.size.width, entry.sidecar.profile.size.height, mode, lensMode,
+                        settings.fisheyeCorrection, callbacks, Modifier.fillMaxSize())
+                    if (primary) FourLaneDirectionOverlay(productDirectionLabels(), mode, firstFrame,
+                        zoom = zoom, onLaneTapped = { mode = mode.toggleLane(it); zoom = container.resetViewport() },
+                        onTransformGesture = { z, x, y -> zoom = container.applyViewportGesture(z, x, y) })
+                    if (primary) FourLaneLensToggle(lensMode, { selected -> lensMode = selected; settings.setLensMode(selected) },
+                        Modifier.align(Alignment.TopEnd).padding(6.dp))
+                } else SinglePlaybackSurface(listOf(entry.file), hints, texture, callbacks, Modifier.fillMaxSize())
+                if (!firstFrame || error != null) Text(error ?: Utils.t("Loading video…", "载入画面…"),
+                    Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = 0.75f)).padding(8.dp), color = Color.White,
+                    style = MaterialTheme.typography.bodySmall)
+                overlay()
+            }
         }
     }
 }
@@ -327,6 +358,7 @@ private fun SessionReviewDetails(data: SessionReviewData, channel: String, posit
                             put("gpsPointCount", data.gps.size); put("vehicleSampleCount", data.vehicle.size)
                         })
                         put("maps", buildJsonObject { RoadMapDiagnostics.snapshot().forEach { (key, value) -> put(key, value) } })
+                        put("recovery", com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.collectRecoveryEvidence(context))
                     }.toString()
                 }.getOrNull() }
                 reportBusy = false

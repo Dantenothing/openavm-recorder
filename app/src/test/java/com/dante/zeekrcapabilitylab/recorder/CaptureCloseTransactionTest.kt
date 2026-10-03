@@ -79,6 +79,7 @@ class CaptureCloseTransactionTest {
     private class Harness(sequences: Set<Int> = emptySet(), terminal: Boolean = false,
                           lost: Boolean = false, session: Boolean = true, device: Boolean = true,
                           recording: Boolean = true, deviceFence: Boolean = false,
+                          mediaBudgetMs: Long = RecorderCloseTiming.DEFAULT_MEDIA_MS,
                           onFault: (String) -> Unit = {}, onComplete: (CaptureCloseResult) -> Unit = {}) {
         val control = Queue(); val native = Queue(); val io = Queue()
         val calls = mutableListOf<String>(); val faults = mutableListOf<String>()
@@ -100,7 +101,7 @@ class CaptureCloseTransactionTest {
             }
         }, session, device, recording, sequences, terminal, lost,
             { name, detail -> traces.add(name + ":" + detail) }, { faults.add(it); onFault(it) }, { result = it; onComplete(it) },
-            preferDeviceClose = deviceFence)
+            preferDeviceClose = deviceFence, mediaReleaseTimeoutMs = mediaBudgetMs)
         fun pump() {
             repeat(200) { if (!(control.one() or native.one() or io.one())) return }
             error("unbounded work")
@@ -118,6 +119,68 @@ class CaptureCloseTransactionTest {
         assertEquals(listOf("stopRepeating", "abort", "stop", "reset", "release", "sessionClose", "closeOutput"), h.calls)
         assertFalse(h.result!!.terminal)
     }
+    @Test fun continuousMainReleaseAtNineSecondsDoesNotInventPermanentCleanupFailure() {
+        val h = Harness(mediaBudgetMs = RecorderCloseTiming.mediaReleaseMs("SHARED_INPUT_CONTINUOUS_CODEC"))
+        assertFalse(h.tx.supervisesNativeCleanup)
+        h.start(); h.native.blocked = true; h.ready()
+        assertTrue(h.tx.supervisesNativeCleanup)
+        h.advance(9_000)
+        assertTrue(h.faults.isEmpty()); assertNull(h.result)
+        h.native.blocked = false; h.pump()
+        assertTrue(h.result!!.safeToContinue)
+        assertFalse(h.result!!.terminal)
+        assertTrue(h.result!!.errors.isEmpty())
+        assertFalse(h.tx.supervisesNativeCleanup)
+    }
+
+    @Test fun supportedContinuousBudgetsCoverTheirSuccessfulStopAndReleaseWaits() {
+        val product = RecorderCloseTiming.mediaReleaseMs("SHARED_INPUT_CONTINUOUS_CODEC")
+        val direct = RecorderCloseTiming.mediaReleaseMs("CONTINUOUS_CODEC")
+        assertTrue(product >= 5_500L + 4_000L + 10_000L + 2_000L)
+        assertTrue(direct >= 4_000L + 3_000L + 3_000L + 4_000L + 4_000L + 1_000L)
+        val h = Harness(mediaBudgetMs = direct)
+        h.start(); h.native.blocked = true; h.ready(); h.advance(19_000)
+        assertTrue(h.faults.isEmpty()); assertNull(h.result)
+        h.native.blocked = false; h.pump()
+        assertTrue(h.result!!.safeToContinue); assertFalse(h.result!!.terminal)
+    }
+
+    @Test fun actualMediaTimeoutKeepsOwnerUntilLateReleaseAndDeviceAcknowledgement() {
+        val h = Harness(mediaBudgetMs = RecorderCloseTiming.mediaReleaseMs("SHARED_INPUT_CONTINUOUS_CODEC"))
+        h.start(); h.native.blocked = true; h.ready(); h.advance(25_000)
+        assertEquals(listOf("RECORDER_RELEASE_TIMEOUT"), h.faults)
+        assertNull(h.result); assertFalse("release" in h.calls)
+        h.native.blocked = false; h.pump()
+        assertNull("Returning from device.close is not a close acknowledgement", h.result)
+        h.closed()
+        assertTrue(h.result!!.safeToContinue); assertTrue(h.result!!.terminal)
+        assertEquals(listOf("RECORDER_RELEASE_TIMEOUT"), h.faults)
+    }
+
+    @Test fun previewLegacyAndCameraCloseDeadlinesAreUnchanged() {
+        assertEquals(8_000L, RecorderCloseTiming.mediaReleaseMs(null))
+        assertEquals(8_000L, RecorderCloseTiming.mediaReleaseMs("MEDIA_RECORDER"))
+        assertEquals(8_000L, RecorderCloseTiming.mediaReleaseMs("CONTINUOUS_MEDIA_RECORDER"))
+        val legacy = Harness()
+        legacy.start(); legacy.native.blocked = true; legacy.ready(); legacy.advance(8_000)
+        assertEquals(listOf("RECORDER_RELEASE_TIMEOUT"), legacy.faults); assertNull(legacy.result)
+        val camera = Harness(deviceFence = true,
+            mediaBudgetMs = RecorderCloseTiming.mediaReleaseMs("SHARED_INPUT_CONTINUOUS_CODEC"))
+        camera.start(); camera.advance(3_000)
+        assertEquals(listOf("CAMERA_CLOSE_UNCONFIRMED"), camera.faults)
+        assertNull(camera.result); assertFalse("release" in camera.calls)
+    }
+
+    @Test fun outerWatchdogDefersOnlyToActiveContinuousTransactionAndNeverBeyondCeiling() {
+        val backend = "SHARED_INPUT_CONTINUOUS_CODEC"
+        assertEquals(35_000L, RecorderCloseTiming.releaseWatchdogDeferralMs(backend, 15_000, true))
+        assertEquals(1L, RecorderCloseTiming.releaseWatchdogDeferralMs(backend, 49_999, true))
+        assertEquals(0L, RecorderCloseTiming.releaseWatchdogDeferralMs(backend, 50_000, true))
+        assertEquals(0L, RecorderCloseTiming.releaseWatchdogDeferralMs(backend, 15_000, false))
+        assertEquals(0L, RecorderCloseTiming.releaseWatchdogDeferralMs("MEDIA_RECORDER", 15_000, true))
+        assertEquals(0L, RecorderCloseTiming.releaseWatchdogDeferralMs(null, 15_000, true))
+    }
+
     @Test fun oldProducerDeviceFenceCannotBeBypassedByCurrentSessionCallbacks() {
         val h = Harness(setOf(7), terminal = true, deviceFence = true)
         h.start()

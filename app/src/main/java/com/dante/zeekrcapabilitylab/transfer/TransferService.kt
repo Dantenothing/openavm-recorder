@@ -1,5 +1,6 @@
 package com.dante.zeekrcapabilitylab.transfer
 import com.dante.zeekrcapabilitylab.util.Utils
+import com.dante.zeekrcapabilitylab.diagnostic.TransferDiagnosticPhase
 
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -63,10 +64,12 @@ class TransferService : Service() {
         try {
             while (true) {
                 val task = TransferRepository.nextWork() ?: break
+                task.recordDiagnostic(TransferDiagnosticPhase.TASK_SELECTED)
                 if (task.state == TransferTaskState.CANCEL_PENDING && task.uploadId == null) {
                     TransferRepository.finish(task, TransferTaskState.CANCELLED)
                     continue
                 }
+                task.recordDiagnostic(TransferDiagnosticPhase.CHECKING_CONNECTION)
                 val endpoint = try { PhoneConnectionStore.requireConnected() } catch (t: Exception) {
                     val failure = phoneFailure(t)
                     val message = phoneSecurityMessage(failure.error)
@@ -175,6 +178,7 @@ class TransferService : Service() {
     private fun upload(initial: TransferTask, endpoint: PhoneEndpoint): QueueStep {
         var task = TransferRepository.get(initial.id) ?: return QueueStep.CONTINUE
         if (stopped(task.id)) return QueueStep.CONTINUE
+        task.recordDiagnostic(TransferDiagnosticPhase.CHECKING_RECEIVER)
         val raster = io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(task.sidecarJson)
         val sessionFormatRequired = io.github.dantenothing.avmtransfer.protocol.RecordingSessionCompatibility.required(task.sidecarJson)
         val health = if (task.includeDriveData || sessionFormatRequired || raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
@@ -200,6 +204,7 @@ class TransferService : Service() {
             return QueueStep.CONTINUE
         }
         if (task.uploadId != null) {
+            task.recordDiagnostic(TransferDiagnosticPhase.CHECKING_REMOTE_STATUS)
             val remote = TransferHttp.status(task.id, endpoint, task.uploadId!!)
             if (remote.status == "COMPLETED") {
                 TransferRepository.finish(task, TransferTaskState.COMPLETED)
@@ -207,6 +212,7 @@ class TransferService : Service() {
             }
         }
         if (stopped(task.id)) return QueueStep.CONTINUE
+        task.recordDiagnostic(TransferDiagnosticPhase.READING_SOURCE)
         val file = when (task.sourceKind) {
             TransferSourceKind.MANAGED_RECORDING -> File(task.filePath).takeIf {
                 it.isFile && it.length() == task.sizeBytes
@@ -242,11 +248,13 @@ class TransferService : Service() {
         if (task.sha256 == null) {
             task = task.copy(state = TransferTaskState.PREPARING, reason = null)
             TransferRepository.update(task)
+            task.recordDiagnostic(TransferDiagnosticPhase.HASHING)
             task = task.copy(sha256 = sha256(file, task.id))
             TransferRepository.update(task)
         }
         if (stopped(task.id)) return QueueStep.CONTINUE
         if (task.includeDriveData) {
+            task.recordDiagnostic(TransferDiagnosticPhase.PREPARING_DRIVE_DATA)
             try {
                 if (task.driveData == null) {
                     val descriptor = DriveAttachmentSnapshot.prepare(applicationContext, task)
@@ -265,6 +273,7 @@ class TransferService : Service() {
         }
         if (stopped(task.id)) return QueueStep.CONTINUE
         if (task.uploadId == null) {
+            task.recordDiagnostic(TransferDiagnosticPhase.CREATING_UPLOAD)
             TransferHttp.create(task.id, endpoint, UploadCreateRequest(
                 clientTransferId = task.id,
                 fileName = task.fileName,
@@ -278,6 +287,7 @@ class TransferService : Service() {
             task = TransferRepository.get(task.id) ?: return QueueStep.CONTINUE
         }
         if (stopped(task.id)) return QueueStep.CONTINUE
+        task.recordDiagnostic(TransferDiagnosticPhase.CHECKING_REMOTE_STATUS)
         val status = TransferHttp.status(task.id, endpoint, task.uploadId!!)
         if (status.status == "COMPLETED") {
             TransferRepository.finish(task, TransferTaskState.COMPLETED)
@@ -286,6 +296,7 @@ class TransferService : Service() {
         val received = status.receivedChunks.toSet()
         if (stopped(task.id)) return QueueStep.CONTINUE
         if (task.driveData != null && !status.driveDataReceived) {
+            task.recordDiagnostic(TransferDiagnosticPhase.SENDING_DRIVE_DATA)
             TransferHttp.driveData(task.id, endpoint, task.uploadId!!, DriveAttachmentSnapshot.read(applicationContext, task))
         }
         for (index in 0 until task.totalChunks) {

@@ -1,4 +1,5 @@
 package com.dante.zeekrcapabilitylab.transfer
+import com.dante.zeekrcapabilitylab.diagnostic.TransferDiagnosticPhase
 
 import android.content.Context
 import io.github.dantenothing.avmtransfer.protocol.TransferTaskState
@@ -93,13 +94,16 @@ object TransferRepository {
         filesRoot = appContext.applicationContext.filesDir
         PhoneConnectionStore.init(appContext)
         _connection.value = PhoneConnectionState(endpoint = PhoneConnectionStore.saved(), connected = false, message = "Tap Check connection")
-        val loaded = load().map { task ->
+        val previousTasks = load()
+        val loaded = previousTasks.map { task ->
             if (task.state in setOf(TransferTaskState.PREPARING, TransferTaskState.UPLOADING, TransferTaskState.COMMITTING)) {
                 task.copy(state = TransferTaskState.WAITING_RETRY, reason = "App restarted", updatedAt = System.currentTimeMillis())
             } else task
         }
         _tasks.value = loaded
         saveLocked()
+        previousTasks.filter { it.state in setOf(TransferTaskState.PREPARING, TransferTaskState.UPLOADING, TransferTaskState.COMMITTING) }
+            .takeLast(16).forEach { it.recordDiagnostic(TransferDiagnosticPhase.RESTORED_WAITING_RETRY) }
         reconcileUploadPins()
         reconnectInBackground()
     }
@@ -523,8 +527,12 @@ object TransferRepository {
     }
 
     private fun updateLocked(task: TransferTask) {
+        val previous = _tasks.value.firstOrNull { it.id == task.id }
         _tasks.value = _tasks.value.map { if (it.id == task.id) task else it }
         saveLocked()
+        // A retry may end in the same WAITING_RETRY state after a new connection attempt.
+        // Preserve that observed outcome, while repeated upload progress remains silent.
+        previous?.let { transferDiagnosticState(it.state, task.state) }?.let(task::recordDiagnostic)
     }
 
     private fun load(): List<TransferTask> = try {

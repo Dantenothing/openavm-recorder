@@ -38,11 +38,13 @@ class CaptureCloseTransaction(
     private val unconfirmed: (String) -> Unit,
     private val completed: (CaptureCloseResult) -> Unit,
     private var preferDeviceClose: Boolean = false,
+    private val mediaReleaseTimeoutMs: Long = RecorderCloseTiming.DEFAULT_MEDIA_MS,
 ) {
+    init { require(mediaReleaseTimeoutMs in RecorderCloseTiming.DEFAULT_MEDIA_MS..25_000L) }
     private val outstanding = sequences.toMutableSet()
     @Volatile private var lost = lost
     private var terminal = terminal
-    private var stage = "NEW"
+    @Volatile private var stage = "NEW"
     private var timer: (() -> Unit)? = null
     private var ready = false
     private var sessionClosedAck = false
@@ -57,8 +59,11 @@ class CaptureCloseTransaction(
     private var outputDone = false
     private var outputClosed = false
     private var reportedFailure = false
-    private var finished = false
+    @Volatile private var finished = false
     private val errors = linkedMapOf<String, String>()
+
+    /** A finished transaction has no timer; its owner's final worker/IO barrier still needs a watchdog. */
+    val supervisesNativeCleanup: Boolean get() = stage != "NEW" && !finished
 
     fun begin() = submit {
         if (stage != "NEW") return@submit
@@ -145,7 +150,8 @@ class CaptureCloseTransaction(
         evidence = value
         trace("PRODUCER_CONFIRMED", value)
         mediaStarted = true
-        phase("RELEASING_RECORDER", 8_000) { fail("RECORDER_RELEASE_TIMEOUT") }
+        trace("MEDIA_RELEASE_BUDGET_MS", mediaReleaseTimeoutMs.toString())
+        phase("RELEASING_RECORDER", mediaReleaseTimeoutMs) { fail("RECORDER_RELEASE_TIMEOUT") }
         work(native, "RECORDER", {
             linkedMapOf<String, String>().also {
                 if (wasRecording && !lost) attempt(it, "stop") { resources.stopRecorder() }

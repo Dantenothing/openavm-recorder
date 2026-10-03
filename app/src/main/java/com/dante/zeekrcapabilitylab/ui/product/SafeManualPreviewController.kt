@@ -187,22 +187,23 @@ class SafeManualPreviewController(context: Context) {
         }
     }
 
-    suspend fun stopAndAwait(): Boolean {
+    suspend fun stopAndAwait(timeoutMs: Long = 8_000): Boolean {
         requested = false
         val token = generation.incrementAndGet()
         val handler = cameraHandler
         return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { generation.compareAndSet(token, token + 1) }
             if (handler != null && !handler.post { closeCameraOnWorker() }) {
                 if (continuation.isActive) continuation.resume(false)
                 return@suspendCancellableCoroutine
             }
             // Do not resume on close() return: the admission ledger requires onClosed and output release.
-            CaptureCleanupRuntime.awaitIdle(8_000) { idle ->
-                if (generation.get() == token) {
+            CaptureCleanupRuntime.awaitIdle(timeoutMs, cancelled = { !continuation.isActive }) { idle ->
+                if (continuation.isActive && generation.get() == token) {
                     if (idle) _state.value = ManualPreviewState()
                     else fail(Utils.t("Camera release is unconfirmed. Recording is blocked; copy diagnostics.", "相机释放尚未确认，暂不能开始录像；请复制诊断"))
                 }
-                if (continuation.isActive) continuation.resume(idle)
+                if (continuation.isActive) continuation.resume(idle && generation.get() == token)
             }
         }
     }

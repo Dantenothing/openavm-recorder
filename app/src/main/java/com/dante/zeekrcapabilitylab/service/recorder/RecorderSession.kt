@@ -207,6 +207,7 @@ class RecorderSession(
     @Volatile private var closeTransaction: CaptureCloseTransaction? = null
     @Volatile private var cleanupUnconfirmed = false
     @Volatile private var releaseRequested = false
+    private var releaseWatchdogScheduled = false
     private var disposalStarted = false
     @Volatile private var disposalFinished = false
     private var releaseCompletion: (() -> Unit)? = null
@@ -1280,18 +1281,32 @@ class RecorderSession(
         val releaseSessionId = state.recordingSessionId
         statePublication.terminate("SERVICE_RELEASE", "RELEASE_REQUEST", expectedSessionId = releaseSessionId)
         if (onComplete != null) releaseCompletion = onComplete
-        // This deadline is independent of the camera worker, including a vendor call stuck in native code.
-        CaptureCleanupRuntime.handler.postDelayed({
-            if (!disposalFinished && statePublication.isCurrent(releaseSessionId)) {
-                cleanupUnconfirmed = true
-                EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CLOSE_UNCONFIRMED", payload = mapOf(
-                    "recordingSessionId" to (releaseSessionId ?: "NONE"), "source" to "SERVICE_RELEASE",
-                    "errorCode" to "SESSION_RELEASE_UNCONFIRMED"))
-                statePublication.unconfirmed("SESSION_RELEASE_UNCONFIRMED", "Worker/IO cleanup deadline", releaseSessionId)
-                CaptureCleanupRuntime.trace("release-" + System.identityHashCode(this),
-                    "UNCONFIRMED", "Worker/IO cleanup did not settle within 15 seconds")
-            }
-        }, 15_000)
+        val scheduleWatchdog = synchronized(this) {
+            if (releaseWatchdogScheduled) false else { releaseWatchdogScheduled = true; true }
+        }
+        if (scheduleWatchdog) {
+            val requestedAt = SystemClock.elapsedRealtime()
+            val backend = recordingEncoder?.name ?: state.recordingBackend
+            // Independent of a stuck native worker. An already-running continuous-encoder
+            // transaction has its own bounded camera/media/output timers; do not prematurely
+            // override those at 15s. One absolute ceiling also covers a lost completion callback.
+            CaptureCleanupRuntime.handler.postDelayed(object : Runnable {
+                override fun run() {
+                    if (disposalFinished || !statePublication.isCurrent(releaseSessionId) || cleanupUnconfirmed) return
+                    val elapsed = SystemClock.elapsedRealtime() - requestedAt
+                    val deferMs = RecorderCloseTiming.releaseWatchdogDeferralMs(backend, elapsed,
+                        closeTransaction?.supervisesNativeCleanup == true)
+                    if (deferMs > 0) { CaptureCleanupRuntime.handler.postDelayed(this, deferMs); return }
+                    cleanupUnconfirmed = true
+                    EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CLOSE_UNCONFIRMED", payload = mapOf(
+                        "recordingSessionId" to (releaseSessionId ?: "NONE"), "source" to "SERVICE_RELEASE",
+                        "errorCode" to "SESSION_RELEASE_UNCONFIRMED"))
+                    statePublication.unconfirmed("SESSION_RELEASE_UNCONFIRMED", "Worker/IO cleanup deadline", releaseSessionId)
+                    CaptureCleanupRuntime.trace("release-" + System.identityHashCode(this),
+                        "UNCONFIRMED", "Worker/IO cleanup did not settle within $elapsed ms")
+                }
+            }, RecorderCloseTiming.INITIAL_RELEASE_WATCHDOG_MS)
+        }
         postCamera {
             teardownOnCameraThread()
             maybeFinishDisposal()
@@ -3430,6 +3445,7 @@ class RecorderSession(
             sequences = captureLedger.pending(session),
             terminal = terminal || otherProducerInFlight, lost = outputLost,
             preferDeviceClose = RecorderClosePolicy.needsDeviceFence(reason, otherProducerInFlight),
+            mediaReleaseTimeoutMs = RecorderCloseTiming.mediaReleaseMs(recorder?.name),
             trace = { step, detail ->
                 CaptureCleanupRuntime.trace(traceId, step, detail)
                 val edge = when {

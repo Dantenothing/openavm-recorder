@@ -60,6 +60,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dante.zeekrcapabilitylab.product.ProductHomeCameraPolicy
+import com.dante.zeekrcapabilitylab.product.HomePreviewRecoveryPolicy
 import com.dante.zeekrcapabilitylab.product.SurroundPreviewLifecyclePolicy
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
 import com.dante.zeekrcapabilitylab.product.SettingsStore
@@ -71,6 +72,7 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecordingStorageKind
 import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommandPolicy
+import com.dante.zeekrcapabilitylab.service.recorder.CaptureCleanupRuntime
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
@@ -111,6 +113,7 @@ fun RecordScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recorderState by CameraRecordingService.state.collectAsState()
+    val cleanupOwners by CaptureCleanupRuntime.pendingOwners.collectAsState()
     val modeSwitchProgress by CameraRecordingService.modeSwitchProgress.collectAsState()
     val auxiliary by com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.collectAsState()
     val floatingMirror by com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.state.collectAsState()
@@ -144,7 +147,9 @@ fun RecordScreen() {
     }
     var confirmStop by remember { mutableStateOf(false) }
     var configState by remember { mutableStateOf<RecordConfigState>(RecordConfigState.Idle) }
+    var awaitingRecorderStart by remember { mutableStateOf(false) }
     var previewEnabled by remember { mutableStateOf(false) }
+    var idlePreviewRequest by remember { mutableStateOf<SessionSourceSnapshot?>(null) }
     var sourceHandoffPending by remember { mutableStateOf(false) }
     var sourceHandoffBlocked by remember { mutableStateOf(false) }
     var sourceHandoffJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -206,6 +211,18 @@ fun RecordScreen() {
     val serviceRunning = CameraRecordingService.isRunning()
     val latestRecorderState by rememberUpdatedState(recorderState)
     val latestAppForeground by rememberUpdatedState(appForeground)
+    val previewAdmission by rememberUpdatedState(HomePreviewRecoveryPolicy.State(
+        foreground = appForeground,
+        permission = cameraPermission,
+        sourceReady = resolvedIdleSource?.sourceRole == selectedSourceRole,
+        recorderActive = recordingActive,
+        recorderServiceRunning = serviceRunning,
+        otherOwnerActive = auxiliary.active || floatingMirror.active,
+        handoffPending = sourceHandoffPending || sourceHandoffBlocked || awaitingRecorderStart,
+        cleanupPending = recorderState.cleanupPending,
+        cleanupUnconfirmed = recorderState.cleanupUnconfirmed,
+        cleanupOwners = cleanupOwners,
+    ))
 
     val attachReplacementPreview: () -> Unit = {
         val current = latestRecorderState
@@ -232,8 +249,9 @@ fun RecordScreen() {
                 if (decision.disableRecorderPreview && !latestRecorderState.mirrorPreviewManaged) {
                     CameraRecordingService.setPreviewOutputEnabled(context, false)
                 }
-                if (decision.stopIdlePreview) previewController.stopAndAwait()
+                if (decision.stopIdlePreview) previewController.stopPreview()
                 previewController.clearRecorderPreviewHandoff()
+                idlePreviewRequest = null
                 previewEnabled = false
                 surroundPreviewGeneration = decision.nextGeneration
                 EventLogger.logEvent(
@@ -271,9 +289,28 @@ fun RecordScreen() {
         }
     }
 
+    LaunchedEffect(awaitingRecorderStart) {
+        if (!awaitingRecorderStart) return@LaunchedEffect
+        // FGS creation is asynchronous. A cleanup=0 emission must not admit
+        // home preview between the explicit start command and service creation.
+        val acknowledged = withTimeoutOrNull(CONFIG_TIMEOUT_MS) {
+            while (!CameraRecordingService.isRunning() &&
+                !RecorderCommandPolicy.isActive(CameraRecordingService.state.value.status)) kotlinx.coroutines.delay(50)
+            true
+        } == true
+        awaitingRecorderStart = false
+        if (!acknowledged) configState = RecordConfigState.Failed(
+            Utils.t("Recording start is not confirmed. Check its status before retrying.", "尚未确认录像启动，请检查状态后重试。"))
+    }
+
     LaunchedEffect(
         cameraPermission,
         recordingActive,
+        recorderState.status,
+        recorderState.cleanupPending,
+        recorderState.cleanupUnconfirmed,
+        serviceRunning,
+        cleanupOwners,
         resolvedIdleSource,
         recorderState.previewRequested,
         recorderState.previewFallbackUsed,
@@ -283,8 +320,13 @@ fun RecordScreen() {
         floatingMirror.active,
         sourceHandoffPending,
         sourceHandoffBlocked,
+        awaitingRecorderStart,
     ) {
+        // A manual start owns its own close/config/surface handoff. Cleanup-flow
+        // recomposition must not replace that intent with an idle-preview request.
+        if (configState is RecordConfigState.Loading || awaitingRecorderStart) return@LaunchedEffect
         if (sourceHandoffPending || sourceHandoffBlocked) {
+            idlePreviewRequest = null
             previewEnabled = false
             return@LaunchedEffect
         }
@@ -304,37 +346,79 @@ fun RecordScreen() {
             if (accepted) {
                 // Arm visible controls while the Activity is foreground. The service's
                 // handoff gate still waits for this producer's real close acknowledgement.
-                previewController.stopAndAwait()
+                idlePreviewRequest = null
+                previewController.stopPreview()
                 return@LaunchedEffect
             }
         }
+        val admissionDecision = HomePreviewRecoveryPolicy.decide(previewAdmission.copy(
+            ownPreviewRequested = idlePreviewRequest != null && idlePreviewRequest == resolvedIdleSource))
         when {
-            auxiliary.active || floatingMirror.active -> { previewEnabled = false; previewController.stopAndAwait() }
-            !appForeground && activeSourceRole == RecordingSourceRole.SURROUND -> {
+            auxiliary.active || floatingMirror.active -> {
+                idlePreviewRequest = null
                 previewEnabled = false
-                if (!recordingActive) previewController.stopAndAwait()
+                previewController.stopPreview()
+            }
+            !appForeground -> {
+                idlePreviewRequest = null
+                previewEnabled = false
+                if (!recordingActive) previewController.stopPreview()
             }
             recordingActive -> {
+                idlePreviewRequest = null
                 val recorderPreviewVisible = recorderState.previewRequested &&
                     !recorderState.previewFallbackUsed
                 previewEnabled = recorderPreviewVisible
                 if (!recorderPreviewVisible) previewController.clearRecorderPreviewHandoff()
             }
-            cameraPermission && !recordingActive &&
-                resolvedIdleSource?.sourceRole == selectedSourceRole &&
+            admissionDecision == HomePreviewRecoveryPolicy.Decision.KEEP_OWN_PREVIEW -> Unit
+            admissionDecision != HomePreviewRecoveryPolicy.Decision.STOP_OWN_PREVIEW &&
                 ProductHomeCameraPolicy.shouldAutoStartPreview(0L) &&
                 ProductHomeCameraPolicy.cameraAccessAllowed(
                     ProductHomeCameraPolicy.TRIGGER_AUTO_PREVIEW,
                 ) -> {
                 previewController.clearRecorderPreviewHandoff()
-                if (previewController.stopAndAwait()) {
+                val waitStarted = android.os.SystemClock.elapsedRealtime()
+                val released = previewController.stopAndAwait(HomePreviewRecoveryPolicy.RELEASE_WAIT_MS)
+                // The waiter may outlive a recorder stop, a source choice or a
+                // permission change. Only current facts authorize a new preview.
+                val currentRecorder = CameraRecordingService.state.value
+                val currentAdmission = previewAdmission.copy(
+                    foreground = ZeekrApp.isForeground.value,
+                    permission = context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
+                    sourceReady = resolvedIdleSource?.sourceRole == selectedSourceRole,
+                    recorderActive = RecorderCommandPolicy.isActive(currentRecorder.status),
+                    recorderServiceRunning = CameraRecordingService.isRunning(),
+                    otherOwnerActive = com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.active ||
+                        com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.active(),
+                    handoffPending = sourceHandoffPending || sourceHandoffBlocked || configState is RecordConfigState.Loading ||
+                        awaitingRecorderStart,
+                    cleanupPending = currentRecorder.cleanupPending,
+                    cleanupUnconfirmed = currentRecorder.cleanupUnconfirmed,
+                    cleanupOwners = CaptureCleanupRuntime.pendingOwners.value,
+                    nativeIdle = com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock.normalIdle(),
+                )
+                val waitedMs = android.os.SystemClock.elapsedRealtime() - waitStarted
+                val decision = HomePreviewRecoveryPolicy.decide(currentAdmission, waitedMs)
+                if (released && decision == HomePreviewRecoveryPolicy.Decision.RESTORE) {
+                    idlePreviewRequest = resolvedIdleSource
                     previewEnabled = true
                     previewController.startPreview(resolvedIdleSource!!)
-                } else previewEnabled = false
+                    EventLogger.logEvent(Categories.SYSTEM, "PRODUCT_HOME_PREVIEW_RESTORED",
+                        payload = mapOf("reason" to "RELEASE_CONFIRMED", "target" to "PREVIEW",
+                            "waitedElapsedMs" to waitedMs.toString()))
+                } else {
+                    previewEnabled = false
+                    if (!released && decision != HomePreviewRecoveryPolicy.Decision.STOP_OWN_PREVIEW)
+                        EventLogger.logEvent(Categories.SYSTEM, "PRODUCT_HOME_PREVIEW_RELEASE_TIMEOUT",
+                            payload = mapOf("reason" to "RELEASE_UNCONFIRMED", "target" to "PREVIEW",
+                                "waitedElapsedMs" to waitedMs.toString()))
+                }
             }
             !recordingActive -> {
+                idlePreviewRequest = null
                 previewEnabled = false
-                previewController.stopAndAwait()
+                previewController.stopPreview()
             }
         }
     }
@@ -361,8 +445,9 @@ fun RecordScreen() {
                 RecorderCommandPolicy.isActive(CameraRecordingService.state.value.status), CameraRecordingService.isRunning(),
                 com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value,
                 com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.active(), floatingMirror.busy,
-                sourceHandoffPending || modeSwitchProgress != null || configState is RecordConfigState.Loading)) return@select
+                sourceHandoffPending || modeSwitchProgress != null || configState is RecordConfigState.Loading || awaitingRecorderStart)) return@select
         if (role == activeSourceRole && !sourceHandoffBlocked) return@select
+        idlePreviewRequest = null
         sourceHandoffBlocked = false
         selectedSourceRole = role
         configState = RecordConfigState.Idle
@@ -428,7 +513,7 @@ fun RecordScreen() {
     val readyConfig = (configState as? RecordConfigState.Ready)?.config
     val canStart = RecorderCommandPolicy.canStart(recorderState.status, serviceRunning) &&
         (!auxiliary.active || independentMirrorActive && floatingMirror.active) && !floatingMirror.busy && modeSwitchProgress == null &&
-        configState !is RecordConfigState.Loading && !sourceHandoffPending
+        configState !is RecordConfigState.Loading && !sourceHandoffPending && !awaitingRecorderStart
     val canStop = RecorderCommandPolicy.canStop(recorderState.status, serviceRunning)
     val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning) &&
         activeRecordingMode == RecordingMode.NORMAL && recorderState.status != RecorderStatus.AWAKE_IDLE
@@ -488,13 +573,14 @@ fun RecordScreen() {
             !ProductHomeCameraPolicy.cameraAccessAllowed(
                 trigger,
             ) -> Unit
-            configState is RecordConfigState.Loading -> Unit
+            configState is RecordConfigState.Loading || awaitingRecorderStart -> Unit
             floatingMirror.active -> {
                 com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.startRecording()
             }
             else -> {
                 val requestedMode = selectedRecordingMode
                 val requestedMultiplier = selectedTimeLapseMultiplier
+                idlePreviewRequest = null
                 configState = RecordConfigState.Loading
                 scope.launch {
                     if (!previewController.stopAndAwait()) {
@@ -540,7 +626,16 @@ fun RecordScreen() {
                             null
                         }
                         previewEnabled = recorderPreviewSurface != null
-                        CameraRecordingService.start(context, ready.config.copy(mirrorPreviewEnabled = mirror), recorderPreviewSurface)
+                        awaitingRecorderStart = true
+                        try {
+                            CameraRecordingService.start(context, ready.config.copy(mirrorPreviewEnabled = mirror), recorderPreviewSurface)
+                        } catch (failure: Exception) {
+                            awaitingRecorderStart = false
+                            runCatching { recorderPreviewSurface?.release() }
+                            previewController.clearRecorderPreviewHandoff()
+                            configState = RecordConfigState.Failed(Utils.t("Recording did not start. Please retry.", "录像未启动，请重试。"))
+                            EventLogger.markError(Categories.SYSTEM, "RECORDER_START_DISPATCH_FAILED", "START_REJECTED", failure)
+                        }
                     } else if (cameraPermission) {
                         resolvedIdleSource?.let { source ->
                             previewEnabled = true
@@ -653,7 +748,7 @@ fun RecordScreen() {
                 selected = activeSourceRole,
                 enabled = com.dante.zeekrcapabilitylab.product.HomePreviewSelection.canSelect(
                     recordingActive, serviceRunning, auxiliary, floatingMirror.active, floatingMirror.busy,
-                    sourceHandoffPending || modeSwitchProgress != null || configState is RecordConfigState.Loading),
+                    sourceHandoffPending || modeSwitchProgress != null || configState is RecordConfigState.Loading || awaitingRecorderStart),
                 onSelect = { role ->
                     if (
                         role != RecordingSourceRole.SURROUND &&
@@ -695,7 +790,7 @@ fun RecordScreen() {
             ) {
                 Text(
                     when {
-                        configState is RecordConfigState.Loading -> Utils.t("Preparing…", "准备中…")
+                        configState is RecordConfigState.Loading || awaitingRecorderStart -> Utils.t("Preparing…", "准备中…")
                         recordingActive -> Utils.t("Recording", "录像中")
                         activeRecordingMode == RecordingMode.TIME_LAPSE ->
                             Utils.t("Start time-lapse", "开始延时摄影")

@@ -52,6 +52,7 @@ class ZeekrApp : Application() {
 
         EventLogger.init(this)
         SettingsStore.init(this)
+        com.dante.zeekrcapabilitylab.diagnostic.BootTransferDiagnostics.init(this)
         TransferRepository.init(this)
         PhoneSoundRelay.init(this)
         UsbExportRepository.init(this)

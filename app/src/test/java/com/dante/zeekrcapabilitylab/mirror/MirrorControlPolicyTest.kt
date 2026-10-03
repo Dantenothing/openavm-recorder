@@ -4,6 +4,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MirrorControlPolicyTest {
+    @Test fun savingBudgetAppliesOnlyToStoppedRecordingPreviewAndDoesNotDelayFastClose() {
+        val gate = MirrorHandoffGate(stoppedPreviewTimeoutMs = 50_000)
+        val preview = gate.begin(MirrorHandoffGate.Target.PREVIEW, 0, "saving-session")!!
+        assertEquals(50_000L, preview.deadlineMs)
+        assertEquals(MirrorHandoffGate.Decision.WAIT, poll(gate, preview.token, 21_000, nativeIdle = false))
+        assertEquals(MirrorHandoffGate.Decision.START, poll(gate, preview.token, 21_001))
+        val idle = gate.begin(MirrorHandoffGate.Target.PREVIEW, 30_000)!!
+        assertEquals(50_000L, idle.deadlineMs)
+        gate.cancel()
+        val transfer = gate.begin(MirrorHandoffGate.Target.RECORD, 30_000, "old-recording")!!
+        assertEquals(50_000L, transfer.deadlineMs)
+        gate.cancel()
+        val fast = gate.begin(MirrorHandoffGate.Target.CABIN, 60_000, "fast-stop")!!
+        assertEquals(MirrorHandoffGate.Decision.START, poll(gate, fast.token, 60_001))
+    }
+
+    @Test fun savingBudgetStillExpiresWithoutNativeReleaseProof() {
+        val gate = MirrorHandoffGate(stoppedPreviewTimeoutMs = 50_000)
+        val preview = gate.begin(MirrorHandoffGate.Target.PREVIEW, 0, "saving-session")!!
+        assertEquals(MirrorHandoffGate.Decision.WAIT, poll(gate, preview.token, 49_999, nativeIdle = false))
+        assertEquals(MirrorHandoffGate.Decision.CANCEL, poll(gate, preview.token, 50_000, nativeIdle = false))
+        assertNull(gate.pending)
+    }
+
     @Test fun cabinWaitsForEveryOwnerAndConfirmedRecordingStopJustLikeRecord() {
         for (held in 0..5) {
             val gate = MirrorHandoffGate(); val request = gate.begin(MirrorHandoffGate.Target.CABIN, 0, "surround")!!

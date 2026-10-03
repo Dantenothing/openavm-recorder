@@ -41,7 +41,9 @@ class FloatingMirrorService : Service() {
     private var screenWasUnavailable = false
     private var cycleReturnMode = MirrorReturnMode.LOGO
     private var suspendedRecordingSession: String? = null
-    private val gate = MirrorHandoffGate()
+    // Continuous recording may drain GL, codec and the file writer before camera reuse.
+    // This only bounds an explicit stop-to-preview handoff; idle previews still use 20 s.
+    private val gate = MirrorHandoffGate(stoppedPreviewTimeoutMs = RecorderCloseTiming.CONTINUOUS_RELEASE_CEILING_MS)
     private var fallback: MirrorOverlayWindow? = null
     private var pendingConfig: RecorderConfig? = null
     private var profileWaiting = false
@@ -645,8 +647,10 @@ class FloatingMirrorService : Service() {
             mutable.value = FloatingMirrorState(active = true)
             owner.idleChoice = RecordingModeChoice(current.recordingMode, current.timeLapseMultiplier)
             selection.value = owner.idleChoice
-            if (owner.preferences.resident && owner.preferences.videoVisible && owner.usable() && current.status == RecorderStatus.RECORDING &&
-                current.lastError == null && !current.cleanupUnconfirmed && current.recordingSessionId != null) {
+            if (owner.preferences.resident && owner.preferences.videoVisible && owner.usable() &&
+                current.status in setOf(RecorderStatus.RECORDING, RecorderStatus.STARTING, RecorderStatus.FINALIZING,
+                    RecorderStatus.WAITING_CAMERA, RecorderStatus.RESUMING, RecorderStatus.CAMERA_UNAVAILABLE, RecorderStatus.ERROR) &&
+                current.recordingSessionId != null) {
                 owner.request(owner.previewTarget(), stoppedSession = current.recordingSessionId)
             }
         }
@@ -654,7 +658,6 @@ class FloatingMirrorService : Service() {
             val owner = instance ?: return
             if (owner.sleep.suspended) { owner.main.post { if (!owner.ending) owner.observeSleep() }; return }
             if (!owner.preferences.resident && owner.gate.pending == null) { owner.end(); return }
-            if (current.lastError != null || current.cleanupUnconfirmed) { owner.fail("RECORDING_STOP_NOT_CONFIRMED"); return }
             val request = owner.gate.pending ?: run {
                 // Automatic completion (or a cancelled start) is not a new preview command.
                 // Keep usable controls instead of indefinitely claiming a preview is preparing.
@@ -664,8 +667,12 @@ class FloatingMirrorService : Service() {
                 return
             }
             if (request.stoppedSession != null) {
-                if (current.recordingSessionId == request.stoppedSession && current.lastError == null &&
-                    !current.cleanupUnconfirmed && current.status == RecorderStatus.STOPPED) owner.stopConfirmed = true
+                if (MirrorStoppedRecordingPolicy.stopCallbackAcknowledged(request, current)) {
+                    owner.stopConfirmed = true
+                    // A service may stop before its close callbacks. Only advance()'s
+                    // global resource gates can authorize opening the next camera.
+                    owner.log("RECORDING_STOP_ACKNOWLEDGED", request)
+                }
                 else owner.fail("RECORDING_STOP_NOT_CONFIRMED")
             }
         }

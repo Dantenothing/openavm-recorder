@@ -9,7 +9,10 @@ internal object ProcessExitReport {
     fun symbol(value: String?, max: Int = 120): String? = value?.takeIf { it.length <= max && symbol.matches(it) }
     private val eventNames = setOf("UNCAUGHT_EXCEPTION", "PREVIOUS_CRASH", "PROCESS_STARTED",
         "RECORDER_ENCODER_SELECTED", "RECORDER_SEGMENT_START", "RECORDER_CONTINUOUS_FAILED",
-        "RECORDER_STOP", "RECORDER_MODE_SWITCH_REQUESTED", "RECORDER_SEGMENT_FINALIZE_BEGIN")
+        "RECORDER_STOP", "RECORDER_MODE_SWITCH_REQUESTED", "RECORDER_SEGMENT_FINALIZE_BEGIN",
+        "RECORDER_MIRROR_HANDOFF_STOPPED", "RECORDER_MIRROR_HANDOFF_RECORDING_STOP_CONFIRMED",
+        "RECORDER_MIRROR_HANDOFF_RECORDING_STOP_ACKNOWLEDGED",
+        "PRODUCT_HOME_PREVIEW_RESTORED", "PRODUCT_HOME_PREVIEW_RELEASE_TIMEOUT")
     fun relevant(event: ProbeEvent): Boolean = event.eventName in eventNames ||
         event.eventName.startsWith("RECORDER_NATIVE_")
 
@@ -23,7 +26,7 @@ internal object ProcessExitReport {
                     // Free-text error messages can contain media paths, URLs and tokens. Export only an enum prefix.
                     put("errorCode", symbol(event.errorMessage?.takeWhile { it.isLetterOrDigit() || it == '_' }?.take(80)))
                     put("facts", buildJsonObject {
-                        listOf("reason", "route", "segment", "switches").forEach { key ->
+                        listOf("reason", "route", "segment", "switches", "target", "waitedElapsedMs").forEach { key ->
                             event.payload[key]?.takeIf { it.length <= 80 && it.all { c -> c.isLetterOrDigit() || c in "_.-" } }
                                 ?.let { put(key, it) }
                         }

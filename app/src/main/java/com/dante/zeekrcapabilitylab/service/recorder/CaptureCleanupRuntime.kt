@@ -102,10 +102,11 @@ object CaptureCleanupRuntime {
         put("transactions", buildJsonObject { history.forEach { (id, steps) -> put(id, JsonArray(steps.toList())) } })
     }
     /** Bounded waiter; timeout never frees an owner or grants camera access. */
-    fun awaitIdle(timeoutMs: Long = 15_000, done: (Boolean) -> Unit) {
+    fun awaitIdle(timeoutMs: Long = 15_000, cancelled: () -> Boolean = { false }, done: (Boolean) -> Unit) {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         handler.post(object : Runnable {
             override fun run() {
+                if (cancelled()) return
                 if (CanaryCameraInterlock.normalIdle()) done(true)
                 else if (SystemClock.elapsedRealtime() >= deadline) done(false)
                 else handler.postDelayed(this, 50)

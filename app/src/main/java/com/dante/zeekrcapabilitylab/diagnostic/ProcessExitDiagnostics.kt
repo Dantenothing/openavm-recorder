@@ -28,7 +28,7 @@ internal object ProcessExitDiagnostics {
         catch (error: Throwable) { file.failWrite(out); throw error }
     }.isSuccess
 
-    fun collect(context: Context): JsonObject {
+    fun collect(context: Context, includeNativeTraces: Boolean = true): JsonObject {
         val history = recentHistory(File(context.filesDir, "events"))
         var systemStatus = "UNAVAILABLE_API_${Build.VERSION.SDK_INT}"
         val exits = if (Build.VERSION.SDK_INT >= 30) runCatching {
@@ -41,7 +41,7 @@ internal object ProcessExitDiagnostics {
                     put("reason", reasonName(exit.reason)); put("reasonNumber", exit.reason)
                     put("status", exit.status); put("importance", exit.importance)
                     put("pssKiB", exit.pss); put("rssKiB", exit.rss)
-                    if (Build.VERSION.SDK_INT >= 31 && exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && nativeTraces++ < 2) {
+                    if (includeNativeTraces && Build.VERSION.SDK_INT >= 31 && exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && nativeTraces++ < 2) {
                         put("nativeTrace", nativeTrace(exit))
                     }
                 }

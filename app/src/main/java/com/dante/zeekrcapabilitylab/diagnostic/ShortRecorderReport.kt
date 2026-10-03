@@ -180,7 +180,7 @@ object ShortRecorderReport {
             !(reason == "OUTPUT_RELEASED" && !hasRecorderError && status in setOf("IDLE", "STOPPED", "FINALIZING"))
 
     fun report(version: String, code: Int, sdk: Int, current: JsonObject, lastFault: JsonObject?, lastRun: JsonObject? = null,
-               processExit: JsonObject? = null): String {
+               processExit: JsonObject? = null, startupAndTransfer: JsonObject? = null): String {
         var retainedFault = lastFault
         var retainedCurrent = current
         val omitted = mutableListOf<String>()
@@ -190,6 +190,7 @@ object ShortRecorderReport {
             put("current", retainedCurrent); put("lastFault", retainedFault ?: JsonNull)
             put("lastRun", lastRun ?: JsonNull)
             put("processExit", processExit ?: JsonNull)
+            put("startupAndTransfer", startupAndTransfer ?: JsonNull)
             put("omittedForSize", buildJsonArray { omitted.forEach { add(it) } })
             put("videoIncluded", false); put("pathsOrShareTokensIncluded", false)
         }.toString()

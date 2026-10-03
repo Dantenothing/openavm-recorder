@@ -87,6 +87,41 @@ object ShortRecorderDiagnostics {
                 Json.parseToJsonElement(it.bufferedReader(Charsets.UTF_8).readText()).jsonObject
             }
         }.getOrNull()
+
+    /** One bounded addendum for the car drive report. Call on IO; this is recent runtime, not clip data. */
+    internal fun collectRecoveryEvidence(context: Context): JsonObject {
+        CaptureCleanupRuntime.initialize(context)
+        val state = CameraRecordingService.state.value
+        val mirror = com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.evidence
+        val coordinator = com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value
+        val exits = ProcessExitDiagnostics.collect(context, includeNativeTraces = false)
+        return buildJsonObject {
+            put("schemaVersion", 1); put("scope", "RECENT_RUNTIME_NOT_SELECTED_SESSION")
+            put("atEpochMs", System.currentTimeMillis()); put("atElapsedMs", SystemClock.elapsedRealtime())
+            put("startupAndTransfer", BootTransferDiagnostics.collect())
+            put("cleanup", RecentRuntimeEvidence.cleanup(CaptureCleanupRuntime.snapshot()))
+            put("resources", buildJsonObject {
+                put("nativeIdle", com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock.normalIdle())
+                put("glIdle", com.dante.zeekrcapabilitylab.mirror.MirrorGlPreview.isIdle())
+                put("coordinatorActive", coordinator.active)
+                put("coordinatorHasError", coordinator.error != null)
+                put("coordinatorErrorCode", RecentRuntimeEvidence.code(coordinator.error))
+                put("recorderStatus", RecentRuntimeEvidence.code(state.status))
+                put("recorderCleanupPending", state.cleanupPending)
+                put("recorderCleanupUnconfirmed", state.cleanupUnconfirmed)
+            })
+            put("mirror", buildJsonObject {
+                put("active", mirror.active); put("destination", RecentRuntimeEvidence.code(mirror.destination))
+                put("reason", RecentRuntimeEvidence.code(mirror.reason))
+                put("textureAttached", mirror.textureAttached); put("textureShown", mirror.textureShown)
+                put("textureAvailable", mirror.textureAvailable)
+                put("lastTextureCallbackAgeMs", mirror.lastTextureCallbackAgeMs)
+                put("lastDrawAgeMs", mirror.lastDrawAgeMs)
+            })
+            put("processExit", RecentRuntimeEvidence.processExits(exits))
+        }
+    }
+
     /** Called on IO by the diagnostics dialog. Uses snapshots only, with no new camera probe. */
     fun collect(context: Context): String {
         CaptureCleanupRuntime.initialize(context)
@@ -107,6 +142,6 @@ object ShortRecorderDiagnostics {
             })
         }
         return ShortRecorderReport.report(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, Build.VERSION.SDK_INT,
-            current, fault, run, ProcessExitDiagnostics.collect(context))
+            current, fault, run, ProcessExitDiagnostics.collect(context), BootTransferDiagnostics.collect())
     }
 }

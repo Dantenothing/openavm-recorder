@@ -12,6 +12,7 @@ class UnifiedRecordingSessionTest {
     private val id = "00000000-0000-4000-8000-000000000001"
     private fun metadata(role: RecordingSourceRole) = SegmentSidecar(file = role.name, cameraId = role.name,
         profile = CameraFormatProfile(ProfileSize(640, 480), 2_000_000), sourceRole = role,
+        layoutKind = if (role == RecordingSourceRole.SURROUND) RecordingLayoutKind.FOUR_LANE_V1 else RecordingLayoutKind.SINGLE_V1,
         segmentSeconds = 60, segmentNumber = 1, processStartId = "1-1", recordingSessionId = id,
         startedAtElapsedRealtimeMs = 1_000, stoppedAtElapsedRealtimeMs = 11_000,
         startedAtEpochMs = 1_000, stoppedAtEpochMs = 11_000,
@@ -48,5 +49,23 @@ class UnifiedRecordingSessionTest {
     @Test fun ordinaryUsbCopiesAndTimelapseAreNotMistakenForParallelNewChannels() {
         assertTrue(UnifiedRecordingSession.group(listOf(internal()), listOf(usb().copy(containsDirectRecording = false))).isEmpty())
         assertTrue(UnifiedRecordingSession.group(listOf(internal()), listOf(usb().copy(category = VehicleMediaCategory.TIME_LAPSE))).isEmpty())
+    }
+
+    @Test fun onlineSurroundProvidesTheEstablishedCoverAndInitialPlayback() {
+        val group = UnifiedRecordingSession.group(listOf(internal()), listOf(usb())).single()
+        assertEquals(surround, group.coverSource?.file)
+        assertEquals(RecordingLayoutKind.FOUR_LANE_V1, group.coverSource?.layoutKind)
+        assertEquals(RecordingSourceRole.SURROUND, group.coverSource?.sourceRole)
+        assertEquals(surround, group.initialFile)
+        assertEquals(3, group.sourceRoles.size)
+    }
+
+    @Test fun offlineSurroundFallsBackToARealInternalCoverAndKeepsOfflineStatus() {
+        val group = UnifiedRecordingSession.group(listOf(internal()), listOf(usb().copy(availability = MediaAvailability.OFFLINE))).single()
+        assertEquals(front, group.coverSource?.file)
+        assertEquals(front, group.initialFile)
+        assertEquals(RecordingSourceRole.CABIN, group.coverSource?.sourceRole)
+        assertEquals(RecordingLayoutKind.SINGLE_V1, group.coverSource?.layoutKind)
+        assertTrue(group.hasOfflineFiles)
     }
 }

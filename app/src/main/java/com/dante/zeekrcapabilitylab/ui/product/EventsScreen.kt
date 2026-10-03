@@ -84,6 +84,7 @@ import com.dante.zeekrcapabilitylab.product.VehicleSentryRecording
 import com.dante.zeekrcapabilitylab.product.VehicleUsbMediaLibrary
 import com.dante.zeekrcapabilitylab.product.VehicleUsbMediaSnapshot
 import com.dante.zeekrcapabilitylab.product.VehicleUsbRecording
+import com.dante.zeekrcapabilitylab.product.UnifiedRecordingSession
 import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.service.recorder.RecorderLibrary
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingMode
@@ -657,6 +658,16 @@ fun EventsScreen() {
     val joinedSessions = remember(visibleRecordings, visibleUsbRecordings) {
         com.dante.zeekrcapabilitylab.product.UnifiedRecordingSession.group(visibleRecordings, visibleUsbRecordings)
     }
+
+    fun loadJoinedCover(recording: UnifiedRecordingSession) {
+        val source = recording.coverSource ?: return
+        val key = "${recording.key}:${source.key}"
+        if (key in usbCovers) return
+        scope.launch(Dispatchers.IO) {
+            val cover = thumbnailCache.loadOrCreate(source.file, source.layoutKind)
+            if (cover != null) withContext(Dispatchers.Main) { usbCovers = usbCovers + (key to cover) }
+        }
+    }
     val timelineItems = remember(
         visibleIncidents,
         visibleRecordings,
@@ -959,23 +970,14 @@ fun EventsScreen() {
                     when (entry) {
                         is VehicleTimelineItem.Joined -> {
                             val recording = entry.recording
-                            Card(Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(Utils.t("Multi-camera recording", "多路录像"), style = MaterialTheme.typography.titleMedium)
-                                    Text(Utils.t("Surround & cabin · USB + internal storage", "环视与车内 · U 盘 + 内部存储"), style = MaterialTheme.typography.bodySmall)
-                                    Text(Utils.t("{0} available files · one session timeline", "{0} 个可用文件 · 同一条录像时间线", recording.files.size))
-                                    if (recording.hasOfflineFiles) Text(Utils.t("Reconnect USB to include the missing channel.", "重新连接 U 盘以查看缺失通道。"))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OutlinedButton(onClick = { playJoinedRecording = recording }, enabled = recording.files.isNotEmpty()) {
-                                            Text(Utils.t("Play / send session", "回放／发送整次录像"))
-                                        }
-                                        TextButton(onClick = {
-                                            expandedSessionSources = if (recording.sessionId in expandedSessionSources)
-                                                expandedSessionSources - recording.sessionId else expandedSessionSources + recording.sessionId
-                                        }) { Text(Utils.t("Manage source files", "管理各存储文件")) }
-                                    }
-                                }
-                            }
+                            val coverKey = recording.coverSource?.let { "${recording.key}:${it.key}" }
+                            LaunchedEffect(coverKey) { loadJoinedCover(recording) }
+                            JoinedRecordingCard(recording, coverKey?.let(usbCovers::get), selectionMode,
+                                sourcesExpanded = recording.sessionId in expandedSessionSources,
+                                onPlay = { playJoinedRecording = recording }, onManageSources = {
+                                    expandedSessionSources = if (recording.sessionId in expandedSessionSources)
+                                        expandedSessionSources - recording.sessionId else expandedSessionSources + recording.sessionId
+                                })
                         }
                         is VehicleTimelineItem.OpenAvmSentry -> {
                             val row = entry.row
@@ -1107,7 +1109,7 @@ fun EventsScreen() {
             .firstOrNull { it.sessionId == selected.sessionId }
         val files = current?.files.orEmpty()
         if (current != null && files.isNotEmpty()) SessionReviewDialog(
-            files = files, initialFile = files.first(),
+            files = files, initialFile = current.initialFile,
             onSendToPhone = { chosen, withData ->
                 val internalFiles = chosen.filter { it in current.internal.files }
                 val sources = current.usb.map { source -> source to chosen.filter { it in source.files } }.filter { it.second.isNotEmpty() }
@@ -1586,6 +1588,47 @@ private fun SectionTitle(title: String, count: String) {
     ) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Text(count, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun JoinedRecordingCard(
+    recording: UnifiedRecordingSession, cover: Bitmap?, selectionMode: Boolean, sourcesExpanded: Boolean,
+    onPlay: () -> Unit, onManageSources: () -> Unit,
+) {
+    var menuOpen by remember(recording.key, selectionMode) { mutableStateOf(false) }
+    val playable = !selectionMode && recording.files.isNotEmpty()
+    Card(Modifier.fillMaxWidth().clickable(enabled = playable, onClick = onPlay)) {
+        Column {
+            Box {
+                RecordingCover(cover, Modifier.fillMaxWidth().aspectRatio(1f))
+                Column(Modifier.align(Alignment.TopStart).padding(start = 9.dp, top = 9.dp, end = 62.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    StatusBadge(Utils.t("USB + internal", "U 盘 + 内部存储"), Color(0xFF64B5F6))
+                    StatusBadge(Utils.t("{0} cameras", "{0} 路摄像头", recording.sourceRoles.size), Color(0xFF81C784))
+                }
+                StatusBadge(if (recording.hasOfflineFiles) Utils.t("USB offline", "U 盘离线")
+                    else Utils.t("Multi-camera recording", "多路录像"),
+                    if (recording.hasOfflineFiles) Color(0xFFFFB74D) else Color(0xFF81C784),
+                    Modifier.align(Alignment.BottomStart).padding(9.dp))
+                Box(Modifier.align(Alignment.TopEnd).padding(5.dp)) {
+                    RecordingMenuButton(onClick = { menuOpen = true })
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(text = { Text(Utils.t("Play / send session", "回放／发送整次录像")) },
+                            enabled = playable, onClick = { menuOpen = false; onPlay() })
+                        DropdownMenuItem(text = { Text(if (sourcesExpanded) Utils.t("Hide source files", "收起各存储文件")
+                            else Utils.t("Manage source files", "管理各存储文件")) },
+                            onClick = { menuOpen = false; onManageSources() })
+                    }
+                }
+            }
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Text("${formatRecordingTime(recording.startedAtEpochMs)}–${formatRecordingTime(recording.stoppedAtEpochMs)}",
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(Utils.t("{0} available files · {1}", "{0} 个可用文件 · {1}", recording.files.size, formatBytes(recording.totalBytes)),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
