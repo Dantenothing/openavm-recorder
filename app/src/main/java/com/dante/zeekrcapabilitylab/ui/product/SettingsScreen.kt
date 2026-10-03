@@ -376,6 +376,20 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
             }
         }
 
+        if (BuildConfig.CAMERA_CONCURRENCY_PROBE_ENABLED) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(Utils.t("Multi-camera preview test", "多路相机预览测试"), style = MaterialTheme.typography.titleMedium)
+                    Text(Utils.t("Manual, 20-second two/three-camera experiment. No recording. Opening the test page leaves cameras off.",
+                        "手动启动的两路／三路 20 秒预览实验，不录像。打开测试页面不会开启相机。"), style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = {
+                        context.startActivity(android.content.Intent(context,
+                            com.dante.zeekrcapabilitylab.enhancement.probe.MultiCameraProbeActivity::class.java))
+                    }) { Text(Utils.t("Open preview test", "打开预览测试")) }
+                }
+            }
+        }
+
         if (developerModeEnabled) {
             var mappings by remember {
                 mutableStateOf(RecordingSourceRole.entries.associateWith(settings::cameraMapping))
