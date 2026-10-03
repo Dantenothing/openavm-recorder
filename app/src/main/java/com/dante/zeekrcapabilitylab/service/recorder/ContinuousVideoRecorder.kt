@@ -23,6 +23,8 @@ internal data class EncodedSegmentSummary(
     val output: RecordingOutputHandle, val frames: Long,
     val firstPtsUs: Long?, val lastPtsUs: Long?, val maximumGapUs: Long,
     val firstEpochMs: Long?, val firstElapsedMs: Long?, val endedEpochMs: Long, val endedElapsedMs: Long,
+    val videoClockAnchor: io.github.dantenothing.avmtransfer.protocol.VideoClockAnchor? = null,
+    val continuousTimeline: io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline? = null,
 )
 
 data class EncoderEvidence(
@@ -32,6 +34,8 @@ data class EncoderEvidence(
     val encodedBytes: Long? = null,
     val continuousStages: kotlinx.serialization.json.JsonObject? = null,
     val continuousFaultStages: kotlinx.serialization.json.JsonObject? = null,
+    val writtenFrames: Long? = null,
+    val lastWriteElapsedMs: Long? = null,
 )
 
 /**
@@ -43,6 +47,8 @@ internal class ContinuousVideoRecorder(
     private val codecName: String,
     private val onError: (RecordingEncoder, String) -> Unit,
     private val failureCapture: ContinuousFailureCapture? = null,
+    queueBytes: Long = 32L * 1024 * 1024,
+    queueItems: Int = 300,
 ) : RecordingEncoder {
     override val name = "CONTINUOUS_CODEC"
     private val codecThread = HandlerThread("openavm-encoder").apply { start() }
@@ -61,8 +67,9 @@ internal class ContinuousVideoRecorder(
     private val eos = CountDownLatch(1)
     private val writerEnded = CountDownLatch(1)
     private val pumpQueued = AtomicBoolean()
-    private val queue = BoundedEncodedQueue<Item>(32L * 1024 * 1024, 300)
+    private val queue = BoundedEncodedQueue<Item>(queueBytes, queueItems)
     private val planner = KeyframeSegmentPlanner()
+    private val clock = ObservedCodecClock()
     private var cutCallback: ((EncodedSegmentSummary) -> Unit)? = null // codec worker
     private var writerFormat: MediaFormat? = null // writer worker
     private var target: Target? = null // writer worker
@@ -72,12 +79,14 @@ internal class ContinuousVideoRecorder(
     @Volatile private var lastPtsUs: Long? = null
     @Volatile private var lastOutputElapsedMs: Long? = null
     @Volatile private var completedFiles = 0L
+    @Volatile private var writtenFrames = 0L
+    @Volatile private var lastWriteElapsedMs: Long? = null
 
     private sealed interface Item {
-        data class Frame(val bytes: ByteArray, val ptsUs: Long, val originalPtsUs: Long, val flags: Int,
-                         val epochMs: Long, val elapsedMs: Long) : Item
+        data class Frame(val bytes: ByteArray, val ptsUs: Long, val flags: Int,
+                         val stamp: ObservedCodecClock.Stamp) : Item
         data class Boundary(val done: (EncodedSegmentSummary) -> Unit,
-                            val epochMs: Long, val elapsedMs: Long) : Item
+                            val nextKeyframe: ObservedCodecClock.Stamp) : Item
     }
 
     override fun prepare(config: RecorderConfig, output: RecordingOutputHandle) {
@@ -116,7 +125,8 @@ internal class ContinuousVideoRecorder(
 
     fun evidence(): EncoderEvidence {
         val (bytes, count) = queue.snapshot()
-        return EncoderEvidence(encodedFrames, firstPtsUs, lastPtsUs, lastOutputElapsedMs, bytes, count, completedFiles)
+        return EncoderEvidence(encodedFrames, firstPtsUs, lastPtsUs, lastOutputElapsedMs, bytes, count, completedFiles,
+            writtenFrames = writtenFrames, lastWriteElapsedMs = lastWriteElapsedMs)
     }
 
     private val drain = object : Runnable {
@@ -160,20 +170,21 @@ internal class ContinuousVideoRecorder(
         val placement = planner.accept(info.presentationTimeUs,
             info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) ?: return
         val epoch = System.currentTimeMillis()
-        val elapsed = SystemClock.elapsedRealtime()
+        val elapsedNs = SystemClock.elapsedRealtimeNanos()
+        val stamp = clock.observe(info.presentationTimeUs, elapsedNs, epoch)
         if (placement.cutBefore) {
             val done = requireNotNull(cutCallback); cutCallback = null
-            check(queue.offer(0) { Item.Boundary(done, epoch, elapsed) }) { "ENCODER_QUEUE_FULL" }
+            check(queue.offer(0) { Item.Boundary(done, stamp) }) { "ENCODER_QUEUE_FULL" }
         }
         check(queue.offer(info.size) {
             val source = requireNotNull(active.getOutputBuffer(index)).duplicate()
             source.position(info.offset); source.limit(info.offset + info.size)
-            Item.Frame(ByteArray(info.size).also { source.get(it) }, placement.ptsUs, info.presentationTimeUs,
-                info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv(), epoch, elapsed)
+            Item.Frame(ByteArray(info.size).also { source.get(it) }, placement.ptsUs,
+                info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv(), stamp)
         }) { "ENCODER_QUEUE_FULL" }
         encodedFrames++
         if (firstPtsUs == null) firstPtsUs = info.presentationTimeUs
-        lastPtsUs = info.presentationTimeUs; lastOutputElapsedMs = elapsed
+        lastPtsUs = info.presentationTimeUs; lastOutputElapsedMs = elapsedNs / 1_000_000L
         schedulePump()
     }
 
@@ -194,7 +205,8 @@ internal class ContinuousVideoRecorder(
                     when (val item = ticket.value) {
                         is Item.Frame -> if (!abandoned && firstFailure.get() == null) target?.write(item)
                         is Item.Boundary -> {
-                            val summary = finishTarget(item.epochMs, item.elapsedMs, closeOutput = true)
+                            val summary = finishTarget(item.nextKeyframe.epochMs, item.nextKeyframe.elapsedNs / 1_000_000L,
+                                closeOutput = true, nextKeyframePtsUs = item.nextKeyframe.ptsUs)
                             if (!ending && !closing && firstFailure.get() == null && summary != null) item.done(summary)
                         }
                     }
@@ -211,15 +223,15 @@ internal class ContinuousVideoRecorder(
         }
     }
 
-    private fun finishTarget(epoch: Long, elapsed: Long, closeOutput: Boolean): EncodedSegmentSummary? {
+    private fun finishTarget(epoch: Long, elapsed: Long, closeOutput: Boolean, nextKeyframePtsUs: Long? = null): EncodedSegmentSummary? {
         val current = target ?: return null
-        current.finish(abandoned)
+        current.finish(abandoned, nextKeyframePtsUs)
         // Descriptor lifetime belongs to the close transaction on terminal stop.
         if (closeOutput) {
             if (abandoned && current.output is UsbMediaStoreRecordingOutputHandle) current.output.abandonUnavailableTarget()
             else current.output.close()
         }
-        val summary = current.summary(epoch, elapsed)
+        val summary = current.summary(epoch, elapsed, nextKeyframePtsUs)
         lastCompleted = summary; completedFiles++
         target = null
         return summary
@@ -284,16 +296,11 @@ internal class ContinuousVideoRecorder(
         return requireNotNull(result.get()).getOrThrow()
     }
 
-    private class Target(val output: RecordingOutputHandle) {
+    private inner class Target(val output: RecordingOutputHandle) {
         private var muxer: MediaMuxer? = output.createMuxer()
         private var track = -1
         private var started = false
-        private var frames = 0L
-        private var firstPts: Long? = null
-        private var lastPts: Long? = null
-        private var maxGap = 0L
-        private var epoch: Long? = null
-        private var elapsed: Long? = null
+        private val fileClock = EncodedFileClock(clock.runId)
 
         fun configure(format: MediaFormat) {
             check(!started)
@@ -302,23 +309,36 @@ internal class ContinuousVideoRecorder(
         }
         fun write(frame: Item.Frame) {
             check(started)
-            if (frames == 0L) check(frame.ptsUs == 0L && frame.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) { "SEGMENT_MUST_START_WITH_KEYFRAME" }
+            if (fileClock.frames == 0L) check(frame.ptsUs == 0L && frame.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) { "SEGMENT_MUST_START_WITH_KEYFRAME" }
             val info = MediaCodec.BufferInfo().apply { set(0, frame.bytes.size, frame.ptsUs, frame.flags) }
             muxer!!.writeSampleData(track, ByteBuffer.wrap(frame.bytes), info)
-            if (firstPts == null) { firstPts = frame.originalPtsUs; epoch = frame.epochMs; elapsed = frame.elapsedMs }
-            lastPts?.let { maxGap = maxOf(maxGap, frame.originalPtsUs - it) }
-            lastPts = frame.originalPtsUs; frames++
+            fileClock.written(frame.stamp)
+            writtenFrames++; lastWriteElapsedMs = SystemClock.elapsedRealtime()
         }
-        fun finish(abandoned: Boolean) {
+        fun finish(abandoned: Boolean, nextKeyframePtsUs: Long?) {
             val active = muxer ?: return
             var error: Throwable? = null
-            if (started && !abandoned) try { active.stop() } catch (t: Throwable) { error = t }
+            if (started && !abandoned) {
+                try {
+                    fileClock.coverage(nextKeyframePtsUs)?.let { coverage ->
+                        active.writeSampleData(track, ByteBuffer.allocate(0), MediaCodec.BufferInfo().apply {
+                            set(0, 0, coverage.durationUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        })
+                    }
+                } catch (t: Throwable) { error = t }
+                try { active.stop() } catch (t: Throwable) { if (error == null) error = t else error.addSuppressed(t) }
+            }
             active.release()
             muxer = null; started = false
             error?.let { throw it }
         }
-        fun summary(endEpoch: Long, endElapsed: Long) = EncodedSegmentSummary(output, frames, firstPts, lastPts,
-            maxGap, epoch, elapsed, endEpoch, endElapsed)
+        fun summary(endEpoch: Long, endElapsed: Long, nextKeyframePtsUs: Long?): EncodedSegmentSummary {
+            val coverage = fileClock.coverage(nextKeyframePtsUs)
+            return EncodedSegmentSummary(output, fileClock.frames, coverage?.timeline?.firstPtsUs, coverage?.timeline?.lastPtsUs,
+                fileClock.maximumGapUs, coverage?.first?.epochMs, coverage?.first?.elapsedNs?.div(1_000_000L),
+                coverage?.endEpochMs ?: endEpoch, coverage?.endElapsedNs?.div(1_000_000L) ?: endElapsed,
+                coverage?.anchor, coverage?.timeline)
+        }
     }
 
     companion object {

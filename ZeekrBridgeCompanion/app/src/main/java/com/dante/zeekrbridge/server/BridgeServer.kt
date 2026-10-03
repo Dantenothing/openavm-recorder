@@ -431,7 +431,8 @@ object BridgeServer {
                             deviceName = android.os.Build.MODEL,
                             phoneDeviceId = PairingManager.phoneDeviceId.value,
                             recordingRasterLayouts = listOf(io.github.dantenothing.avmtransfer.protocol.StripRepackContract.TRANSFER_CAPABILITY),
-                            driveDataFormats = listOf(DriveDataCodec.CAPABILITY),
+                            driveDataFormats = listOf(DriveDataCodec.CAPABILITY, DriveDataCodec.CAPABILITY_V2),
+                            recordingSessionFormats = listOf(io.github.dantenothing.avmtransfer.protocol.RecordingSessionCompatibility.CAPABILITY),
                         )
                         respond(
                             out,

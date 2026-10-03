@@ -3,6 +3,10 @@ package com.dante.zeekrbridge.core
 import java.io.File
 import io.github.dantenothing.avmtransfer.protocol.RecordingMetadataReader
 import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
+import io.github.dantenothing.avmtransfer.protocol.VideoClockAnchor
+import io.github.dantenothing.avmtransfer.protocol.SessionPlaybackTimeline
+import io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -20,6 +24,8 @@ enum class IndexedLayoutKind { FOUR_LANE_V1, FOUR_LANE_GRID_2X2, SINGLE_V1, UNKN
 enum class IndexedRecordingMode { NORMAL, TIME_LAPSE }
 
 enum class IndexedMediaOrigin { OPENAVM_RECORDING, FACTORY_SENTRY_USB }
+
+data class IndexedVideoMarker(val positionMs: Long, val type: String)
 
 enum class IndexedTimeLapseAccuracy {
     PASS,
@@ -108,7 +114,17 @@ data class IndexedMediaSegment(
     val timeLapseAccuracy: IndexedTimeLapseAccuracy? = null,
     val mediaOrigin: IndexedMediaOrigin = IndexedMediaOrigin.OPENAVM_RECORDING,
     val raster: RecordingRasterMetadata = RecordingRasterMetadata.Original,
+    val channelId: String? = null,
+    val startedElapsedMs: Long? = null,
+    val stoppedElapsedMs: Long? = null,
+    val sessionStartedElapsedMs: Long? = null,
+    val videoClockAnchor: VideoClockAnchor? = null,
+    val triggerMarkers: List<IndexedVideoMarker> = emptyList(),
+    val eventRequestedElapsedMs: Long? = null,
+    val continuousTimeline: ContinuousSegmentTimeline? = null,
 ) {
+    val playbackChannelId: String? get() = if (channelId != null) channelId.takeIf { it in SessionPlaybackTimeline.CHANNELS }
+        else SessionPlaybackTimeline.channelForRole(sourceRole.name)
     val file: File get() = File(filePath)
     val playbackLabels: List<String>
         get() = lanes.sortedBy { it.displayOrder }.map { it.label }.takeIf { it.size == 4 }
@@ -129,6 +145,21 @@ data class IndexedMediaSegment(
             }
 }
 
+/** Library estimate only; playback and export independently measure each media container. */
+internal fun indexedSessionDuration(segments: List<IndexedMediaSegment>): Long {
+    if (segments.isEmpty()) return 0L
+    if (segments.all { it.recordingMode == IndexedRecordingMode.NORMAL && it.startedElapsedMs != null && it.stoppedElapsedMs != null }) {
+        val first = segments.minOf { it.startedElapsedMs!! }
+        val origin = segments.mapNotNull { it.sessionStartedElapsedMs }.minOrNull()?.takeIf { it in 0..first } ?: first
+        return (segments.maxOf { it.stoppedElapsedMs!! } - origin).coerceAtLeast(0L)
+    }
+    val channels = segments.map { it.playbackChannelId }.distinct()
+    if (channels.size > 1) return segments.groupBy { it.playbackChannelId }.values.maxOf { channel ->
+        channel.sumOf { it.durationMs.coerceAtLeast(0L) }
+    }
+    return segments.sumOf { it.durationMs.coerceAtLeast(0L) }
+}
+
 data class IndexedRecordingSession(
     val id: String,
     val segments: List<IndexedMediaSegment>,
@@ -136,8 +167,7 @@ data class IndexedRecordingSession(
 ) {
     val startedAtEpochMs: Long = segments.minOf { it.startedAtEpochMs }
     val stoppedAtEpochMs: Long? = segments.mapNotNull { it.stoppedAtEpochMs }.maxOrNull()
-    val durationMs: Long = segments.sumOf { it.durationMs }.takeIf { it > 0L }
-        ?: ((stoppedAtEpochMs ?: startedAtEpochMs) - startedAtEpochMs).coerceAtLeast(0L)
+    val durationMs: Long = indexedSessionDuration(segments)
     val sizeBytes: Long = segments.sumOf { it.sizeBytes }
     val sourceRole: IndexedSourceRole = segments.firstOrNull()?.sourceRole ?: IndexedSourceRole.UNKNOWN
     val layoutKind: IndexedLayoutKind = segments.firstOrNull()?.layoutKind ?: IndexedLayoutKind.UNKNOWN
@@ -165,7 +195,7 @@ data class IndexedRecordingEvent(
     val legacy: Boolean,
 ) {
     val startedAtEpochMs: Long = segments.minOf { it.startedAtEpochMs }
-    val durationMs: Long = segments.sumOf { it.durationMs }
+    val durationMs: Long = indexedSessionDuration(segments)
     val sizeBytes: Long = segments.sumOf { it.sizeBytes }
     val sourceRole: IndexedSourceRole = segments.firstOrNull()?.sourceRole ?: IndexedSourceRole.UNKNOWN
     val layoutKind: IndexedLayoutKind = segments.firstOrNull()?.layoutKind ?: IndexedLayoutKind.UNKNOWN
@@ -253,6 +283,23 @@ object MediaIndexScanner {
             }.getOrNull(),
             mediaOrigin = mediaOrigin,
             raster = metadata.raster,
+            channelId = obj.string("channelId"),
+            startedElapsedMs = obj.long("startedAtElapsedRealtimeMs"),
+            stoppedElapsedMs = obj.long("stoppedAtElapsedRealtimeMs"),
+            sessionStartedElapsedMs = obj.long("sessionStartedElapsedMs"),
+            videoClockAnchor = obj?.get("videoClockAnchor")?.let {
+                runCatching { json.decodeFromJsonElement<VideoClockAnchor>(it) }.getOrNull()?.takeIf(VideoClockAnchor::valid)
+            },
+            triggerMarkers = runCatching { obj?.get("triggerMarkers")?.jsonArray?.take(2_000)?.mapNotNull { marker ->
+                val row = marker.jsonObject
+                val at = row.long("positionMs")?.takeIf { it >= 0 } ?: return@mapNotNull null
+                val type = row.string("type")?.takeIf { it in setOf("MANUAL", "EMERGENCY") } ?: return@mapNotNull null
+                IndexedVideoMarker(at, type)
+            }.orEmpty() }.getOrDefault(emptyList()),
+            eventRequestedElapsedMs = obj.long("eventRequestedElapsedMs"),
+            continuousTimeline = obj?.get("continuousTimeline")?.let {
+                runCatching { json.decodeFromJsonElement<ContinuousSegmentTimeline>(it) }.getOrNull()?.takeIf { it.validate().isEmpty() }
+            },
         )
     }
 

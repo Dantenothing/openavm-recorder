@@ -55,6 +55,10 @@ internal fun MediaExportDialog(
     savedMediaOrigin: SavedMediaOrigin? = null,
     onDismiss: () -> Unit,
 ) {
+    if (com.dante.zeekrbridge.player.supportsSessionPlayback(segments)) {
+        SessionExportDialog(segments, savedMediaOrigin, onDismiss)
+        return
+    }
     val context = LocalContext.current
     val source = segments.firstOrNull()?.sourceRole ?: IndexedSourceRole.UNKNOWN
     val totalMs = MediaExportPlanner.totalDurationMs(segments)
@@ -251,7 +255,7 @@ internal fun MediaExportQueueCard(modifier: Modifier = Modifier) {
     }
 }
 
-private fun exportTargetLabel(target: MediaExportTarget, source: IndexedSourceRole): String = when (target) {
+internal fun exportTargetLabel(target: MediaExportTarget, source: IndexedSourceRole): String = when (target) {
     MediaExportTarget.ORIGINAL -> when (source) {
         IndexedSourceRole.SURROUND -> t("Original 360° composite", "原始360°合成视频")
         IndexedSourceRole.CABIN -> t("Cabin video", "Cabin车内视频")

@@ -4,6 +4,10 @@ Updated 2026-10-03. Target: **both OpenAVM Recorder and OpenAVM Phone**. This is
 
 ## Current implementation
 
+`5.1.0-drive4` extends this into the owner-approved integrated candidate. Optional front/rear cabin encoders join normal surround recording under one session, with per-channel writing/cleanup evidence. Playback on both devices switches channels or shows an overview on that common clock, with maps, events, live/recorded HUD and selected-camera cross-segment clips. Sources carry observed video-clock anchors with unknown latency; this is not hardware synchronization certification. The new v2 attachment also carries a bounded redacted recorder snapshot for the phone's combined test report. Raw pedal candidates remain explicitly unverified. See [the integrated guide](DRIVE4_TEST_GUIDE.md), [wire contract](DRIVE_DATA_TRANSFER.md), and [approved goal](NEXT_COMPLETE_DRIVE_GOAL.md). Sustained encoding and device rendering await the owner's integrated run.
+
+## Background: the drive1–drive3 foundation
+
 `5.1.0-drive3` brings recorded road-map playback to both apps. Both use MapLibre Native OpenGL ES 11.13.5 with OpenFreeMap Liberty street tiles. No Google Play services, API key or private server is required. The default view is a local recorded trace. Choosing **Street map** loads online tiles after an inline disclosure; tile requests reveal the viewed area to the provider. The route file is not uploaded. Map load errors and timeouts leave local trace/video playback available. This does not promise a downloaded offline road map.
 
 Playback shows the selected playlist with approximate sample alignment, map follow/recenter, fit, zoom and point-to-video seeking. A drag stops following until recentered. Only existing measured points are seek targets, and gaps remain disconnected. The head unit keeps the video visible beside its map; the phone keeps the drive panel alongside the playback controls.
@@ -32,7 +36,7 @@ The field report includes coordinate-free map runtime outcomes (mode, load resul
 
 ## What is not implemented
 
-- Three-camera recording. The preview probe remains separate from production recording.
+- Sustained hardware acceptance of three-camera encoding. Optional production recording is now in drive4; the prior preview probe does not validate its encoding.
 - Time-lapse route/vehicle synchronization. `TelemetryVideoWindow` rejects unsupported time compression rather than inventing an offset.
 - Speed/GPS watermarks burned into original files, road snapping, inferred routes or background uploads.
 - Recovery of routes for old videos that were recorded without location data.
@@ -59,7 +63,7 @@ The reviewed Zeekr Shortcut v2.0.0 source uses a recorder/encoder/file per camer
 
 1. Record original video, GPS and vehicle observations locally, with one session UUID and a monotonic clock. Keep source, accuracy, freshness and gaps.
 2. Improve the current approximate segment clock to a measured relationship between each segment's first encoded frame and the session clock. Resolve normal recording first; compressed time requires an explicit mapping.
-3. Verify the new versioned **Include route and vehicle data** opt-in on actual devices, including interrupted transfer and cancellation. It preserves existing TLS, pairing and access controls. Old clients retain video-only transfer.
+3. Verify the new versioned **Include route and vehicle data** opt-in on actual devices, including interrupted transfer and cancellation. It preserves existing TLS, pairing and access controls. Legacy files keep old transfer compatibility; new shared-session files require an updated receiver even for video-only transfer, so parallel cameras are not misinterpreted as a sequential playlist.
 4. Verify the new phone playback contract against the same recording on the car. Do not load the old standalone `phone` module by mistake: the unified app's companion sources come from `ZeekrBridgeCompanion`.
 5. Verify the shared street-map renderer on both real devices, including GPU/video coexistence and network loss. Playback time drives the marker; recorded-point taps seek video, and dragging suspends following until recentered.
 6. Consider optional privacy trimming and annotated exports after the original recording/transfer path is verified.

@@ -82,6 +82,21 @@ object RecordingTelemetryDiagnostics {
                         put("unknownCounts", buildJsonObject { for (key in VehicleTelemetryPolicy.keys) {
                             put(key, vehicle.samples.count { sample -> sample.values[key]?.let { it.status == "OK" && VehicleTelemetryPolicy.validValue(key, it) } != true })
                         } })
+                        put("pedalSources", buildJsonObject {
+                            put("scale", "UNVERIFIED_RAW_NO_PERCENTAGE")
+                            for ((key, id) in listOf("brake_depth" to "0x00101300", "throttle_depth" to "0x00101400")) {
+                                put(key, buildJsonObject {
+                                    put("sourceId", id)
+                                    put("observedCount", vehicle.samples.count { key in it.values })
+                                    put("rawAvailableCount", vehicle.samples.count { sample -> sample.values[key]?.let {
+                                        it.status == "PROVISIONAL_RAW" && VehicleTelemetryPolicy.validValue(key, it)
+                                    } == true })
+                                    put("unavailableCount", vehicle.samples.count { sample -> sample.values[key]?.let {
+                                        it.status == "PROVISIONAL_RAW" && VehicleTelemetryPolicy.validValue(key, it)
+                                    } != true })
+                                })
+                            }
+                        })
                     }
                 })
             }

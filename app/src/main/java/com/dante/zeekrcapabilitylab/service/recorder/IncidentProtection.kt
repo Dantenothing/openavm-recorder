@@ -7,6 +7,7 @@ data class IncidentTag(
     val eventId: String,
     val requestedAtEpochMs: Long,
     val role: String,
+    val requestedAtElapsedMs: Long? = null,
 )
 
 /**
@@ -26,15 +27,20 @@ class IncidentProtectionStore(context: Context) {
             clear()
             return null
         }
-        return IncidentTag(eventId, requestedAt, ROLE_NEXT)
+        val elapsed = preferences.getLong(KEY_REQUESTED_ELAPSED, -1L).takeIf {
+            it >= 0 && preferences.getString(KEY_REQUESTED_PROCESS, null) == com.dante.zeekrcapabilitylab.ZeekrApp.processStartId
+        }
+        return IncidentTag(eventId, requestedAt, ROLE_NEXT, elapsed)
     }
 
     @Synchronized
-    fun saveNext(eventId: String, requestedAtEpochMs: Long) {
+    fun saveNext(eventId: String, requestedAtEpochMs: Long, requestedAtElapsedMs: Long? = null) {
         preferences.edit()
             .putString(KEY_EVENT_ID, eventId)
             .putLong(KEY_REQUESTED_AT, requestedAtEpochMs)
             .putLong(KEY_EXPIRES_AT, requestedAtEpochMs + PENDING_EXPIRY_MS)
+            .putLong(KEY_REQUESTED_ELAPSED, requestedAtElapsedMs ?: -1L)
+            .putString(KEY_REQUESTED_PROCESS, com.dante.zeekrcapabilitylab.ZeekrApp.processStartId)
             .apply()
     }
 
@@ -58,6 +64,8 @@ class IncidentProtectionStore(context: Context) {
         private const val KEY_EVENT_ID = "event_id"
         private const val KEY_REQUESTED_AT = "requested_at"
         private const val KEY_EXPIRES_AT = "expires_at"
+        private const val KEY_REQUESTED_ELAPSED = "requested_elapsed"
+        private const val KEY_REQUESTED_PROCESS = "requested_process"
 
         fun eventId(requestedAtEpochMs: Long): String = "event-$requestedAtEpochMs"
     }

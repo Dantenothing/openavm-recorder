@@ -136,6 +136,8 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
         TelemetrySettingsCard()
         VehicleTelemetrySettingsCard()
         Spacer(Modifier.height(10.dp))
+        RecordingChannelSettings()
+        Spacer(Modifier.height(10.dp))
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {

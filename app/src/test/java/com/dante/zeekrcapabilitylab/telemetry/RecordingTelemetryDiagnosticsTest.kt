@@ -14,6 +14,19 @@ class RecordingTelemetryDiagnosticsTest {
     private val id = "00000000-0000-4000-8000-000000000001"
     private fun gps() = File(temporary.root, "gps")
     private fun vehicle() = File(temporary.root, "vehicle")
+    @Test fun pedalEvidenceContainsSourceAndAvailabilityButNoRawReadings() {
+        VehicleTelemetryStore(vehicle()).open(id, 0, 0).use { writer ->
+            writer.append(VehicleTelemetrySample(1_000, 1_790_000_000_000, mapOf(
+                "brake_depth" to VehicleTelemetryValue(990, number = 731.246, status = "PROVISIONAL_RAW"),
+                "throttle_depth" to VehicleTelemetryValue(995, status = "NO_VALUE"))))
+        }
+        val report = RecordingTelemetryDiagnostics.inspect(gps(), vehicle())
+        val source = report.getValue("sessions").jsonArray.single().jsonObject.getValue("vehicle").jsonObject.getValue("pedalSources").jsonObject
+        assertEquals("UNVERIFIED_RAW_NO_PERCENTAGE", source.getValue("scale").jsonPrimitive.content)
+        assertEquals(1, source.getValue("brake_depth").jsonObject.getValue("rawAvailableCount").jsonPrimitive.int)
+        assertEquals("0x00101300", source.getValue("brake_depth").jsonObject.getValue("sourceId").jsonPrimitive.content)
+        assertFalse(report.toString().contains("731.246"))
+    }
     @Test fun summariesKeepCountsButExcludeCoordinatesRawValuesAndPaths() {
         TelemetryStore(gps()).open(id, 0, 0).use {
             it.append(TelemetryFix(1_000, 1_790_000_000_000, -34.9234567, 138.6123456, 4f, "gps", 17.5f))

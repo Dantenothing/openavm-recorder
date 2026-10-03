@@ -46,7 +46,7 @@ internal fun RecordedDrivePanel(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(t("Drive data", "行驶数据"), style = MaterialTheme.typography.titleMedium)
-                    Text(t("Transferred playlist · approximate timing", "已传输播放列表 · 时间近似对齐"),
+                    Text(recordedClockLabel(bundle?.videoClockAnchor),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = { expanded = !expanded }, modifier = Modifier.testTag("recorded-drive-toggle")) {
@@ -75,6 +75,7 @@ internal fun RecordedDrivePanel(
                         else -> t("Recorded readings at the playhead · — unavailable", "播放位置对应的已记录读数 · — 表示不可用")
                     }
                 }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("recorded-drive-status"))
+                RecordedPedalDetails(frame)
                 if (route == null) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     Text(t("Loading the playlist route…", "正在读取播放列表轨迹…"), style = MaterialTheme.typography.bodySmall)
@@ -95,11 +96,12 @@ internal fun RecordedDrivePanel(
                 }
                 TextButton(onClick = {
                     val report = recordedPlaybackReport(runCatching { OpenAvmHost.version(context) }.getOrNull(), route,
-                        playlistKey.size, mediaIndex, positionMs, attachmentStatus, frame, RoadMapDiagnostics.snapshot())
+                        playlistKey.size, mediaIndex, positionMs, attachmentStatus, frame, RoadMapDiagnostics.snapshot(),
+                        bundle?.recorderReport, bundle?.alignment, anchor = bundle?.videoClockAnchor)
                     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("OpenAVM playback report", report))
                     Toast.makeText(context, t("Playback report copied", "回放报告已复制"), Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.align(Alignment.End).testTag("recorded-drive-copy-report")) {
-                    Text(t("Copy playback report", "复制回放报告"))
+                    Text(t("Copy combined test report", "复制综合测试报告"))
                 }
             }
         }

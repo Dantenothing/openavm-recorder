@@ -14,9 +14,14 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecorderCommandPolicy
 import com.dante.zeekrcapabilitylab.telemetry.*
 import com.dante.zeekrcapabilitylab.util.Utils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import io.github.dantenothing.drivemap.DriveHud
+import io.github.dantenothing.drivemap.DriveHudFrame
+import io.github.dantenothing.drivemap.DriveHudModel
+import io.github.dantenothing.drivemap.DriveHudObservation
 
 internal fun vehicleTelemetryStatusText(status: String): String = when (status) {
     "DISABLED" -> Utils.t("Vehicle data recording is off", "车辆数据记录已关闭")
@@ -45,6 +50,37 @@ internal fun vehiclePlaybackText(sample: VehicleTelemetrySample?): String = buil
     if (sample?.brakePressed == true) append(" · " + Utils.t("Brake", "制动"))
 }
 
+/** Recorded callers must provide their mapped recording clock, never the device's current clock. */
+internal fun recordedDriveHudFrame(atElapsedMs: Long?, vehicle: VehicleTelemetrySample?, gps: TelemetryFix?): DriveHudFrame =
+    DriveHudModel.frame(atElapsedMs, vehicle?.values?.mapValues { (_, value) ->
+        DriveHudObservation(value.readElapsedMs, value.number, value.text, value.status)
+    }.orEmpty(), gps?.speedMps?.toDouble(), gps?.elapsedMs)
+
+/** UI ageing only. Reuses existing recording flows and starts no SDK/location acquisition. */
+@Composable
+internal fun LiveRecordingHud(
+    visible: Boolean,
+    onVisibilityChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val vehicle by RecordingVehicleTelemetry.state.collectAsState()
+    val gps by RecordingTelemetry.state.collectAsState()
+    var tick by remember { mutableLongStateOf(0L) }
+    val active = vehicle.status == VehicleTelemetryStatus.RECORDING || gps.status == TelemetryStatus.RECORDING
+    LaunchedEffect(visible, active) {
+        while (visible && active) { tick++; delay(250) }
+    }
+    val now = remember(tick, visible, vehicle, gps) { android.os.SystemClock.elapsedRealtime() }
+    val sample = vehicle.latestSample.takeIf { vehicle.status == VehicleTelemetryStatus.RECORDING }
+    val frame = DriveHudModel.frame(now, sample?.values?.mapValues { (_, value) ->
+        DriveHudObservation(value.readElapsedMs, value.number, value.text, value.status)
+    }.orEmpty(), gps.speedMps?.toDouble()?.takeIf { gps.status == TelemetryStatus.RECORDING },
+        gps.lastElapsedMs.takeIf { gps.status == TelemetryStatus.RECORDING })
+    DriveHud(frame, visible, onVisibilityChange, modifier,
+        chinese = com.dante.zeekrcapabilitylab.product.AppLanguage.usesChinese(), live = true, compact = compact)
+}
+
 @Composable
 internal fun VehicleTelemetrySettingsCard() {
     val context = LocalContext.current
@@ -62,7 +98,7 @@ internal fun VehicleTelemetrySettingsCard() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(Utils.t("Vehicle data with recordings", "随录像记录车辆数据"), style = MaterialTheme.typography.titleMedium)
-                    Text(Utils.t("Optional · speed, gear, indicators and braking", "可选 · 车速、挡位、转向和制动"), style = MaterialTheme.typography.bodySmall)
+                    Text(Utils.t("Optional · speed, gear, indicators and pedals", "可选 · 车速、挡位、转向和踏板"), style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(enabled, onCheckedChange = {
                     enabled = it; settings.setRecordingVehicleTelemetryEnabled(it)
@@ -71,6 +107,8 @@ internal fun VehicleTelemetrySettingsCard() {
             }
             Text(Utils.t("Read-only vehicle data is saved alongside video for playback. It works independently of GPS. Missing readings remain unknown; recording continues.",
                 "只读车辆数据与视频一同保存，供回看时显示。它独立于 GPS；读不到的数据保留为未知，录像继续。"))
+            Text(Utils.t("Accelerator and brake-depth candidates are saved as unverified raw readings. They are not percentages; brake pressed/released is a separate binary signal.",
+                "油门与制动深度候选信号按待验证原始值保存，不代表百分比；制动踏板踩下／松开是另一项二值信号。"), style = MaterialTheme.typography.bodySmall)
             if (enabled) Text(vehicleTelemetryStatusText(if (busy) state.status.name else "IDLE"),
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("vehicle-telemetry-status"))
             else if (busy) Text(Utils.t("Stop recording before enabling this option.", "请停止录像后再开启此选项。"))

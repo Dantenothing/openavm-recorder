@@ -546,7 +546,7 @@ private fun SessionGrid(
                         session.recordingMode == IndexedRecordingMode.TIME_LAPSE ->
                             t("Time-lapse · {0}×", "延时摄影 · {0}×", session.timeLapseMultiplier)
                         session.hasIncident -> t("Recording · incident saved", "普通录像 · 已保存事件")
-                        else -> t("Recording", "普通录像")
+                        else -> t("Recording · {0} cameras", "普通录像 · {0} 路摄像头", session.segments.mapNotNull { it.playbackChannelId }.distinct().size.coerceAtLeast(1))
                     },
                     startedAt = session.startedAtEpochMs,
                     durationMs = session.durationMs,
@@ -644,7 +644,7 @@ private fun CombinedMediaGrid(
                     title = if (item.value.recordingMode == IndexedRecordingMode.TIME_LAPSE) {
                         t("Time-lapse · {0}×", "延时摄影 · {0}×", item.value.timeLapseMultiplier)
                     } else {
-                        t("Recording", "普通视频")
+                        t("Recording · {0} cameras", "普通录像 · {0} 路摄像头", item.value.segments.mapNotNull { it.playbackChannelId }.distinct().size.coerceAtLeast(1))
                     },
                     startedAt = item.value.startedAtEpochMs,
                     durationMs = item.value.durationMs,
@@ -873,7 +873,9 @@ private fun MediaDetailScreen(
         MediaSessionPlayer(detail.segments, seekRequest, playbackObstructed, onActiveMediaChanged = { activeId = it },
             modifier = Modifier.weight(1f).padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                DetailBadge(sourceLabel(detail.sourceRole))
+                detail.segments.mapNotNull { it.playbackChannelId }.distinct().forEach { channel ->
+                    DetailBadge(channelLabel(channel))
+                }
                 DetailBadge(formatDuration(detail.durationMs))
                 DetailBadge(formatMediaBytes(detail.sizeBytes))
                 if (detail.recordingMode == IndexedRecordingMode.TIME_LAPSE) DetailBadge("${detail.timeLapseMultiplier}×")

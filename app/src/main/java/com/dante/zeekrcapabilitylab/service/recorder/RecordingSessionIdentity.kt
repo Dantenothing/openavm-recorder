@@ -9,8 +9,8 @@ internal class RecordingSessionIdentity(
     var currentId: String? = null
         private set
 
-    fun beginNewSession(): String {
-        val id = idFactory().trim()
+    fun beginNewSession(sharedId: String? = null): String {
+        val id = (sharedId ?: idFactory()).trim()
         require(id.isNotEmpty()) { "recordingSessionId must not be blank" }
         currentId = id
         return id

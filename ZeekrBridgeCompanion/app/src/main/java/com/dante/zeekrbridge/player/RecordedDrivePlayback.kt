@@ -18,9 +18,13 @@ internal data class RecordedDriveFrame(
 internal fun recordedDriveElapsed(bundle: DriveDataBundle, positionMs: Long?): Long? {
     val start = bundle.segmentStartedElapsedMs
     val end = bundle.segmentEndedElapsedMs
-    if (bundle.alignment != DriveDataCodec.ALIGNMENT || start < 0L || end <= start ||
-        positionMs == null || positionMs < 0L || positionMs >= end - start) return null
-    return start + positionMs
+    if (start < 0L || end <= start || positionMs == null || positionMs < 0L) return null
+    val elapsed = when (bundle.alignment) {
+        DriveDataCodec.ALIGNMENT -> if (positionMs < end - start) start + positionMs else return null
+        DriveDataCodec.ANCHORED_ALIGNMENT -> bundle.videoClockAnchor?.elapsedAtMediaMs(positionMs) ?: return null
+        else -> return null
+    }
+    return elapsed.takeIf { it in start until end }
 }
 
 internal fun recordedDriveFrame(bundle: DriveDataBundle, positionMs: Long?): RecordedDriveFrame {

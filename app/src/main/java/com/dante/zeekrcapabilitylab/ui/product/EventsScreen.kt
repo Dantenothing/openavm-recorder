@@ -138,6 +138,11 @@ private sealed interface VehicleTimelineItem {
         override val startedAtEpochMs: Long = recording.startedAtEpochMs
     }
 
+    data class Joined(val recording: com.dante.zeekrcapabilitylab.product.UnifiedRecordingSession) : VehicleTimelineItem {
+        override val key: String = recording.key
+        override val startedAtEpochMs: Long = recording.startedAtEpochMs
+    }
+
     data class FactorySentry(val recording: VehicleSentryRecording) : VehicleTimelineItem {
         override val key: String = "factory:${recording.stableKey}"
         override val startedAtEpochMs: Long = recording.startedAtEpochMs
@@ -208,6 +213,9 @@ fun EventsScreen() {
     var statusText by remember { mutableStateOf("") }
     var playRecording by remember { mutableStateOf<RecorderLibrary.Recording?>(null) }
     var playUsbRecording by remember { mutableStateOf<VehicleUsbRecording?>(null) }
+    var playJoinedRecording by remember { mutableStateOf<com.dante.zeekrcapabilitylab.product.UnifiedRecordingSession?>(null) }
+    var expandedSessionSources by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var untimedPlaybackKey by remember { mutableStateOf<String?>(null) }
     var playSentryRecording by remember { mutableStateOf<VehicleSentryRecording?>(null) }
     var playGuardRow by remember { mutableStateOf<OpenAvmSentryRow?>(null) }
     var pendingDeleteRecording by remember { mutableStateOf<RecorderLibrary.Recording?>(null) }
@@ -646,17 +654,25 @@ fun EventsScreen() {
         if (selectedCategory in setOf(VehicleMediaCategory.ALL, VehicleMediaCategory.OPENAVM_SENTRY))
             guardRows.filter { RecordingDateFilter.matches(it.event.createdAtEpochMs, selectedEpochDay, dateZone) } else emptyList()
     }
+    val joinedSessions = remember(visibleRecordings, visibleUsbRecordings) {
+        com.dante.zeekrcapabilitylab.product.UnifiedRecordingSession.group(visibleRecordings, visibleUsbRecordings)
+    }
     val timelineItems = remember(
         visibleIncidents,
         visibleRecordings,
         visibleUsbRecordings,
         visibleSentryRecordings,
         visibleGuardRows,
+        joinedSessions,
+        expandedSessionSources,
     ) {
         buildList<VehicleTimelineItem> {
             visibleIncidents.forEach { add(VehicleTimelineItem.Incident(it)) }
-            visibleRecordings.forEach { add(VehicleTimelineItem.InternalRecording(it)) }
-            visibleUsbRecordings.forEach { add(VehicleTimelineItem.UsbRecording(it)) }
+            joinedSessions.forEach { add(VehicleTimelineItem.Joined(it)) }
+            visibleRecordings.filter { item -> joinedSessions.none { it.internal.id == item.id && it.sessionId !in expandedSessionSources } }
+                .forEach { add(VehicleTimelineItem.InternalRecording(it)) }
+            visibleUsbRecordings.filter { item -> joinedSessions.none { group -> group.usb.any { it.stableKey == item.stableKey } && group.sessionId !in expandedSessionSources } }
+                .forEach { add(VehicleTimelineItem.UsbRecording(it)) }
             visibleSentryRecordings.forEach { add(VehicleTimelineItem.FactorySentry(it)) }
             visibleGuardRows.forEach { add(VehicleTimelineItem.OpenAvmSentry(it)) }
         }.sortedByDescending { it.startedAtEpochMs }
@@ -703,7 +719,7 @@ fun EventsScreen() {
                     usbDeleteAllowed && item.recording.availability == MediaAvailability.ONLINE &&
                         item.recording.ownedUnits.isNotEmpty()
                 }
-                is VehicleTimelineItem.FactorySentry, is VehicleTimelineItem.OpenAvmSentry -> null
+                is VehicleTimelineItem.FactorySentry, is VehicleTimelineItem.OpenAvmSentry, is VehicleTimelineItem.Joined -> null
             }
         }
     }
@@ -941,6 +957,26 @@ fun EventsScreen() {
                     key = { it.key },
                 ) { entry ->
                     when (entry) {
+                        is VehicleTimelineItem.Joined -> {
+                            val recording = entry.recording
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(Utils.t("Multi-camera recording", "多路录像"), style = MaterialTheme.typography.titleMedium)
+                                    Text(Utils.t("Surround & cabin · USB + internal storage", "环视与车内 · U 盘 + 内部存储"), style = MaterialTheme.typography.bodySmall)
+                                    Text(Utils.t("{0} available files · one session timeline", "{0} 个可用文件 · 同一条录像时间线", recording.files.size))
+                                    if (recording.hasOfflineFiles) Text(Utils.t("Reconnect USB to include the missing channel.", "重新连接 U 盘以查看缺失通道。"))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(onClick = { playJoinedRecording = recording }, enabled = recording.files.isNotEmpty()) {
+                                            Text(Utils.t("Play / send session", "回放／发送整次录像"))
+                                        }
+                                        TextButton(onClick = {
+                                            expandedSessionSources = if (recording.sessionId in expandedSessionSources)
+                                                expandedSessionSources - recording.sessionId else expandedSessionSources + recording.sessionId
+                                        }) { Text(Utils.t("Manage source files", "管理各存储文件")) }
+                                    }
+                                }
+                            }
+                        }
                         is VehicleTimelineItem.OpenAvmSentry -> {
                             val row = entry.row
                             LaunchedEffect(row.event.id, row.event.state) { loadGuardCover(row) }
@@ -1066,6 +1102,33 @@ fun EventsScreen() {
         browserShare?.let { selection -> BrowserShareDialog(selection) { browserShare = null } }
     }
 
+    playJoinedRecording?.let { selected ->
+        val current = com.dante.zeekrcapabilitylab.product.UnifiedRecordingSession.group(recordings, usbMedia.openAvmRecordings)
+            .firstOrNull { it.sessionId == selected.sessionId }
+        val files = current?.files.orEmpty()
+        if (current != null && files.isNotEmpty()) SessionReviewDialog(
+            files = files, initialFile = files.first(),
+            onSendToPhone = { chosen, withData ->
+                val internalFiles = chosen.filter { it in current.internal.files }
+                val sources = current.usb.map { source -> source to chosen.filter { it in source.files } }.filter { it.second.isNotEmpty() }
+                val known = (internalFiles + sources.flatMap { it.second }).map { it.absolutePath }.toSet()
+                if (chosen.any { it.absolutePath !in known }) false else {
+                    var success = true
+                    if (internalFiles.isNotEmpty() && !queueForPhone(internalFiles, withData)) success = false
+                    for ((source, selectedFiles) in sources) if (!queueUsbForPhone(source, selectedFiles, withData)) success = false
+                    if (!success) statusText = Utils.t("Some files were not queued. Check transfers and retry; completed files are retained.",
+                        "部分文件未能加入队列。请检查传输后重试；已完成文件会保留。")
+                    success
+                }
+            },
+            onDismiss = { playJoinedRecording = null },
+        )
+        else androidx.compose.material3.AlertDialog(onDismissRequest = { playJoinedRecording = null },
+            title = { Text(Utils.t("Recording unavailable", "录像暂不可用")) },
+            text = { Text(Utils.t("Reconnect its storage and refresh the library.", "请重新连接存储设备并刷新媒体库。")) },
+            confirmButton = { TextButton(onClick = { playJoinedRecording = null }) { Text(Utils.t("Close", "关闭")) } })
+    }
+
     playGuardRow?.let { row ->
         val event = row.event
         if (row.files.isNotEmpty()) {
@@ -1096,9 +1159,16 @@ fun EventsScreen() {
         val playbackKey = "internal:${recording.id}"
         val previousItem = playbackNeighbor(playbackKey, -1)
         val nextItem = playbackNeighbor(playbackKey, 1)
-        FourLanePlayerDialog(
+        if (untimedPlaybackKey != playbackKey && !recording.isTimeLapse && recording.sidecar.recordingSessionId?.let(
+                com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryStore::validId) == true) SessionReviewDialog(
+            files = recording.files, initialFile = file,
+            onSendToPhone = { chosen, withData -> queueForPhone(chosen, withData) },
+            onTimingUnavailable = { untimedPlaybackKey = playbackKey },
+            onDismiss = { playRecording = null },
+        ) else FourLanePlayerDialog(
             file = file,
-            files = recording.files,
+            files = if (untimedPlaybackKey == playbackKey && recording.segments.map { it.second.sourceRole }.distinct().size > 1)
+                listOf(file) else recording.files,
             layoutKind = presentation?.layoutKind,
             sourceRole = presentation?.sourceRole,
             recordingMode = recording.sidecar.recordingMode,
@@ -1122,9 +1192,15 @@ fun EventsScreen() {
         val previousItem = playbackNeighbor(playbackKey, -1)
         val nextItem = playbackNeighbor(playbackKey, 1)
         if (recording.availability == MediaAvailability.ONLINE && recording.files.isNotEmpty()) {
-            FourLanePlayerDialog(
+            if (untimedPlaybackKey != playbackKey && recording.category == VehicleMediaCategory.NORMAL &&
+                com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryStore.validId(recording.logicalId.removePrefix("session:"))) SessionReviewDialog(
+                files = recording.files, initialFile = recording.files.first(),
+                onSendToPhone = { chosen, withData -> queueUsbForPhone(recording, chosen, withData) },
+                onTimingUnavailable = { untimedPlaybackKey = playbackKey },
+                onDismiss = { playUsbRecording = null },
+            ) else FourLanePlayerDialog(
                 file = recording.files.first(),
-                files = recording.files,
+                files = if (untimedPlaybackKey == playbackKey) listOf(recording.files.first()) else recording.files,
                 segmentDurationHintsMs = recording.segmentDurationsMs,
                 manualEventEpochs = recording.eventTimes,
                 layoutKind = recording.layoutKind,

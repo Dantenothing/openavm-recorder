@@ -176,11 +176,18 @@ class TransferService : Service() {
         var task = TransferRepository.get(initial.id) ?: return QueueStep.CONTINUE
         if (stopped(task.id)) return QueueStep.CONTINUE
         val raster = io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(task.sidecarJson)
-        val health = if (task.includeDriveData || raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
+        val sessionFormatRequired = io.github.dantenothing.avmtransfer.protocol.RecordingSessionCompatibility.required(task.sidecarJson)
+        val health = if (task.includeDriveData || sessionFormatRequired || raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
             TransferHttp.health(task.id, endpoint) else null
         val capabilities = health?.recordingRasterLayouts.orEmpty()
         if (stopped(task.id)) return QueueStep.CONTINUE
-        if (task.includeDriveData && io.github.dantenothing.avmtransfer.protocol.DriveDataCodec.CAPABILITY !in health?.driveDataFormats.orEmpty()) {
+        if (!io.github.dantenothing.avmtransfer.protocol.RecordingSessionCompatibility.supported(task.sidecarJson, health?.recordingSessionFormats.orEmpty())) {
+            TransferRepository.finish(task, TransferTaskState.FAILED,
+                Utils.t("Update the phone app to play recordings on the shared session timeline.", "请更新手机版，以正确回放同一行程的多通道录像。"))
+            return QueueStep.CONTINUE
+        }
+        val requiredDriveFormat = io.github.dantenothing.avmtransfer.protocol.DriveDataCodec.capability(task.driveData?.schemaVersion ?: 2)
+        if (task.includeDriveData && requiredDriveFormat !in health?.driveDataFormats.orEmpty()) {
             TransferRepository.finish(task, TransferTaskState.FAILED,
                 Utils.t("Update the phone app to receive drive data, or send video only.", "请更新手机版以接收行车数据，或选择仅发送视频。"))
             return QueueStep.CONTINUE

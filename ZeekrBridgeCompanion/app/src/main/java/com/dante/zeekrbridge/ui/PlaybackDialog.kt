@@ -110,6 +110,10 @@ internal fun MediaSessionPlayer(
     modifier: Modifier = Modifier,
     additionalContent: @Composable () -> Unit = {},
 ) {
+    if (com.dante.zeekrbridge.player.supportsSessionPlayback(segments)) {
+        ParallelSessionPlayer(segments, seekRequest, obstructed, onActiveMediaChanged, modifier, additionalContent)
+        return
+    }
     val entries = remember(segments) {
         segments.map { segment ->
             PlaybackEntry(
@@ -126,6 +130,10 @@ internal fun MediaSessionPlayer(
     InlineMediaPlayer(entries = entries, seekRequest = seekRequest, obstructed = obstructed,
         onActiveMediaChanged = onActiveMediaChanged, modifier = modifier, additionalContent = additionalContent)
 }
+
+internal fun IndexedMediaSegment.playbackEntry(): PlaybackEntry = PlaybackEntry(
+    id, Uri.fromFile(file), file.isFile, durationMs, sourceRole, layoutKind, playbackLabels, playbackLaneOrder,
+    originalWidth, originalHeight, raster, lanes, recordingMode)
 
 /** Plays a factory Sentry recording directly from a user-authorized USB tree. */
 @Composable

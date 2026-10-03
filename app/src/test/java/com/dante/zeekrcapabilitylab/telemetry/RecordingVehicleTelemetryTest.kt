@@ -11,6 +11,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class RecordingVehicleTelemetryTest {
+    @Test fun liveSnapshotIsClearedOnStoppedOwnerOrNewCapture() {
+        val owner = Any()
+        val sample = VehicleTelemetrySample(1_000, 1_790_000_000_000,
+            mapOf("speed" to VehicleTelemetryValue(1_000, number = 20.0)))
+        RecordingVehicleTelemetry.claim(owner)
+        RecordingVehicleTelemetry.publish(owner, VehicleTelemetryCaptureState(VehicleTelemetryStatus.RECORDING, latestSample = sample))
+        assertEquals(sample, RecordingVehicleTelemetry.state.value.latestSample)
+        RecordingVehicleTelemetry.publish(owner, VehicleTelemetryCaptureState(VehicleTelemetryStatus.SDK_TIMEOUT, latestSample = sample))
+        assertNull(RecordingVehicleTelemetry.state.value.latestSample)
+        RecordingVehicleTelemetry.publish(owner, VehicleTelemetryCaptureState(VehicleTelemetryStatus.RECORDING, latestSample = sample))
+        RecordingVehicleTelemetry.claim(Any())
+        assertNull(RecordingVehicleTelemetry.state.value.latestSample)
+    }
     private class ManualExecutor : Executor {
         val queue = ArrayList<Runnable>()
         override fun execute(command: Runnable) { queue += command }

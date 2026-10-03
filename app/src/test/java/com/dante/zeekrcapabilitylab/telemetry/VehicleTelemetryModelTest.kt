@@ -85,4 +85,30 @@ class VehicleTelemetryModelTest {
         assertEquals(false, value.brakePressed)
         assertEquals(true, value.brakeLamp)
     }
+    @Test fun pedalCandidatesRetainOnlyExplicitlyProvisionalRawStatus() {
+        val zero = VehicleTelemetryPolicy.observed("throttle_depth", 1_000, 0.0, null, true, "PROVISIONAL_RAW")
+        assertEquals("PROVISIONAL_RAW", zero.status)
+        assertEquals(0.0, zero.number!!, 0.0)
+        assertTrue(VehicleTelemetryPolicy.validValue("throttle_depth", zero))
+        val negative = VehicleTelemetryPolicy.observed("brake_depth", 1_000, -4.0, null, true, "PROVISIONAL_RAW")
+        assertEquals(-4.0, negative.number!!, 0.0) // Unit/range is not being asserted as a percent.
+        assertNull(VehicleTelemetryPolicy.observed("brake_depth", 1_000, 42.0, null, true, "OK").number)
+        assertFalse(VehicleTelemetryPolicy.validValue("speed", zero))
+    }
+    @Test fun invalidOrMissingRawPedalsNeverCarryNumericPayload() {
+        for (raw in listOf(Double.NaN, Double.POSITIVE_INFINITY, 1_000_001.0, -1_000_001.0)) {
+            val value = VehicleTelemetryPolicy.observed("brake_depth", 1_000, raw, null, true, "PROVISIONAL_RAW")
+            assertNull(value.number); assertEquals("INVALID_VALUE", value.status)
+        }
+        val missing = VehicleTelemetryPolicy.observed("brake_depth", 1_000, null, null, false, "PROVISIONAL_RAW")
+        assertNull(missing.number); assertEquals("UNAVAILABLE", missing.status)
+    }
+    @Test fun staleRawPedalIsClearedWithoutChangingBinaryBrakeMeaning() {
+        val sample = sample(3_000).copy(values = mapOf("brake_depth" to VehicleTelemetryValue(500, number = 42.0, status = "PROVISIONAL_RAW"),
+            "brake_pedal" to VehicleTelemetryValue(3_000, number = 0.0)))
+        val result = VehicleTelemetryPlayback.sampleAt(listOf(sample), 3_000)!!
+        assertNull(result.values.getValue("brake_depth").number)
+        assertEquals("STALE", result.values.getValue("brake_depth").status)
+        assertEquals(false, result.brakePressed)
+    }
 }

@@ -29,15 +29,17 @@ data class VehicleTelemetryCaptureState(
     val speedKmh: Double? = null,
     val gear: String? = null,
     val validSignals: Int = 0,
+    val latestSample: VehicleTelemetrySample? = null,
 )
 
 object RecordingVehicleTelemetry {
     private val mutable = MutableStateFlow(VehicleTelemetryCaptureState())
     val state = mutable.asStateFlow()
     private var owner: Any? = null
-    @Synchronized internal fun claim(value: Any) { owner = value }
+    @Synchronized internal fun claim(value: Any) { owner = value; mutable.value = VehicleTelemetryCaptureState() }
     @Synchronized internal fun publish(value: Any, snapshot: VehicleTelemetryCaptureState) {
-        if (owner === value) mutable.value = snapshot
+        if (owner === value) mutable.value = snapshot.copy(
+            latestSample = snapshot.latestSample.takeIf { snapshot.status == VehicleTelemetryStatus.RECORDING })
     }
     fun store(context: Context) = VehicleTelemetryStore(File(context.noBackupFilesDir, "recording-vehicle-telemetry"))
 }
@@ -171,9 +173,9 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
                 } else {
                     if (!append(token, sample)) return@execute
                     val fresh = VehicleTelemetryPlayback.sampleAt(listOf(sample), sample.elapsedMs)
-                    val usable = fresh?.values?.count { it.value.status == "OK" } ?: 0
+                    val usable = fresh?.values?.count { it.value.status in setOf("OK", "PROVISIONAL_RAW") } ?: 0
                     snapshot = snapshot.copy(accepted = snapshot.accepted + 1, lastElapsedMs = sample.elapsedMs,
-                        speedKmh = fresh?.speedKmh, gear = fresh?.gear, validSignals = usable)
+                        speedKmh = fresh?.speedKmh, gear = fresh?.gear, validSignals = usable, latestSample = fresh)
                     emit(token, if (usable > 0) VehicleTelemetryStatus.RECORDING else VehicleTelemetryStatus.UNAVAILABLE)
                     schedule(token, if (usable == 0) 1_000 else (VehicleTelemetryPolicy.POLL_INTERVAL_MS - (now() - startedAt)).coerceAtLeast(1))
                 }
@@ -209,7 +211,8 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
         snapshot = snapshot.copy(status = status,
             speedKmh = snapshot.speedKmh.takeIf { status == VehicleTelemetryStatus.RECORDING },
             gear = snapshot.gear.takeIf { status == VehicleTelemetryStatus.RECORDING },
-            validSignals = snapshot.validSignals.takeIf { status == VehicleTelemetryStatus.RECORDING } ?: 0)
+            validSignals = snapshot.validSignals.takeIf { status == VehicleTelemetryStatus.RECORDING } ?: 0,
+            latestSample = snapshot.latestSample.takeIf { status == VehicleTelemetryStatus.RECORDING })
         if (current(token)) RecordingVehicleTelemetry.publish(this, snapshot)
     }
     private fun storageFailure(token: Long, error: Exception) {

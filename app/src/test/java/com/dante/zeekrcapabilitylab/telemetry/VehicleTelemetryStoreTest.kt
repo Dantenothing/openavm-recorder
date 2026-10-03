@@ -19,6 +19,18 @@ class VehicleTelemetryStoreTest {
     private fun journal() = File(temporary.root, "$id.jsonl")
     private fun header(start: Long = 0) = json.encodeToString(VehicleTelemetryHeader(sessionId = id, startedElapsedMs = start)) + "\n"
 
+    @Test fun provisionalPedalRoundTripKeepsRawStatusAndGetterClock() {
+        val store = VehicleTelemetryStore(temporary.root)
+        store.open(id, 0, 0).use { writer -> writer.append(sample(1_000).copy(values = mapOf(
+            "throttle_depth" to VehicleTelemetryValue(990, number = 0.0, status = "PROVISIONAL_RAW"),
+            "brake_depth" to VehicleTelemetryValue(995, number = 37.25, status = "PROVISIONAL_RAW")))) }
+        val loaded = store.load(id)!!.samples.single()
+        assertEquals(990L, loaded.values.getValue("throttle_depth").readElapsedMs)
+        assertEquals(0.0, loaded.values.getValue("throttle_depth").number!!, 0.0)
+        assertEquals("PROVISIONAL_RAW", loaded.values.getValue("brake_depth").status)
+        assertNull(loaded.brakePressed)
+    }
+
     @Test fun roundTripPreservesSourceTimeAndMissingControls() {
         val store = VehicleTelemetryStore(temporary.root)
         store.open(id, 100, 0).use { it.append(sample(1_000)); it.append(sample(1_250).copy(values = mapOf("speed" to VehicleTelemetryValue(1_200, status = "SENTINEL")))) }

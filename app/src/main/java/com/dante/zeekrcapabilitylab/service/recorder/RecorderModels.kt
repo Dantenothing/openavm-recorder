@@ -26,12 +26,16 @@ data class RecorderConfig(
     val strictFrameRate: Boolean = false,
     /** Product settings select this by default for supported sources; raw/diagnostic configs remain explicit. */
     val sharedInputRecordingEnabled: Boolean = false,
+    /** Optional normal-speed cabin streams, frozen with this start/return configuration. */
+    val auxiliaryChannels: List<RecordingSourceRole> = emptyList(),
 ) {
     val cameraId: String get() = source.cameraId
     val profile: CameraFormatProfile get() = source.profile
 
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
+        if (auxiliaryChannels.size > 2 || auxiliaryChannels.distinct().size != auxiliaryChannels.size ||
+            auxiliaryChannels.any { it == RecordingSourceRole.SURROUND }) errors += "invalid auxiliary channels"
         if (cameraId.isBlank()) errors += "cameraId must not be blank"
         if (profile.size.width <= 0 || profile.size.height <= 0) {
             errors += "profile size must be positive"
@@ -157,6 +161,8 @@ data class RecorderState(
     /** PARTIAL_WAKE_LOCK held while segments are actively recording. */
     val wakeLockHeld: Boolean = false,
     val recordingSessionId: String? = null,
+    val channelId: String? = null,
+    val sessionStartedElapsedMs: Long? = null,
     val sessionStartedAtEpochMs: Long? = null,
     val recordingMode: RecordingMode = RecordingMode.NORMAL,
     val timeLapseMultiplier: Int = 1,

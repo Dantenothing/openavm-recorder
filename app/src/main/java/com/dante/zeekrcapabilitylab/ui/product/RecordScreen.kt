@@ -405,12 +405,25 @@ fun RecordScreen() {
         }
     }
 
-    // Directory scans and free-space probes run on IO, never on the UI thread.
-    val capacity by produceState(initialValue = RecordingCapacity(), recordingActive, recorderState.activeStorageUuid, appForeground) {
+    val selectedCabinCount = if (activeSourceRole == RecordingSourceRole.SURROUND && activeRecordingMode == RecordingMode.NORMAL)
+        listOf(settings.recordFrontCabin, settings.recordRearCabin).count { it } else 0
+    // Reuse the existing foreground/start/storage-change cadence. The second destination
+    // is measured on the same IO job; no background capacity poller is added.
+    val capacities by produceState(initialValue = listOf(RecordingCapacity()), recordingActive,
+        recorderState.activeStorageUuid, recorderState.activeStorageKind, appForeground, selectedCabinCount) {
         if (appForeground) value = withContext(Dispatchers.IO) {
-            runCatching { RecordingCapacityReader.read(context, recorderState, serviceRunning) }.getOrDefault(RecordingCapacity())
+            val primary = runCatching { RecordingCapacityReader.read(context, recorderState, serviceRunning) }.getOrDefault(RecordingCapacity())
+            buildList {
+                add(primary)
+                if (selectedCabinCount > 0 && primary.storage != RecordingStorageKind.INTERNAL) {
+                    add(runCatching { RecordingCapacityReader.readInternal(context,
+                        if (serviceRunning) recorderState.storageLimitBytes else settings.internalStorageLimitBytes) }
+                        .getOrDefault(RecordingCapacity(RecordingStorageKind.INTERNAL)))
+                }
+            }
         }
     }
+    val capacity = capacities.first()
 
     val readyConfig = (configState as? RecordConfigState.Ready)?.config
     val canStart = RecorderCommandPolicy.canStart(recorderState.status, serviceRunning) &&
@@ -427,7 +440,17 @@ fun RecordScreen() {
     } else {
         1L
     }
-    val estimatedMinutes = RecordingCapacityMath.minutes(capacity.availableBytes, estimatedBitrateBps, estimatedCapacityMultiplier.toInt())
+    val storageStatus = capacities.map { destination -> RecordingStorageStatus(
+        label = when (destination.storage) {
+            RecordingStorageKind.USB_MEDIASTORE -> "USB"
+            RecordingStorageKind.INTERNAL -> Utils.t("Head unit", "车机内部")
+            null -> Utils.t("Unknown storage", "存储位置未知")
+        },
+        freeSpace = destination.freeBytes?.let(::formatBytes) ?: Utils.t("Unknown", "未知"),
+        estimatedMinutes = RecordingCapacityMath.minutes(destination.availableBytes,
+            RecordingCapacityMath.bitrateForStorage(capacity.storage, estimatedBitrateBps, destination.storage, selectedCabinCount),
+            estimatedCapacityMultiplier.toInt()),
+    ) }
     val recordingElapsed = (recorderState.sessionStartedAtEpochMs ?: recorderState.segmentStartedAtEpochMs)
         ?.let { now - it }
     val guardStoppedWithError = false
@@ -588,6 +611,7 @@ fun RecordScreen() {
             QuickStartEntry()
             RecordingTelemetryLabel()
             RecordingVehicleTelemetryLabel()
+            RecordingChannelStatus()
             Spacer(Modifier.height(8.dp))
             modeSwitchProgress?.let { progress ->
                 Text(com.dante.zeekrcapabilitylab.service.RecordingModeOverlayMenu.progressLabel(progress))
@@ -710,14 +734,8 @@ fun RecordScreen() {
             }
 
             ProductStatusCard(
-                freeSpace = capacity.freeBytes?.let(::formatBytes) ?: Utils.t("Unknown", "未知"),
-                storage = when (capacity.storage) {
-                    RecordingStorageKind.USB_MEDIASTORE -> "USB"
-                    RecordingStorageKind.INTERNAL -> Utils.t("Head unit", "车机")
-                    null -> Utils.t("Unknown", "未知")
-                },
+                storageStatus = storageStatus,
                 quality = requestedProfile?.label ?: Utils.t("Unknown", "未知"),
-                estimatedMinutes = estimatedMinutes,
                 segmentSeconds = if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
                     TimeLapsePolicy.SAFETY_CHUNK_SECONDS
                 } else {
@@ -895,6 +913,16 @@ private fun HomePreviewPane(
     mirrorManaged: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val hudContext = LocalContext.current
+    val hudPreferences = remember(hudContext) { hudContext.getSharedPreferences("drive-hud", 0) }
+    var hudVisible by remember(hudPreferences) { mutableStateOf(hudPreferences.getBoolean("live-visible", true)) }
+    DisposableEffect(hudPreferences) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { preferences, key ->
+            if (key == "live-visible") hudVisible = preferences.getBoolean("live-visible", true)
+        }
+        hudPreferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { hudPreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     var lensMode by remember(settings) { mutableStateOf(settings.lensMode) }
     val mirrorHome by com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.homeControls.collectAsState()
     BackHandler(enabled = mirrorManaged && sourceRole == RecordingSourceRole.SURROUND && mirrorHome.displayMode.singleLane != null) {
@@ -959,6 +987,10 @@ private fun HomePreviewPane(
                         .padding(8.dp),
                 )
             }
+            if (recordingActive && appForeground) LiveRecordingHud(hudVisible, {
+                hudVisible = it; hudPreferences.edit().putBoolean("live-visible", it).apply()
+            }, Modifier.align(Alignment.BottomStart).padding(8.dp).fillMaxWidth(if (previewSide < 450.dp) 1f else 0.72f),
+                compact = previewSide < 450.dp)
         }
     }
 }
@@ -1104,10 +1136,8 @@ private fun StaticSinglePreview(modifier: Modifier = Modifier) {
 
 @Composable
 private fun ProductStatusCard(
-    freeSpace: String,
-    storage: String,
+    storageStatus: List<RecordingStorageStatus>,
     quality: String,
-    estimatedMinutes: Long?,
     segmentSeconds: Int,
     autoCleanupEnabled: Boolean,
     timeLapse: Boolean,
@@ -1120,11 +1150,12 @@ private fun ProductStatusCard(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(10.dp))
-            ProductInfoRow(Utils.t("Free space", "可用空间"), freeSpace)
-            ProductInfoRow(Utils.t("Storage destination", "录像存储位置"), storage)
+            storageStatus.forEach { destination ->
+                ProductInfoRow(Utils.t("Free space · {0}", "可用空间 · {0}", destination.label), destination.freeSpace)
+                ProductInfoRow(Utils.t("Before cleanup · {0}", "清理前预计可录 · {0}", destination.label), formatEstimatedMinutes(destination.estimatedMinutes))
+            }
             ProductInfoRow(Utils.t("Requested quality", "当前请求画质"), quality)
-            ProductInfoRow(Utils.t("Estimated before cleanup", "清理前预计可录"), formatEstimatedMinutes(estimatedMinutes))
-            Text(Utils.t("Estimate uses the current bitrate, storage quota and reserved space. Cleanup may extend recording; actual file size varies.", "按当前码率、存储配额和保留空间估算。清理旧录像后可继续录制，实际文件大小会有变化。"),
+            Text(Utils.t("Each estimate includes the selected channels on that storage, its quota and reserved space. Space is sampled when opening this screen or changing recording state. Cleanup may extend recording; actual file size varies.", "分别按各存储上的所选通道总码率、配额及保留空间估算；打开此页或录像状态改变时读取容量。清理旧录像后可继续录制，实际文件大小会有变化。"),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ProductInfoRow(
                 if (timeLapse) Utils.t("Safety chunk", "安全分段") else Utils.t("Segment length", "分段时长"),
@@ -1134,6 +1165,8 @@ private fun ProductStatusCard(
         }
     }
 }
+
+private data class RecordingStorageStatus(val label: String, val freeSpace: String, val estimatedMinutes: Long?)
 
 @Composable
 private fun ProductInfoRow(label: String, value: String) {

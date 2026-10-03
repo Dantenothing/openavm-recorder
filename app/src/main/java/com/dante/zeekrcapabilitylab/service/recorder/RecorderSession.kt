@@ -63,6 +63,7 @@ class RecorderSession(
     private val onStopped: () -> Unit,
     private val externallyManagedPresence: Boolean = false,
     private val diagnosticScope: RecorderDiagnosticScope? = null,
+    private val auxiliaryChannel: Boolean = false,
 ) {
     /** App metadata returned with callbacks; this does not alter any HAL request controls. */
     private data class CaptureOutputTag(val includesPreview: Boolean)
@@ -87,7 +88,10 @@ class RecorderSession(
     )
 
     private val segmentsDir = File(context.filesDir, "recordings/segments").apply { mkdirs() }
-    private val internalOutputSink: RecordingOutputSink = InternalRecordingOutputSink(segmentsDir)
+    private var channelIdentity: RecordingChannelIdentity? = null
+    private val internalOutputSink: RecordingOutputSink = InternalRecordingOutputSink(segmentsDir) {
+        if (auxiliaryChannel) requireNotNull(channelIdentity).channelId.lowercase() + "-" else ""
+    }
     private val usbRecoveryJournal = UsbRecordingRecoveryJournal(context)
     private val usbCapabilityStore = UsbDirectRecordingCapabilityStore(context)
     private val usbCommitEngine = UsbSegmentCommitEngine(context)
@@ -119,7 +123,7 @@ class RecorderSession(
     private var config: RecorderConfig? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-    private var recordingEncoder: RecordingEncoder? = null
+    @Volatile private var recordingEncoder: RecordingEncoder? = null
     private var continuousRotationPending = false
     private var continuousRotationToken = 0L
     private var continuousRotationWatchdog: Runnable? = null
@@ -157,6 +161,16 @@ class RecorderSession(
     private var segmentRecordingStartedAtElapsedMs: Long? = null
     private var previousSegmentStoppedElapsedMs: Long? = null
     private var frameStats = SegmentFrameStats()
+    @Volatile private var latestCapture = CaptureEvidence()
+    fun captureEvidence(): CaptureEvidence {
+        val captured = latestCapture
+        // Only cached counters; no camera, codec, file or native call is made here.
+        val encoder = recordingEncoder
+        val current = (encoder as? ProductContinuousRecorder)?.evidence()
+            ?: (encoder as? ContinuousVideoRecorder)?.evidence()
+        return if (current == null) captured else captured.copy(encoder = current)
+    }
+    fun stateSnapshot(): RecorderState = state
     private val previewCaptureTracker = PreviewCaptureTracker()
     private var lastTimestampNs: Long? = null
     private var lastFrameReceivedAtElapsedMs: Long? = null
@@ -241,7 +255,8 @@ class RecorderSession(
             activeStorageUuid = if (s.activeStorageKind == RecordingStorageKind.USB_MEDIASTORE) activeUsbTarget?.storageUuid else null), expectedSessionId)
     }
 
-    fun start(config: RecorderConfig, previewSurface: Surface? = null, requiredStorage: RecordingStorageIdentity? = null) {
+    fun start(config: RecorderConfig, previewSurface: Surface? = null, requiredStorage: RecordingStorageIdentity? = null,
+              sharedIdentity: RecordingChannelIdentity? = null) {
         postCamera {
             val errors = config.validate()
             if (errors.isNotEmpty()) {
@@ -270,7 +285,7 @@ class RecorderSession(
             }
             val selectedUsb = if (diagnosticScope != null) {
                 UsbExportVolumeResolver.resolveExact(context, diagnosticScope.target)
-            } else if (config.storagePreference == RecordingStoragePreference.USB_PREFERRED) {
+            } else if (!auxiliaryChannel && config.storagePreference == RecordingStoragePreference.USB_PREFERRED) {
                 runCatching { UsbPendingRecordingRecovery.recoverMounted(context) }
                 UsbExportVolumeResolver.mountedTargets(context).singleOrNull()
             } else null
@@ -304,7 +319,10 @@ class RecorderSession(
             this.segmentNumber = 0
             nextProductTimelineUs = 0
             this.previousSegmentStoppedElapsedMs = null
-            val recordingSessionId = recordingSessionIdentity.beginNewSession()
+            val recordingSessionId = recordingSessionIdentity.beginNewSession(sharedIdentity?.sessionId)
+            channelIdentity = sharedIdentity ?: RecordingChannelIdentity(recordingSessionId, SystemClock.elapsedRealtime(),
+                RecordingChannelId.forRole(config.source.sourceRole))
+            require(channelIdentity?.channelId == RecordingChannelId.forRole(config.source.sourceRole))
             statePublication.begin(recordingSessionId)
             continuousFailureCapture = ContinuousFailureAndroid.forSession(recordingSessionId)
             val sessionStartedAtEpochMs = System.currentTimeMillis()
@@ -354,7 +372,7 @@ class RecorderSession(
             cancelVehicleAwayTimer()
             cancelVehiclePowerReconciliation()
             lastVehiclePowerSnapshot = null
-            if (diagnosticScope == null) quarantineLeftoverPartials()
+            if (diagnosticScope == null && !auxiliaryChannel) quarantineLeftoverPartials()
             updateState(
                 state.copy(
                     status = RecorderStatus.STARTING,
@@ -380,6 +398,8 @@ class RecorderSession(
                     mirrorPreviewManaged = config.mirrorPreviewEnabled,
                     cameraGeneration = 0,
                     recordingSessionId = recordingSessionId,
+                    channelId = channelIdentity?.channelId,
+                    sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
                     sessionStartedAtEpochMs = sessionStartedAtEpochMs,
                     recordingMode = config.recordingMode,
                     timeLapseMultiplier = config.timeLapseMultiplier,
@@ -1164,23 +1184,26 @@ class RecorderSession(
             val existing = currentIncidentTag ?: incidentStore.pending(requestedAt)
             val eventId = existing?.eventId ?: IncidentProtectionStore.eventId(requestedAt)
             val eventRequestedAt = existing?.requestedAtEpochMs ?: requestedAt
+            val eventRequestedElapsed = existing?.requestedAtElapsedMs ?: if (existing == null) SystemClock.elapsedRealtime() else null
 
             if (currentPartial != null) {
                 currentIncidentTag = IncidentTag(
                     eventId = eventId,
                     requestedAtEpochMs = eventRequestedAt,
                     role = IncidentProtectionStore.ROLE_CURRENT,
+                    requestedAtElapsedMs = eventRequestedElapsed,
                 )
                 currentConsumesPendingIncident = false
                 protectedPending = true
             }
             // Always reserve one successful segment after the press. The store
             // survives a service recreation, but expires before a later drive.
-            incidentStore.saveNext(eventId, eventRequestedAt)
+            incidentStore.saveNext(eventId, eventRequestedAt, eventRequestedElapsed)
             protectRecentFinalizedSegments(
                 count = 2,
                 eventId = eventId,
                 requestedAtEpochMs = eventRequestedAt,
+                requestedAtElapsedMs = eventRequestedElapsed,
             )
             EventLogger.logEvent(
                 Categories.SYSTEM,
@@ -1689,9 +1712,10 @@ class RecorderSession(
         previewCaptureTracker.reset(segmentGeneration)
         lastTimestampNs = null
         lastFrameReceivedAtElapsedMs = null
-        RecorderCaptureEvidence.update(CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber))
+        latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber)
+        if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
         if (diagnosticScope == null && currentIncidentTag == null) {
-            val pendingIncident = incidentStore.pending(nowEpoch)
+            val pendingIncident = if (auxiliaryChannel) null else incidentStore.pending(nowEpoch)
             if (pendingIncident != null) {
                 currentIncidentTag = pendingIncident
                 currentConsumesPendingIncident = true
@@ -1776,6 +1800,7 @@ class RecorderSession(
             if (recorder is NativeFileRecordingEncoder && output is UsbMediaStoreRecordingOutputHandle) {
                 val sidecar = nativeSidecar(output, cfg).copy(protected = protectedPending,
                     eventId = currentIncidentTag?.eventId, eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs,
+                    eventRequestedElapsedMs = currentIncidentTag?.requestedAtElapsedMs,
                     eventRole = currentIncidentTag?.role)
                 output.checkpointNative(sidecar)
                 nativeSidecars[output] = sidecar
@@ -1936,13 +1961,16 @@ class RecorderSession(
             startedAtElapsedRealtimeMs = null, stoppedAtElapsedRealtimeMs = null, gapFromPreviousMs = null,
             result = SegmentSidecar.RESULT_SUCCESS, error = null, fileBytes = 0L,
             protected = false, eventId = null, eventRequestedAtEpochMs = null, eventRole = null,
-            frameStats = SegmentFrameStats(), storageLimitBytes = cfg.storageLimitBytes)
+            frameStats = SegmentFrameStats(), storageLimitBytes = cfg.storageLimitBytes,
+            channelId = channelIdentity?.channelId, sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
+            productRepacked = true)
     }
 
     private fun freezeProductProtection(output: RecordingOutputHandle?) {
         val seed = productFiles[output] ?: return
         productFiles[output] = seed.copy(protected = protectedPending, eventId = currentIncidentTag?.eventId,
             eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs, eventRole = currentIncidentTag?.role,
+            eventRequestedElapsedMs = currentIncidentTag?.requestedAtElapsedMs,
             consumesPendingIncident = currentConsumesPendingIncident)
     }
 
@@ -2090,6 +2118,8 @@ class RecorderSession(
             val frozen = seed.copy(startedAtEpochMs = file.firstEpochMs, startedAtElapsedRealtimeMs = file.firstElapsedMs,
                 stoppedAtEpochMs = file.endedEpochMs, stoppedAtElapsedRealtimeMs = file.endedElapsedMs,
                 continuousTimeline = timeline,
+                videoClockAnchor = if (seed.recordingMode == RecordingMode.NORMAL)
+                    RecordingClockPolicy.observedAnchor(file.firstElapsedMs, "CALLBACK_OBSERVED") else null,
                 gapFromPreviousMs = SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, file.firstElapsedMs))
             previousSegmentStoppedElapsedMs = file.endedElapsedMs
             pendingUsbCommits++
@@ -2187,6 +2217,13 @@ class RecorderSession(
     }
 
     private fun newRecordingEncoder(cfg: RecorderConfig): RecordingEncoder {
+        if (auxiliaryChannel) {
+            val selection = ContinuousVideoRecorder.inspectEncoder(manager, cfg)
+            updateState(state.copy(encoderSelection = selection))
+            val codec = requireNotNull(selection.codecName) { "AUXILIARY_CODEC_UNAVAILABLE:${selection.reason}" }
+            return ContinuousVideoRecorder(codec, ::onEncoderError, continuousFailureCapture,
+                RecordingChannelPolicy.QUEUE_BYTES, RecordingChannelPolicy.QUEUE_ITEMS)
+        }
         if (diagnosticScope != null) {
             updateState(state.copy(encoderSelection = ContinuousEncoderSelection("PREFLIGHT_MEDIA_RECORDER_BASELINE")))
             return LegacyRecordingEncoder(::onEncoderError)
@@ -2237,6 +2274,7 @@ class RecorderSession(
         laneLayout = cfg.source.laneLayout, segmentSeconds = USB_SEGMENT_SECONDS,
         segmentNumber = output.pendingVideo.segmentNumber, processStartId = processStartId,
         recordingSessionId = output.pendingVideo.recordingSessionId, recordingMode = RecordingMode.NORMAL,
+        channelId = channelIdentity?.channelId, sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
         requestedAtEpochMs = output.pendingVideo.startedAtEpochMs, result = SegmentSidecar.RESULT_SUCCESS,
         provisional = true, finalizeReason = "NATIVE_FILE_PENDING")
 
@@ -2282,6 +2320,7 @@ class RecorderSession(
                 val completed = requireNotNull(nativeSidecars[old]).copy(stoppedAtEpochMs = epoch,
                     stoppedAtElapsedRealtimeMs = elapsed, frameStats = frameStats, protected = protectedPending,
                     eventId = tag?.eventId, eventRequestedAtEpochMs = tag?.requestedAtEpochMs, eventRole = tag?.role,
+                    eventRequestedElapsedMs = tag?.requestedAtElapsedMs,
                     provisional = false, finalizeReason = "NATIVE_FILE_SWITCH")
                 nativeSidecars[old] = completed
                 val consumeIncident = currentConsumesPendingIncident
@@ -2303,7 +2342,8 @@ class RecorderSession(
                 segmentRecordingStartedAtEpochMs = epoch; segmentRecordingStartedAtElapsedMs = elapsed
                 val started = requireNotNull(nativeSidecars[next]).copy(startedAtEpochMs = epoch, startedAtElapsedRealtimeMs = elapsed,
                     protected = protectedPending, eventId = currentIncidentTag?.eventId,
-                    eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs, eventRole = currentIncidentTag?.role)
+                    eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs, eventRole = currentIncidentTag?.role,
+                    eventRequestedElapsedMs = currentIncidentTag?.requestedAtElapsedMs)
                 nativeSidecars[next] = started
                 runIo { runCatching { next.checkpointNative(started) }.onFailure {
                     cameraHandler?.post { if (recordingEncoder === encoder && !stopping)
@@ -3243,9 +3283,10 @@ class RecorderSession(
     }
 
     private fun publishCaptureEvidence() {
-        RecorderCaptureEvidence.update(CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber,
+        latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber,
             frameStats, lastFrameReceivedAtElapsedMs, previewCaptureTracker.stats,
-            (recordingEncoder as? ProductContinuousRecorder)?.evidence() ?: (recordingEncoder as? ContinuousVideoRecorder)?.evidence()))
+            (recordingEncoder as? ProductContinuousRecorder)?.evidence() ?: (recordingEncoder as? ContinuousVideoRecorder)?.evidence())
+        if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
     }
 
     private fun failSegmentStart(generation: Long, partial: File, message: String, originalError: Throwable? = null) {
@@ -3426,6 +3467,9 @@ class RecorderSession(
                         "terminal" to (result.terminal || stopping).toString(), "outputLost" to result.outputLost.toString(),
                         "closeDurationMs" to (SystemClock.elapsedRealtime() - closeRequestedElapsedMs).toString()))
                     completedEncodedSegment = (recorder as? ContinuousVideoRecorder)?.lastCompleted
+                    latestCapture = latestCapture.copy(encoder = (recorder as? ProductContinuousRecorder)?.evidence()
+                        ?: (recorder as? ContinuousVideoRecorder)?.evidence() ?: latestCapture.encoder)
+                    if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
                     recordingEncoder = null
                     if (captureSession === session) captureSession = null
                     if (result.deviceClosed && cameraDevice === camera) cameraDevice = null
@@ -3596,6 +3640,8 @@ class RecorderSession(
                 finalizeEnteredElapsed = finalizeEnteredElapsed,
                 stoppedEpoch = encodedSummary?.endedEpochMs ?: System.currentTimeMillis(),
                 stoppedElapsed = encodedSummary?.endedElapsedMs ?: SystemClock.elapsedRealtime(),
+                videoClockAnchor = encodedSummary?.videoClockAnchor,
+                continuousTimeline = encodedSummary?.continuousTimeline,
             )
             return
         }
@@ -3665,9 +3711,14 @@ class RecorderSession(
             protected = protected,
             eventId = incidentTag?.eventId,
             eventRequestedAtEpochMs = incidentTag?.requestedAtEpochMs,
+            eventRequestedElapsedMs = incidentTag?.requestedAtElapsedMs,
             eventRole = incidentTag?.role,
             frameStats = stats,
             storageLimitBytes = cfg?.storageLimitBytes ?: state.storageLimitBytes,
+            channelId = channelIdentity?.channelId,
+            sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
+            videoClockAnchor = encodedSummary?.videoClockAnchor,
+            continuousTimeline = encodedSummary?.continuousTimeline,
         )
         if (success) {
             pendingSidecarFiles += snapshot.finalPath!!.name
@@ -3746,6 +3797,7 @@ class RecorderSession(
                             eventId = existing?.eventId ?: snapshot.eventId,
                             eventRequestedAtEpochMs = existing?.eventRequestedAtEpochMs
                                 ?: snapshot.eventRequestedAtEpochMs,
+                            eventRequestedElapsedMs = existing?.eventRequestedElapsedMs ?: snapshot.eventRequestedElapsedMs,
                             eventRole = existing?.eventRole ?: snapshot.eventRole,
                         ),
                 )
@@ -3878,6 +3930,8 @@ class RecorderSession(
         finalizeEnteredElapsed: Long,
         stoppedEpoch: Long,
         stoppedElapsed: Long,
+        videoClockAnchor: io.github.dantenothing.avmtransfer.protocol.VideoClockAnchor? = null,
+        continuousTimeline: io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline? = null,
     ) {
         val gap = SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, actualStartedElapsed)
         previousSegmentStoppedElapsedMs = stoppedElapsed
@@ -3941,6 +3995,11 @@ class RecorderSession(
             eventRole = incidentTag?.role,
             frameStats = stats,
             storageLimitBytes = cfg?.storageLimitBytes ?: state.storageLimitBytes,
+            channelId = channelIdentity?.channelId,
+            sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
+            videoClockAnchor = videoClockAnchor,
+            continuousTimeline = continuousTimeline,
+            eventRequestedElapsedMs = incidentTag?.requestedAtElapsedMs,
         )
         val profile = snapshot.profile ?: run {
             output.abort()
@@ -4567,8 +4626,10 @@ class RecorderSession(
         count: Int,
         eventId: String,
         requestedAtEpochMs: Long,
+        requestedAtElapsedMs: Long? = null,
     ) {
         val ownerSession = recordingSessionIdentity.requireCurrentId()
+        val ownerChannel = channelIdentity?.channelId
         val currentSegment = segmentNumber
         val generation = manualSessionGeneration
         val target = activeUsbTarget.takeIf { sessionStoragePlan?.active?.kind == RecordingStorageKind.USB_MEDIASTORE }
@@ -4578,11 +4639,13 @@ class RecorderSession(
             it.value.segmentNumber < currentSegment && (it.value.eventId == null || it.value.eventId == eventId) }
             .sortedByDescending { it.value.segmentNumber }.take(count).map { (output, sidecar) ->
                 output to sidecar.copy(protected = true, eventId = eventId, eventRequestedAtEpochMs = requestedAtEpochMs,
+                    eventRequestedElapsedMs = requestedAtElapsedMs,
                     eventRole = IncidentProtectionStore.ROLE_PREVIOUS)
             }
         val nativeCurrent = (currentOutput as? UsbMediaStoreRecordingOutputHandle)?.let { output ->
             nativeSidecars[output]?.let { output to it.copy(protected = protectedPending,
                 eventId = currentIncidentTag?.eventId, eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs,
+                eventRequestedElapsedMs = currentIncidentTag?.requestedAtElapsedMs,
                 eventRole = currentIncidentTag?.role) }
         }
         val checkpoints = nativePrevious + listOfNotNull(nativeCurrent)
@@ -4611,7 +4674,8 @@ class RecorderSession(
                 .orEmpty()
             var protectedCount = 0
             synchronized(RecorderStorageLock.lock) {
-                val candidates = recent.mapNotNull { file -> SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.let {
+                val candidates = recent.mapNotNull { file -> SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))
+                    ?.takeIf { it.channelId == null || it.channelId == ownerChannel }?.let {
                     IncidentCandidate(file.absolutePath, it.recordingSessionId, it.segmentNumber, it.eventId)
                 } }
                 val selected = IncidentSelection.previous(candidates, ownerSession, currentSegment, eventId, count)
@@ -4626,6 +4690,7 @@ class RecorderSession(
                             protected = true,
                             eventId = eventId,
                             eventRequestedAtEpochMs = requestedAtEpochMs,
+                            eventRequestedElapsedMs = requestedAtElapsedMs,
                             eventRole = IncidentProtectionStore.ROLE_PREVIOUS,
                         ),
                     )
@@ -4652,7 +4717,7 @@ class RecorderSession(
 
     private fun quarantineLeftoverPartials() {
         val leftovers = segmentsDir.listFiles()
-            ?.filter { SegmentNaming.isPartial(it.name) || it.name.endsWith(".tmp") }
+            ?.filter { (SegmentNaming.isPartial(it.name) || it.name.endsWith(".tmp")) && !InternalRecordingOutputOwners.owns(it) }
             .orEmpty()
         leftovers.forEach { file ->
             if (SegmentNaming.isPartial(file.name)) {
@@ -4787,6 +4852,9 @@ class RecorderSession(
             segmentNumber = s.segmentNumber,
             processStartId = s.processStartId,
             recordingSessionId = s.recordingSessionId,
+            channelId = s.channelId,
+            sessionStartedElapsedMs = s.sessionStartedElapsedMs,
+            videoClockAnchor = s.videoClockAnchor,
             recordingMode = s.recordingMode,
             timeLapseMultiplier = s.timeLapseMultiplier,
             requestedCaptureRateFps = s.requestedCaptureRateFps,
@@ -4808,6 +4876,7 @@ class RecorderSession(
             protected = s.protected,
             eventId = s.eventId,
             eventRequestedAtEpochMs = s.eventRequestedAtEpochMs,
+            eventRequestedElapsedMs = s.eventRequestedElapsedMs,
             eventRole = s.eventRole,
             actualTrack = actualTrack,
             frameStats = s.frameStats,
@@ -4819,7 +4888,10 @@ class RecorderSession(
             timeLapseAccuracy = measurement?.accuracy,
             finalizeReason = s.finalizeReason,
         )
-        return s.continuousTimeline?.let { sidecar.withContinuousRaster(ProductContinuousRecorder.RASTER, it) } ?: sidecar
+        val timeline = s.continuousTimeline ?: return sidecar
+        require(timeline.validate().isEmpty())
+        return if (s.productRepacked) sidecar.withContinuousRaster(ProductContinuousRecorder.RASTER, timeline)
+            else sidecar.copy(continuousTimeline = timeline) // Direct codec input retains its original raster.
     }
 
     /** Sidecar write failure must never crash the recorder; it degrades to an error log. */
@@ -5012,7 +5084,7 @@ class RecorderSession(
                         protected = sidecar?.protected ?: false,
                         uploadPinned = sidecar?.uploadPinned ?: false,
                         usbExportPinned = UsbExportPinRegistry.isPinned(file),
-                        analysisInFlight = file.name in pendingSidecarFiles,
+                        analysisInFlight = file.name in pendingSidecarFiles || sidecar?.provisional == true,
                         playing = PlaybackPinRegistry.isPinned(file),
                     )
                 }
@@ -5193,6 +5265,11 @@ class RecorderSession(
         val frameStats: SegmentFrameStats,
         val storageLimitBytes: Long,
         val continuousTimeline: io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline? = null,
+        val productRepacked: Boolean = false,
         val consumesPendingIncident: Boolean = false,
+        val channelId: String? = null,
+        val sessionStartedElapsedMs: Long? = null,
+        val videoClockAnchor: io.github.dantenothing.avmtransfer.protocol.VideoClockAnchor? = null,
+        val eventRequestedElapsedMs: Long? = null,
     )
 }

@@ -31,6 +31,10 @@ data class DriveDataBundle(
     val alignment: String = "SEGMENT_ELAPSED_APPROX_V1",
     val gps: List<DriveGpsSample> = emptyList(),
     val vehicle: List<DriveVehicleSample> = emptyList(),
+    /** v2 only; the file's measured clock relationship, never the phone's clock. */
+    val videoClockAnchor: VideoClockAnchor? = null,
+    /** v2 only; aggregate evidence captured for this session, never a raw field report. */
+    val recorderReport: DriveRecorderReport? = null,
 )
 
 @Serializable
@@ -68,18 +72,25 @@ object DriveDataCodec {
     const val MAX_BYTES = 4 * 1024 * 1024
     const val MAX_SAMPLES_PER_SOURCE = 20_000
     const val CAPABILITY = "drive-data-v1"
+    const val CAPABILITY_V2 = "drive-data-v2"
     const val ALIGNMENT = "SEGMENT_ELAPSED_APPROX_V1"
+    const val ANCHORED_ALIGNMENT = "VIDEO_CLOCK_ANCHOR_V2"
     const val PLAYBACK_AGE_MS = 2_000L
     private const val MAX_EPOCH_MS = 253_402_300_799_999L
     private val uuid = Regex("[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")
     private val hash = Regex("[a-f0-9]{64}")
     private val providers = setOf("gps", "network", "fused", "passive")
-    private val vehicleKeys = setOf("speed", "gear", "indicator", "turn_left", "turn_right", "brake_pedal", "stop_lamp")
+    private val vehicleKeysV1 = setOf("speed", "gear", "indicator", "turn_left", "turn_right", "brake_pedal", "stop_lamp")
+    private val vehicleKeys = vehicleKeysV1 + setOf("brake_depth", "throttle_depth")
     private val statuses = setOf("OK", "NO_VALUE", "SENTINEL", "TINY_SENTINEL", "NON_FINITE", "OUT_OF_RANGE",
-        "UNKNOWN_ENUM", "NON_INTEGER_ENUM", "UNAVAILABLE", "READ_FAILED", "INVALID_VALUE", "STALE")
+        "UNKNOWN_ENUM", "NON_INTEGER_ENUM", "UNAVAILABLE", "READ_FAILED", "INVALID_VALUE", "STALE", "PROVISIONAL_RAW")
     private val primitiveMembers = setOf("schemaVersion", "sizeBytes", "segmentStartedElapsedMs", "segmentEndedElapsedMs",
         "elapsedMs", "epochMs", "latitude", "longitude", "accuracyM", "speedMps", "speedAccuracyMps",
-        "readElapsedMs", "number", "breakBefore")
+        "readElapsedMs", "number", "breakBefore", "mediaPositionUs", "elapsedRealtimeNs", "uncertaintyMs",
+        "gpsSamples", "vehicleSamples", "gpsBreaks", "vehicleBreaks", "pedalRawSamples", "observations", "rawAvailable", "rawMin", "rawMax", "finalizedFiles",
+        "failedFiles", "provisionalFiles", "savedBytes", "observedFrames", "mediaDurationMs", "anchoredFiles",
+        "observationAnchoredFiles", "approximateFiles", "inventoryComplete", "capturedFrames", "encodedFrames",
+        "writtenFrames", "completedFiles", "cleanupPending", "cleanupUnconfirmed")
     private val json = Json { ignoreUnknownKeys = false; encodeDefaults = false; isLenient = false }
 
     fun encode(bundle: DriveDataBundle): ByteArray {
@@ -97,13 +108,16 @@ object DriveDataCodec {
     }.getOrNull()
 
     fun descriptor(bytes: ByteArray): DriveDataDescriptor? = decode(bytes)?.let { bundle ->
-        DriveDataDescriptor(sizeBytes = bytes.size.toLong(), sha256 = sha256(bytes),
+        DriveDataDescriptor(schemaVersion = bundle.schemaVersion, sizeBytes = bytes.size.toLong(), sha256 = sha256(bytes),
             recordingSessionId = bundle.recordingSessionId, segmentStartedElapsedMs = bundle.segmentStartedElapsedMs,
             segmentEndedElapsedMs = bundle.segmentEndedElapsedMs, alignment = bundle.alignment)
     }
 
-    fun validDescriptor(descriptor: DriveDataDescriptor): Boolean = descriptor.schemaVersion == 1 &&
+    fun capability(schemaVersion: Int): String? = when (schemaVersion) { 1 -> CAPABILITY; 2 -> CAPABILITY_V2; else -> null }
+
+    fun validDescriptor(descriptor: DriveDataDescriptor): Boolean = descriptor.schemaVersion in 1..2 &&
         descriptor.sizeBytes in 1..MAX_BYTES.toLong() && hash.matches(descriptor.sha256) &&
+        (descriptor.schemaVersion == 2 || descriptor.alignment == ALIGNMENT) &&
         validWindow(descriptor.recordingSessionId, descriptor.segmentStartedElapsedMs, descriptor.segmentEndedElapsedMs, descriptor.alignment)
 
     fun matches(bundle: DriveDataBundle, descriptor: DriveDataDescriptor, sidecarJson: String?): Boolean = runCatching {
@@ -117,6 +131,9 @@ object DriveDataCodec {
         val root = json.parseToJsonElement(sidecar) as? JsonObject ?: return false
         fun text(key: String) = (root[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
         fun integer(key: String) = (root[key] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+        val sidecarAnchor = root["videoClockAnchor"]?.takeUnless { it == kotlinx.serialization.json.JsonNull }
+        if (bundle.videoClockAnchor != null && (sidecarAnchor == null ||
+            json.decodeFromString<VideoClockAnchor>(sidecarAnchor.toString()) != bundle.videoClockAnchor)) return false
         text("recordingSessionId") == bundle.recordingSessionId && text("recordingMode") == "NORMAL" &&
             integer("startedAtElapsedRealtimeMs") == bundle.segmentStartedElapsedMs &&
             integer("stoppedAtElapsedRealtimeMs") == bundle.segmentEndedElapsedMs &&
@@ -139,24 +156,37 @@ object DriveDataCodec {
     internal fun validVehicle(sample: DriveVehicleSample): Boolean = sample.elapsedMs >= 0 && sample.epochMs in 1..MAX_EPOCH_MS &&
         sample.values.size <= vehicleKeys.size && sample.values.all { (key, field) ->
             validVehicleValue(key, field) && field.readElapsedMs <= sample.elapsedMs &&
-                (field.status != "OK" || sample.elapsedMs - field.readElapsedMs <= PLAYBACK_AGE_MS)
+                (field.status !in setOf("OK", "PROVISIONAL_RAW") || sample.elapsedMs - field.readElapsedMs <= PLAYBACK_AGE_MS)
         }
 
     private fun validVehicleValue(key: String, field: DriveVehicleValue): Boolean {
         if (key !in vehicleKeys || field.readElapsedMs < 0 || field.status !in statuses) return false
+        if (field.status == "PROVISIONAL_RAW") return key in setOf("brake_depth", "throttle_depth") &&
+            field.text == null && field.number?.let { it.isFinite() && it in -1_000_000.0..1_000_000.0 } == true
         if (field.status != "OK") return field.number == null && field.text == null
         return when (key) {
             "speed" -> field.text == null && field.number?.let { it.isFinite() && it in 0.0..360.0 } == true
             "gear" -> field.number == null && field.text in setOf("P", "R", "N", "D")
             "indicator" -> field.number == null && field.text in setOf("off", "left", "right", "hazard")
+            "brake_depth", "throttle_depth" -> false // Their units have not been verified on this firmware.
             else -> field.text == null && field.number in setOf(0.0, 1.0)
         }
     }
 
     private fun validBundle(bundle: DriveDataBundle): Boolean {
-        if (bundle.schemaVersion != 1 ||
+        if (bundle.schemaVersion !in 1..2 ||
             !validWindow(bundle.recordingSessionId, bundle.segmentStartedElapsedMs, bundle.segmentEndedElapsedMs, bundle.alignment) ||
             bundle.gps.size > MAX_SAMPLES_PER_SOURCE || bundle.vehicle.size > MAX_SAMPLES_PER_SOURCE) return false
+        if (bundle.schemaVersion == 1 && (bundle.videoClockAnchor != null || bundle.recorderReport != null ||
+            bundle.alignment != ALIGNMENT || bundle.vehicle.any { row -> row.values.keys.any { it !in vehicleKeysV1 } })) return false
+        if ((bundle.alignment == ANCHORED_ALIGNMENT) != (bundle.videoClockAnchor != null)) return false
+        if (bundle.videoClockAnchor?.valid() == false || bundle.recorderReport?.valid() == false) return false
+        if (bundle.recorderReport != null && bundle.recorderReport.sessionCorrelation !=
+            DriveRecorderReport.correlation(bundle.recordingSessionId)) return false
+        if (bundle.videoClockAnchor != null) {
+            val anchorStart = bundle.videoClockAnchor.elapsedAtMediaMs(0) ?: return false
+            if (kotlin.math.abs(anchorStart - bundle.segmentStartedElapsedMs) > 60_000) return false
+        }
         var previous = -1L
         for (point in bundle.gps) {
             if (!validGps(point) || point.elapsedMs < bundle.segmentStartedElapsedMs ||
@@ -174,7 +204,8 @@ object DriveDataCodec {
     }
 
     private fun validWindow(session: String, start: Long, end: Long, alignment: String) =
-        uuid.matches(session) && start >= 0 && end > start && alignment == ALIGNMENT
+        uuid.matches(session) && start in 0..VideoClockAnchor.MAX_TIME_MS && end in (start + 1)..VideoClockAnchor.MAX_TIME_MS &&
+            end - start <= SessionPlaybackTimeline.MAX_SESSION_MS && alignment in setOf(ALIGNMENT, ANCHORED_ALIGNMENT)
 
     private fun utf8(bytes: ByteArray): String = Charsets.UTF_8.newDecoder()
         .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)

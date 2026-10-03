@@ -26,6 +26,18 @@ class DriveAttachmentSnapshotTest {
         VehicleTelemetryHeader(sessionId = sessionId, startedElapsedMs = 0), samples.toList(),
     )
 
+    @Test fun newSnapshotKeepsMeasuredAnchorAndUnverifiedPedalStatus() {
+        val metadata = sidecar().dropLast(1) + """, "videoClockAnchor":{"elapsedRealtimeNs":1100000000,"source":"CALLBACK_OBSERVED"}}"""
+        val result = DriveAttachmentSnapshot.build(metadata, null, vehicle(sample(1_250).copy(values = mapOf(
+            "brake_depth" to VehicleTelemetryValue(1_250, number = 8.0, status = "PROVISIONAL_RAW")))))
+        assertEquals(2, result.schemaVersion)
+        assertEquals(DriveDataCodec.ANCHORED_ALIGNMENT, result.alignment)
+        assertEquals(1_100L, result.videoClockAnchor!!.elapsedAtMediaMs(0))
+        val bytes = DriveDataCodec.encode(result)
+        assertNotNull(DriveDataCodec.verify(bytes, DriveDataCodec.descriptor(bytes)!!, metadata))
+        assertEquals("PROVISIONAL_RAW", result.vehicle.single().values["brake_depth"]!!.status)
+    }
+
     @Test fun onlyTheSelectedHalfOpenSegmentIsIncludedForBothSources() {
         val result = DriveAttachmentSnapshot.build(sidecar(),
             gps(fix(999), fix(1_000), fix(1_999), fix(2_000), fix(2_001)),
@@ -86,11 +98,11 @@ class DriveAttachmentSnapshotTest {
         }
     }
 
-    @Test fun clippingStartsANewPathAndKeepsExistingLaterGaps() {
+    @Test fun clippingPreservesSourceGapsWithoutInventingARotationInterruption() {
         val result = DriveAttachmentSnapshot.build(sidecar(), gps(fix(999), fix(1_000), fix(1_250), fix(1_500).copy(breakBefore = true)),
             vehicle(sample(999), sample(1_000), sample(1_250), sample(1_500).copy(breakBefore = true)))
-        assertEquals(listOf(true, false, true), result.gps.map { it.breakBefore })
-        assertEquals(listOf(true, false, true), result.vehicle.map { it.breakBefore })
+        assertEquals(listOf(false, false, true), result.gps.map { it.breakBefore })
+        assertEquals(listOf(false, false, true), result.vehicle.map { it.breakBefore })
     }
 
     @Test fun selectedSourcesKeepZeroMissingAndDifferentSpeedUnits() {

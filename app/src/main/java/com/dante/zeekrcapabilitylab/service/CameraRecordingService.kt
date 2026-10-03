@@ -266,6 +266,7 @@ class CameraRecordingService : Service() {
             runCatching { com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.recordFault(applicationContext, s) }
         }
         _state.value = s
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.follow(applicationContext, activeConfig, s, session)
         telemetry?.follow(s.recordingSessionId, !telemetryStopped && s.status == RecorderStatus.RECORDING, locationForeground)
         vehicleTelemetry?.follow(s.recordingSessionId, !telemetryStopped && s.status == RecorderStatus.RECORDING)
         presentationHandler.post {
@@ -314,6 +315,7 @@ class CameraRecordingService : Service() {
     }
 
     private fun onStopped() {
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.stop(state.value.recordingSessionId)
         telemetryStopped = true
         telemetry?.follow(null, false, false)
         vehicleTelemetry?.follow(null, false)
@@ -326,6 +328,7 @@ class CameraRecordingService : Service() {
     }
 
     private fun stopRecording(manual: Boolean = true) {
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.stop(state.value.recordingSessionId)
         telemetryStopped = true
         telemetry?.follow(null, false, false)
         vehicleTelemetry?.follow(null, false)
@@ -370,6 +373,7 @@ class CameraRecordingService : Service() {
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MODE_SWITCH_REQUESTED", payload = mapOf(
             "session" to expectedSessionId, "mode" to target.mode.name, "multiplier" to target.multiplier.toString()))
         presentationHandler.post(modeSwitchWatchdog)
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.stop(expectedSessionId)
         owner.releaseForRecordingModeSwitch(expectedSessionId) { result ->
             presentationHandler.post {
                 if (instance === this && handoffSession === owner) finishModeSwitch(request, owner, next, storage, result)
@@ -451,6 +455,7 @@ class CameraRecordingService : Service() {
     }
 
     override fun onDestroy() {
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.stop(state.value.recordingSessionId)
         telemetry?.close(); telemetry = null
         vehicleTelemetry?.close(); vehicleTelemetry = null
         sessionEpoch++

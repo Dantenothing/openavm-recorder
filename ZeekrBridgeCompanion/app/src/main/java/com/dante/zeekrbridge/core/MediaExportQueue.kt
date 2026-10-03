@@ -39,6 +39,31 @@ object MediaExportQueue {
     val jobs: StateFlow<List<MediaExportJob>> = _jobs.asStateFlow()
 
     @Synchronized
+    fun enqueueSession(
+        context: Context, segments: List<IndexedMediaSegment>, timeline: io.github.dantenothing.avmtransfer.protocol.SessionPlaybackTimeline,
+        channelId: String, targets: Collection<MediaExportTarget>, fromSessionMs: Long, toSessionMs: Long,
+        savedMediaOrigin: SavedMediaOrigin? = null,
+    ): List<String> {
+        require(targets.isNotEmpty()) { "Select at least one output" }
+        // Build every plan before publishing any job; an invalid selection cannot enqueue a partial batch.
+        val plans = MediaExportTarget.entries.filter(targets::contains).map {
+            MediaExportPlanner.buildSession(segments, timeline, channelId, it, fromSessionMs, toSessionMs)
+        }
+        val additions = plans.map { plan ->
+            val first = segments.first { it.filePath == plan.clips.first().filePath }
+            val composite = plan.target == MediaExportTarget.ORIGINAL
+            MediaExportJob(UUID.randomUUID().toString(), outputName(first.startedAtEpochMs, plan), plan,
+                libraryMetadata = savedMediaOrigin?.let { origin -> MediaExportLibraryMetadata(origin,
+                    first.recordingSessionId ?: first.id, if (composite) first.layoutKind else IndexedLayoutKind.UNKNOWN,
+                    if (composite) first.playbackLabels else emptyList(), if (composite) first.playbackLaneOrder else emptyList(),
+                    if (composite) first.originalWidth else null, if (composite) first.originalHeight else null) })
+        }
+        _jobs.value = boundedExportJobs(_jobs.value, additions, MAX_VISIBLE_JOBS)
+        MediaExportService.start(context.applicationContext)
+        return additions.map { it.id }
+    }
+
+    @Synchronized
     fun enqueue(
         context: Context,
         segments: List<IndexedMediaSegment>,
@@ -71,7 +96,7 @@ object MediaExportQueue {
                 },
             )
         }
-        _jobs.value = (_jobs.value + additions).takeLast(MAX_VISIBLE_JOBS)
+        _jobs.value = boundedExportJobs(_jobs.value, additions, MAX_VISIBLE_JOBS)
         MediaExportService.start(context.applicationContext)
         return additions.map { it.id }
     }
@@ -168,4 +193,14 @@ object MediaExportQueue {
         get() = this in setOf(MediaExportState.COMPLETED, MediaExportState.FAILED, MediaExportState.CANCELLED)
 
     private const val MAX_VISIBLE_JOBS = 24
+}
+
+/** Keep every active/cancellable job visible; only completed history may be discarded. */
+internal fun boundedExportJobs(current: List<MediaExportJob>, additions: List<MediaExportJob>, limit: Int): List<MediaExportJob> {
+    val terminal = setOf(MediaExportState.COMPLETED, MediaExportState.FAILED, MediaExportState.CANCELLED)
+    val live = current.count { it.state !in terminal }
+    require(live + additions.size <= limit) { "Export queue is full. Wait for an export to finish or cancel a queued job." }
+    val keepHistory = limit - live - additions.size
+    val historyIds = current.filter { it.state in terminal }.takeLast(keepHistory).map { it.id }.toSet()
+    return current.filter { it.state !in terminal || it.id in historyIds } + additions
 }

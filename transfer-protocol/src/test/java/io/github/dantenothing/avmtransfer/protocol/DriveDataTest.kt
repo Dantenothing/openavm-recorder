@@ -98,7 +98,7 @@ class DriveDataTest {
     }
 
     @Test fun unsupportedVersionAlignmentAndSessionAreRejected() {
-        invalid(bundle().copy(schemaVersion = 2))
+        invalid(bundle().copy(schemaVersion = 3))
         invalid(bundle().copy(alignment = "EXACT_ECU_TIME"))
         invalid(bundle().copy(recordingSessionId = "../file"))
         invalid(bundle().copy(segmentStartedElapsedMs = -1))
@@ -112,7 +112,7 @@ class DriveDataTest {
         assertFalse(DriveDataCodec.matches(data, descriptor.copy(recordingSessionId = "00000000-0000-4000-8000-000000000002"), sidecar()))
         assertFalse(DriveDataCodec.matches(data, descriptor.copy(segmentStartedElapsedMs = 999), sidecar()))
         assertFalse(DriveDataCodec.matches(data, descriptor.copy(segmentEndedElapsedMs = 20_001), sidecar()))
-        assertFalse(DriveDataCodec.validDescriptor(descriptor.copy(schemaVersion = 2)))
+        assertFalse(DriveDataCodec.validDescriptor(descriptor.copy(schemaVersion = 3)))
         assertFalse(DriveDataCodec.validDescriptor(descriptor.copy(sizeBytes = 0)))
         assertFalse(DriveDataCodec.validDescriptor(descriptor.copy(sizeBytes = DriveDataCodec.MAX_BYTES + 1L)))
         assertFalse(DriveDataCodec.validDescriptor(descriptor.copy(sha256 = descriptor.sha256.uppercase())))

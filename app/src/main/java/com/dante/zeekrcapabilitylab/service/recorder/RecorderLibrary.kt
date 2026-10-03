@@ -24,7 +24,21 @@ object RecorderLibrary {
         val speedMultiplier: Int get() = if (isTimeLapse) sidecar.timeLapseMultiplier else 1
         val protected: Boolean get() = segments.all { it.second.protected }
         val protectedCount: Int get() = segments.count { it.second.protected }
-        val realDurationMs: Long get() = segments.sumOf { (_, metadata) ->
+        private val parallelDurationMs: Long? get() {
+            if (isTimeLapse || segments.map { it.second.sourceRole }.distinct().size <= 1) return null
+            val session = sidecar.recordingSessionId ?: return null
+            val windows = segments.mapNotNull { (file, metadata) ->
+                io.github.dantenothing.avmtransfer.protocol.SessionVideoSegment(file.absolutePath,
+                    io.github.dantenothing.avmtransfer.protocol.SessionPlaybackTimeline.channelForRole(metadata.sourceRole.name) ?: return@mapNotNull null,
+                    metadata.recordingSessionId ?: return@mapNotNull null,
+                    metadata.startedAtElapsedRealtimeMs ?: return@mapNotNull null,
+                    metadata.stoppedAtElapsedRealtimeMs ?: return@mapNotNull null,
+                    metadata.actualTrack?.durationMs ?: return@mapNotNull null, metadata.videoClockAnchor, metadata.continuousTimeline)
+            }
+            return io.github.dantenothing.avmtransfer.protocol.SessionPlaybackTimeline(session, windows,
+                segments.mapNotNull { it.second.sessionStartedElapsedMs }.minOrNull()).durationMs
+        }
+        val realDurationMs: Long get() = parallelDurationMs ?: segments.sumOf { (_, metadata) ->
             metadata.realDurationMs ?: if (
                 metadata.startedAtElapsedRealtimeMs != null &&
                 metadata.stoppedAtElapsedRealtimeMs != null
@@ -35,7 +49,7 @@ object RecorderLibrary {
                 0L
             }
         }
-        val encodedDurationMs: Long get() = segments.sumOf { it.second.actualTrack?.durationMs ?: 0L }
+        val encodedDurationMs: Long get() = parallelDurationMs ?: segments.sumOf { it.second.actualTrack?.durationMs ?: 0L }
         val totalBytes: Long get() = files.sumOf(File::length)
         val startedAtEpochMs: Long get() = segments.minOf { (file, metadata) ->
             metadata.startedAtEpochMs ?: metadata.requestedAtEpochMs ?: file.lastModified()

@@ -26,6 +26,39 @@ import kotlinx.serialization.json.jsonObject
 
 class SegmentSidecarTest {
 
+    @Test fun parallelIdentityObservedClockAndManualElapsedMarkerAreAdditive() {
+        val old = sampleSidecar(tempMp4())
+        val originalJson = SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), old)
+        val oldDecoded = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), originalJson)
+        assertNull(oldDecoded.channelId)
+        assertNull(oldDecoded.videoClockAnchor)
+        assertNull(oldDecoded.eventRequestedElapsedMs)
+        val extended = old.copy(channelId = "FRONT_CABIN", sessionStartedElapsedMs = 400,
+            videoClockAnchor = io.github.dantenothing.avmtransfer.protocol.VideoClockAnchor(
+                elapsedRealtimeNs = 600_000_000, source = "CODEC_OUTPUT_OBSERVED"),
+            eventRequestedAtEpochMs = 999_999, eventRequestedElapsedMs = 2_500)
+        val restored = SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(),
+            SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), extended))
+        assertEquals(extended, restored)
+        assertEquals(2_500L, restored.eventRequestedElapsedMs)
+        assertEquals(600L, restored.videoClockAnchor?.elapsedAtMediaMs(0))
+        assertNull(restored.videoClockAnchor?.uncertaintyMs)
+    }
+
+    @Test fun directCabinTimelineRetainsOriginalSingleViewRaster() {
+        val cabin = sampleSidecar(tempMp4()).copy(sourceRole = RecordingSourceRole.CABIN,
+            layoutKind = RecordingLayoutKind.SINGLE_V1, profile = CameraFormatProfile(ProfileSize(640, 480), 2_000_000),
+            laneLayout = null, actualTrack = ActualTrackInfo(width = 640, height = 480, durationMs = 1000),
+            continuousTimeline = io.github.dantenothing.avmtransfer.protocol.ContinuousSegmentTimeline(
+                runId = "separate-codec-run", firstPtsUs = 9_000_000, lastPtsUs = 9_966_667,
+                endExclusivePtsUs = 10_000_000, frames = 30, startsWithKeyFrame = true))
+        val raw = SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), cabin)
+        assertTrue(io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(raw) is
+            io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Original)
+        assertNull(cabin.rasterLayout)
+        assertEquals(cabin, SegmentSidecarIO.json.decodeFromString(SegmentSidecar.serializer(), raw))
+    }
+
     private val profile = CameraFormatProfile(ProfileSize(1280, 5140), 14_000_000)
 
     @Test fun continuousSidecarSeparatesCameraRasterFromEncodedTrackAndFileTimeline() {

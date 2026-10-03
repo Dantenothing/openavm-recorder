@@ -34,25 +34,31 @@ object VehicleTelemetryPolicy {
     const val PLAYBACK_AGE_MS = 2_000L
     const val POLL_INTERVAL_MS = 250L
     const val SDK_TIMEOUT_MS = 2_000L
-    val keys: Set<String> = linkedSetOf("speed", "gear", "indicator", "turn_left", "turn_right", "brake_pedal", "stop_lamp")
+    val rawPedalKeys: Set<String> = setOf("brake_depth", "throttle_depth")
+    val keys: Set<String> = linkedSetOf("speed", "gear", "indicator", "turn_left", "turn_right", "brake_pedal", "stop_lamp", "brake_depth", "throttle_depth")
     private val statuses = setOf("OK", "NO_VALUE", "SENTINEL", "TINY_SENTINEL", "NON_FINITE", "OUT_OF_RANGE",
-        "UNKNOWN_ENUM", "NON_INTEGER_ENUM", "UNAVAILABLE", "READ_FAILED", "INVALID_VALUE", "STALE")
+        "UNKNOWN_ENUM", "NON_INTEGER_ENUM", "UNAVAILABLE", "READ_FAILED", "INVALID_VALUE", "STALE", "PROVISIONAL_RAW")
 
     /** Retain only the values needed for playback, not SDK objects, raw diagnostics or exception text. */
     fun observed(key: String, atMs: Long, value: Double?, text: String?, valid: Boolean, status: String): VehicleTelemetryValue {
         if (!valid) return VehicleTelemetryValue(atMs, status = when {
-            status in statuses && status != "OK" -> status
+            status in statuses && status !in setOf("OK", "PROVISIONAL_RAW") -> status
             status.startsWith("READ_FAILED") -> "READ_FAILED"
             else -> "UNAVAILABLE"
         })
-        val candidate = if (key == "gear" || key == "indicator") VehicleTelemetryValue(atMs, text = text)
+        val candidate = if (key in rawPedalKeys) VehicleTelemetryValue(atMs, number = value,
+            status = if (status == "PROVISIONAL_RAW") "PROVISIONAL_RAW" else "INVALID_VALUE")
+            else if (key == "gear" || key == "indicator") VehicleTelemetryValue(atMs, text = text)
             else VehicleTelemetryValue(atMs, number = value)
         return if (validValue(key, candidate)) candidate else VehicleTelemetryValue(atMs, status = "INVALID_VALUE")
     }
 
     fun validValue(key: String, field: VehicleTelemetryValue): Boolean {
         if (key !in keys || field.readElapsedMs < 0 || field.status !in statuses) return false
+        if (field.status == "PROVISIONAL_RAW") return key in rawPedalKeys && field.text == null &&
+            field.number?.let { it.isFinite() && it in -1_000_000.0..1_000_000.0 } == true
         if (field.status != "OK") return field.number == null && field.text == null
+        if (key in rawPedalKeys) return false // The source scale is unverified; an OK percentage is not supported.
         return when (key) {
             "speed" -> field.text == null && field.number?.let { it.isFinite() && it in 0.0..360.0 } == true
             "gear" -> field.number == null && field.text in setOf("P", "R", "N", "D")

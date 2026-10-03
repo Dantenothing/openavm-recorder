@@ -40,6 +40,8 @@ data class HealthResponse(
     val tlsPort: Int? = null,
     /** Optional recorded GPS/vehicle attachment formats. Empty on legacy receivers. */
     val driveDataFormats: List<String> = emptyList(),
+    /** Parallel session clocks must not be interpreted as a sequential playlist by old phones. */
+    val recordingSessionFormats: List<String> = emptyList(),
 )
 
 @Serializable

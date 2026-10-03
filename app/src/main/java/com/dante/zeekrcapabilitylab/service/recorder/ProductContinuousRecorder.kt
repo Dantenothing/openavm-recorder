@@ -377,7 +377,8 @@ internal class ProductContinuousRecorder(
     }
     fun evidence(): EncoderEvidence = queue.snapshot().let { (bytes, items) ->
         EncoderEvidence(encodedFrames, firstEncodedPts, lastEncodedPts, lastOutputAt.takeIf { it > 0 }, bytes, items, completedFiles,
-            encodedBytes = encodedBytes, continuousStages = stageEvidence, continuousFaultStages = faultEvidence.get())
+            encodedBytes = encodedBytes, continuousStages = stageEvidence, continuousFaultStages = faultEvidence.get(),
+            writtenFrames = writtenFrames, lastWriteElapsedMs = lastWrittenAt?.takeIf { it > 0 })
     }
     private fun cacheFailureSample() {
         val (bytes, items) = queue.snapshot()

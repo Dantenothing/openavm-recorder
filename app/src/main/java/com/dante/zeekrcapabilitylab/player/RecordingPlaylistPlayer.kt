@@ -99,6 +99,8 @@ class RecordingPlaylistPlayer(
         }
     }
     fun isPlaying(): Boolean = !closed && engine.isPlaying
+    /** Desired playback state must not be inferred from isPlaying while the decoder buffers. */
+    fun setPlaying(playing: Boolean) { if (!closed) engine.playWhenReady = playing }
     fun segmentIndex(): Int = if (closed) 0 else engine.currentMediaItemIndex.coerceAtLeast(0)
     fun currentPosition(): Long = if (closed) 0L else timeline.position(segmentIndex(), engine.currentPosition)
     fun toggle(): Boolean {

@@ -43,6 +43,8 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
         const val KEY_RECORDING_OVERLAY = "recording_status_overlay"
         const val KEY_RECORDING_TELEMETRY = "recording_location_speed_v1"
         const val KEY_RECORDING_VEHICLE_TELEMETRY = "recording_vehicle_signals_v1"
+        const val KEY_RECORD_FRONT_CABIN = "record_front_cabin_v1"
+        const val KEY_RECORD_REAR_CABIN = "record_rear_cabin_v1"
         private const val KEY_MIRROR_PREVIEW = "experimental_mirror_preview"
         private const val KEY_MIRROR_REAR_LANE = "mirror_rear_lane"
         private const val KEY_MIRROR_ROTATION = "mirror_rotation"
@@ -138,6 +140,10 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     val recordingTelemetryEnabled: Boolean get() = runCatching { prefs.getBoolean(KEY_RECORDING_TELEMETRY, false) }.getOrDefault(false)
     fun setRecordingTelemetryEnabled(value: Boolean) { prefs.edit().putBoolean(KEY_RECORDING_TELEMETRY, value).apply() }
+    val recordFrontCabin: Boolean get() = prefs.getBoolean(KEY_RECORD_FRONT_CABIN, false)
+    val recordRearCabin: Boolean get() = prefs.getBoolean(KEY_RECORD_REAR_CABIN, false)
+    fun setRecordFrontCabin(value: Boolean) { prefs.edit().putBoolean(KEY_RECORD_FRONT_CABIN, value).apply() }
+    fun setRecordRearCabin(value: Boolean) { prefs.edit().putBoolean(KEY_RECORD_REAR_CABIN, value).apply() }
     val recordingVehicleTelemetryEnabled: Boolean get() = runCatching { prefs.getBoolean(KEY_RECORDING_VEHICLE_TELEMETRY, false) }.getOrDefault(false)
     fun setRecordingVehicleTelemetryEnabled(value: Boolean) { prefs.edit().putBoolean(KEY_RECORDING_VEHICLE_TELEMETRY, value).apply() }
 

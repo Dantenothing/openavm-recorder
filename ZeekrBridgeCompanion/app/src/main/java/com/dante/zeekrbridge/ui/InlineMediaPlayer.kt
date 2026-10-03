@@ -318,6 +318,9 @@ internal fun InlineMediaPlayer(
                             if (!firstFrame && error == null) {
                                 CircularProgressIndicator(Modifier.size(30.dp), color = Color.White, strokeWidth = 2.dp)
                             }
+                            RecordedVideoHud(recordedPlaylistFrame(driveData?.bundle,
+                                resumePositionMs.takeIf { resumeId == activeEntry.id }, driveDurationsMs.getOrNull(currentIndex) ?: 0L),
+                                Modifier.align(Alignment.BottomStart).padding(6.dp), compact = frame.height < 300f)
                         }
                     }
                     PlaybackControls(

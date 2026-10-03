@@ -24,6 +24,7 @@ internal data class RecordedDriveSegment(
     val simplified: Boolean = false,
     val gpsSampleCount: Int = 0,
     val vehicleSampleCount: Int = 0,
+    val mediaStartedElapsedMs: Long = startedElapsedMs,
 )
 
 internal data class RecordedRoutePoint(val latitude: Double, val longitude: Double, val playbackMs: Long, val breakBefore: Boolean)
@@ -64,7 +65,8 @@ internal fun summarizeRecordedDrive(mediaId: String, sourceIndex: Int, bundle: D
         previous = sample
     }
     return RecordedDriveSegment(mediaId, sourceIndex, DriveAttachmentStatus.AVAILABLE, bundle.recordingSessionId,
-        bundle.segmentStartedElapsedMs, bundle.segmentEndedElapsedMs, points, samples.size > points.size, samples.size, bundle.vehicle.size)
+        bundle.segmentStartedElapsedMs, bundle.segmentEndedElapsedMs, points, samples.size > points.size, samples.size, bundle.vehicle.size,
+        bundle.videoClockAnchor?.elapsedAtMediaMs(0) ?: bundle.segmentStartedElapsedMs)
 }
 
 /** Preserve all video time, including entries without attachments; never close a missing-data gap. */
@@ -81,7 +83,7 @@ internal fun recordedPlaylistRoute(segments: List<RecordedDriveSegment>, duratio
         offsets += start
         val retained = if (start != null && duration != null && segment.status == DriveAttachmentStatus.AVAILABLE)
             segment.points.filter { it.elapsedMs >= segment.startedElapsedMs && it.elapsedMs < segment.endedElapsedMs &&
-                it.elapsedMs - segment.startedElapsedMs < duration }
+                it.elapsedMs >= segment.mediaStartedElapsedMs && it.elapsedMs - segment.mediaStartedElapsedMs < duration }
         else emptyList()
         val priorSegment = previousSegment
         val priorPoint = previousPoint
@@ -89,11 +91,11 @@ internal fun recordedPlaylistRoute(segments: List<RecordedDriveSegment>, duratio
         if (first != null) mappedSegments++
         val joinsPrevious = priorSegment != null && priorPoint != null && first != null &&
             priorSegment.status == DriveAttachmentStatus.AVAILABLE && segment.sessionId != null && segment.sessionId == priorSegment.sessionId &&
-            segment.sourceIndex == priorSegment.sourceIndex + 1 && priorSegment.endedElapsedMs == segment.startedElapsedMs &&
-            priorSegment.endedElapsedMs - priorSegment.startedElapsedMs == durationsMs.getOrNull(index - 1) &&
+            segment.sourceIndex == priorSegment.sourceIndex + 1 &&
+            priorSegment.mediaStartedElapsedMs + (durationsMs.getOrNull(index - 1) ?: 0L) == segment.mediaStartedElapsedMs &&
             first.provider == priorPoint.provider && first.elapsedMs - priorPoint.elapsedMs in 1..5_000L
         retained.forEachIndexed { pointIndex, sample ->
-            points += RecordedRoutePoint(sample.latitude, sample.longitude, start!! + (sample.elapsedMs - segment.startedElapsedMs),
+            points += RecordedRoutePoint(sample.latitude, sample.longitude, start!! + (sample.elapsedMs - segment.mediaStartedElapsedMs),
                 sample.breakBefore || pointIndex == 0 && !joinsPrevious)
         }
         previousSegment = segment.takeIf { retained.isNotEmpty() }
@@ -113,7 +115,7 @@ internal fun recordedPlaylistMarker(
     val sample = frame.gps ?: return null
     val data = bundle ?: return null
     val offset = route.offsetsMs.getOrNull(mediaIndex) ?: return null
-    val local = sample.elapsedMs - data.segmentStartedElapsedMs
+    val local = sample.elapsedMs - (data.videoClockAnchor?.elapsedAtMediaMs(0) ?: data.segmentStartedElapsedMs)
     if (local < 0L || local >= durationMs || sample.elapsedMs >= data.segmentEndedElapsedMs || offset > Long.MAX_VALUE - local) return null
     return RecordedRoutePoint(sample.latitude, sample.longitude, offset + local, sample.breakBefore)
 }

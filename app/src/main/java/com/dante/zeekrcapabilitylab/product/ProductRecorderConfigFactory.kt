@@ -77,6 +77,10 @@ object ProductRecorderConfigFactory {
             usbQuotaBytes = settings.usbQuotaBytes,
             recordingMode = recordingMode,
             timeLapseMultiplier = if (recordingMode == RecordingMode.NORMAL) 1 else timeLapseMultiplier,
+            auxiliaryChannels = if (role == RecordingSourceRole.SURROUND) buildList {
+                if (settings.recordFrontCabin) add(RecordingSourceRole.CABIN)
+                if (settings.recordRearCabin) add(RecordingSourceRole.IR)
+            } else emptyList(),
         )
     }
 }

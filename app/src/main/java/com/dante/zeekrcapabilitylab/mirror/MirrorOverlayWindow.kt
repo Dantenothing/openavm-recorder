@@ -40,6 +40,7 @@ class MirrorOverlayWindow(
         orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(4), dp(4), dp(4)); OverlayChrome.frame(this)
     }
     val videoHost = FrameLayout(context).apply { setBackgroundColor(Color.BLACK) }
+    private val drivingHud = MirrorLiveHud(context)
     private val body = FrameLayout(context)
     private val content = LinearLayout(context)
     private val rail = FrameLayout(context)
@@ -175,6 +176,9 @@ class MirrorOverlayWindow(
             setBackgroundColor(0xCC101317.toInt())
         }, FrameLayout.LayoutParams(-2, dp(24)))
         videoHost.addView(labels, FrameLayout.LayoutParams(-1, -1))
+        videoHost.addView(drivingHud, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
+            leftMargin = dp(4); rightMargin = dp(4); topMargin = dp(4)
+        })
         installDrag(title, false); installDrag(resize, true)
         resize.setOnKeyListener { _, key, event ->
             val delta = when (key) { KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> 10
@@ -284,6 +288,7 @@ class MirrorOverlayWindow(
         grid.isEnabled = !value.busy; selected(grid, preferences.grid && !value.cabin)
         labels.visibility = if (preferences.grid && !value.cabin) View.VISIBLE else View.GONE
         if (videoHost.getChildAt(videoHost.childCount - 1) !== labels) labels.bringToFront()
+        drivingHud.bringToFront()
         val currentLens = preferences.lens(preferences.selectedLane)
         if (lens.tag != currentLens) {
             val standard = Utils.t("Standard", "标准"); val fish = Utils.t("Fisheye", "鱼眼")
@@ -312,8 +317,8 @@ class MirrorOverlayWindow(
         fold.contentDescription = if (preferences.controlsVisible) Utils.t("Hide controls", "收起控制栏") else Utils.t("Show controls", "展开控制栏")
         resize.isEnabled = !preferences.locked; fit()
     }
-    fun show() { if (!attached) { fit(); windows.addView(root, params); attached = true } }
-    fun close() { dismissPopup(); if (attached) runCatching { windows.removeViewImmediate(root) }; attached = false }
+    fun show() { if (!attached) { fit(); windows.addView(root, params); attached = true }; drivingHud.setHostActive(preferences.videoVisible) }
+    fun close() { dismissPopup(); drivingHud.setHostActive(false); if (attached) runCatching { windows.removeViewImmediate(root) }; attached = false }
     val isVisible get() = attached && root.isShown
     fun directionMenu(anchor: View) {
         val menu = PopupMenu(context, anchor)
@@ -335,6 +340,7 @@ class MirrorOverlayWindow(
         if (compact != layout.compact) dismissPopup()
         compact = layout.compact
         visible(body, preferences.videoVisible); visible(rail, preferences.controlsVisible)
+        drivingHud.setHostActive(attached && preferences.videoVisible)
         visible(selector, !compact); visible(miniCamera.parent as View, compact)
         visible(lens.parent as View, !compact); visible(tools.parent as View, compact)
         visible(photo.parent as View, !compact); visible(normal.parent as View, !compact)

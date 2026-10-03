@@ -114,7 +114,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private data class PlaybackControls(
+internal data class PlaybackControls(
     val toggle: () -> Boolean,
     val seekTo: (Long) -> Unit,
     val currentPosition: () -> Long,
@@ -125,9 +125,10 @@ private data class PlaybackControls(
     val segmentDurations: () -> List<Long>,
     val confirmedSegmentDurations: () -> List<Long>,
     val seekToSegmentPosition: (Int, Long) -> Unit,
+    val setPlaying: (Boolean) -> Unit,
 )
 
-private data class PlaybackSurfaceCallbacks(
+internal data class PlaybackSurfaceCallbacks(
     val onControlsReady: (PlaybackControls?) -> Unit,
     val onPrepared: (Long) -> Unit,
     val onFirstFrame: () -> Unit,
@@ -217,6 +218,8 @@ fun FourLanePlayerDialog(
         RecordingThumbnailCache(File(context.cacheDir, "recording-covers"))
     }
     val settings = remember { SettingsStore.get(context) }
+    val hudPreferences = remember { context.getSharedPreferences("playback_ui", android.content.Context.MODE_PRIVATE) }
+    var recordedHudVisible by remember { mutableStateOf(hudPreferences.getBoolean("drive_hud", true)) }
     val languageMode by AppLanguage.mode.collectAsState()
     val directionLabels = laneLabels?.takeIf { it.size == 4 } ?: productDirectionLabels()
     val isFourLane = layoutKind != RecordingLayoutKind.SINGLE_V1
@@ -539,12 +542,11 @@ fun FourLanePlayerDialog(
                                     )
                                 }
                                 if (currentTrack?.points?.isNotEmpty() == true || currentVehicleTrack?.samples?.isNotEmpty() == true) {
-                                    Text(if (currentVehicleTrack?.samples?.isNotEmpty() == true) vehiclePlaybackText(vehicleSample)
-                                        else Utils.t("GPS", "GPS") + " · " + telemetrySpeedText(routeSample?.speedMps),
-                                        color = Color.White, fontSize = 12.sp,
-                                        modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp)
-                                            .background(Color(0xB3000000), RoundedCornerShape(6.dp))
-                                            .clickable { showRoute = true }.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    io.github.dantenothing.drivemap.DriveHud(
+                                        recordedDriveHudFrame(routeAt, vehicleSample, routeSample), recordedHudVisible,
+                                        { visible -> recordedHudVisible = visible; hudPreferences.edit().putBoolean("drive_hud", visible).apply() },
+                                        modifier = Modifier.align(Alignment.BottomStart).padding(6.dp).width(300.dp),
+                                        chinese = AppLanguage.usesChinese())
                                 }
                                 if (!firstFrame && error == null) {
                                     Text(
@@ -1001,7 +1003,7 @@ private fun PlaybackTimeline(
 }
 
 @Composable
-private fun FourLanePlaybackSurface(
+internal fun FourLanePlaybackSurface(
     files: List<File>,
     segmentDurationHintsMs: Map<String, Long>,
     container: FourLaneTextureContainer,
@@ -1033,7 +1035,7 @@ private fun FourLanePlaybackSurface(
 }
 
 @Composable
-private fun SinglePlaybackSurface(
+internal fun SinglePlaybackSurface(
     files: List<File>,
     segmentDurationHintsMs: Map<String, Long>,
     textureView: TextureView,
@@ -1112,6 +1114,7 @@ private fun PlaybackMediaBinding(
             segmentDurations = timeline::durations,
             confirmedSegmentDurations = timeline::confirmedDurations,
             seekToSegmentPosition = active::seekSegment,
+            setPlaying = active::setPlaying,
         ) })
         onDispose {
             latestCallbacks.onControlsReady(null)

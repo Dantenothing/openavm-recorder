@@ -44,19 +44,24 @@ interface RecordingOutputHandle {
     fun abort() = close()
 }
 
-class InternalRecordingOutputSink(private val segmentsDir: File) : RecordingOutputSink {
+class InternalRecordingOutputSink(private val segmentsDir: File, private val filenamePrefix: () -> String = { "" }) : RecordingOutputSink {
     override fun openSegment(
         segmentNumber: Int,
         profile: CameraFormatProfile,
         startedAtEpochMs: Long,
     ): RecordingOutputHandle {
-        val partial = SegmentNaming.partialFile(
+        val named = SegmentNaming.partialFile(
             segmentsDir,
             segmentNumber,
             profile,
             startedAtEpochMs,
         )
+        val prefix = filenamePrefix()
+        require(prefix.isEmpty() || prefix.matches(Regex("[a-z_]{1,24}-")))
+        val partial = File(named.parentFile, prefix + named.name)
         partial.parentFile?.mkdirs()
+        check(partial.createNewFile()) { "RECORDING_NAME_ALREADY_OWNED" }
+        InternalRecordingOutputOwners.admit(partial)
         return InternalRecordingOutputHandle(partial)
     }
 }
@@ -70,4 +75,13 @@ private class InternalRecordingOutputHandle(
     override fun bind(recorder: MediaRecorder) {
         recorder.setOutputFile(localWorkingFile.absolutePath)
     }
+    override fun close() { InternalRecordingOutputOwners.release(localWorkingFile) }
+}
+
+/** Startup recovery must never quarantine another live channel's native output. */
+internal object InternalRecordingOutputOwners {
+    private val paths = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    fun admit(file: File) { check(paths.add(file.absolutePath)) }
+    fun release(file: File) { paths.remove(file.absolutePath) }
+    fun owns(file: File) = file.absolutePath in paths
 }

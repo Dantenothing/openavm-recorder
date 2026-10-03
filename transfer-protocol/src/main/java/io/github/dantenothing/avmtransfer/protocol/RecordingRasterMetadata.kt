@@ -67,7 +67,8 @@ data class ContinuousSegmentTimeline(
     fun validate(): List<String> = buildList {
         if (version != 1) add("UNSUPPORTED_TIMELINE_VERSION")
         if (runId.isBlank() || runId.length > 128) add("INVALID_TIMELINE_RUN")
-        if (firstPtsUs < 0 || lastPtsUs < firstPtsUs || endExclusivePtsUs <= lastPtsUs)
+        if (firstPtsUs !in 0..VideoClockAnchor.MAX_TIME_US || lastPtsUs !in firstPtsUs..VideoClockAnchor.MAX_TIME_US ||
+            endExclusivePtsUs !in 0..VideoClockAnchor.MAX_TIME_US || endExclusivePtsUs <= lastPtsUs)
             add("INVALID_TIMELINE_RANGE")
         if (frames <= 0 || (frames == 1L && firstPtsUs != lastPtsUs) ||
             (frames > 1L && firstPtsUs == lastPtsUs)) add("INVALID_TIMELINE_FRAME_COUNT")

@@ -1,0 +1,82 @@
+package com.dante.zeekrcapabilitylab.ui.product
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import com.dante.zeekrcapabilitylab.product.SettingsStore
+import com.dante.zeekrcapabilitylab.service.CameraRecordingService
+import com.dante.zeekrcapabilitylab.service.recorder.*
+import com.dante.zeekrcapabilitylab.util.Utils
+
+@Composable
+fun RecordingChannelSettings() {
+    val context = LocalContext.current
+    val settings = remember { SettingsStore.get(context) }
+    val recorder by CameraRecordingService.state.collectAsState()
+    var front by remember { mutableStateOf(settings.recordFrontCabin) }
+    var rear by remember { mutableStateOf(settings.recordRearCabin) }
+    val busy = CameraRecordingService.isRunning() || RecorderCommandPolicy.isActive(recorder.status)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(Utils.t("Recording channels", "录像通道"), style = MaterialTheme.typography.titleMedium)
+            Text(Utils.t("Surround stays on. Add optional cabin cameras to normal recording; the same choice applies when recording resumes after returning to the car.",
+                "保留环视录像，可为普通录像增加车内摄像头；回车后恢复录像也沿用此选择。"), style = MaterialTheme.typography.bodyMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(Utils.t("Front cabin", "前排车内"), Modifier.weight(1f))
+                Switch(front, { front = it; settings.setRecordFrontCabin(it) }, enabled = !busy,
+                    modifier = Modifier.testTag("record-front-cabin"))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(Utils.t("Rear cabin", "后排车内"), Modifier.weight(1f))
+                Switch(rear, { rear = it; settings.setRecordRearCabin(it) }, enabled = !busy,
+                    modifier = Modifier.testTag("record-rear-cabin"))
+            }
+            Text(Utils.t("Cabin streams request 640×480, 15 fps and 2 Mb/s each, saved to internal storage under the existing quota. Surround keeps your storage choice. Unsupported channels stop independently. Time-lapse uses only its selected camera.",
+                "车内每路请求 640×480、15 帧及 2 Mb/s，保存到内部存储并遵守原有容量上限；环视仍沿用所选存储。不可用通道独立停止。延时录像仅录制所选相机。"), style = MaterialTheme.typography.bodySmall)
+            if (busy) Text(Utils.t("Stop recording before changing channels.", "停止录像后可修改通道。"), style = MaterialTheme.typography.bodySmall)
+            RecordingChannelStatus()
+        }
+    }
+}
+
+@Composable
+fun RecordingChannelStatus(modifier: Modifier = Modifier) {
+    val channels by RecordingChannels.state.collectAsState()
+    if (channels.isEmpty()) return
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        channels.sortedBy { RecordingChannelId.all.indexOf(it.channelId) }.forEach { channel ->
+            val name = when (channel.channelId) {
+                RecordingChannelId.FRONT_CABIN -> Utils.t("Front cabin", "前排车内")
+                RecordingChannelId.REAR_CABIN -> Utils.t("Rear cabin", "后排车内")
+                else -> Utils.t("Surround", "环视")
+            }
+            val phase = when (channel.status) {
+                "WRITING" -> Utils.t("Writing video", "正在写入视频")
+                "RECEIVING" -> Utils.t("Receiving frames · waiting for writes", "已收到画面 · 等待写入")
+                "STOPPING" -> Utils.t("Finishing files", "正在完成文件")
+                "STOPPED" -> Utils.t("Stopped", "已停止")
+                "UNAVAILABLE" -> Utils.t("Unavailable", "不可用")
+                "INTERRUPTED" -> Utils.t("Interrupted", "已中断")
+                else -> Utils.t("Starting", "正在启动")
+            }
+            val destination = when (channel.storageKind) {
+                RecordingStorageKind.USB_MEDIASTORE.name -> "USB"
+                RecordingStorageKind.INTERNAL.name -> Utils.t("Head unit", "车机内部")
+                else -> Utils.t("Storage unknown", "存储位置未知")
+            }
+            Text(name + " · " + phase + " · " + destination + " · " + Utils.t("{0} frames / {1} files", "{0} 帧 / {1} 文件", channel.writtenFrames, channel.completedFiles),
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("channel-health-" + channel.channelId))
+            if (channel.cleanupUnconfirmed) Text(Utils.t("Waiting for camera release; no automatic restart.", "等待相机释放，不会自动重启。"),
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            channel.errorCode?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        }
+        if (channels.any { it.status in setOf("UNAVAILABLE", "INTERRUPTED") && !it.cleanupUnconfirmed })
+            Text(Utils.t("Stop recording, check camera settings and storage, then start again. If it repeats, copy the test report.",
+                "停止录像，检查相机设置和存储后再开始；若再次发生，请复制测试报告。"), style = MaterialTheme.typography.bodySmall)
+    }
+}

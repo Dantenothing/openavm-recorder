@@ -30,6 +30,17 @@ object RecordingCapacityMath {
         // Requested bitrate plus a 10% allowance. This is an estimate, not measured duration/FPS.
         return (bytes.toDouble() * 8.0 / bitrateBps / 60.0 / 1.10 * timeLapseMultiplier).toLong()
     }
+
+    /** Cabin streams always use internal storage; an unknown main destination stays unknown. */
+    fun bitrateForStorage(primaryStorage: RecordingStorageKind?, primaryBitrateBps: Long?,
+                          destination: RecordingStorageKind?, cabinChannels: Int): Long? {
+        if (primaryStorage == null || destination == null || cabinChannels !in 0..2) return null
+        val primary = if (primaryStorage == destination) primaryBitrateBps?.takeIf { it > 0 } ?: return null else 0L
+        val cabin = if (destination == RecordingStorageKind.INTERNAL)
+            cabinChannels.toLong() * com.dante.zeekrcapabilitylab.service.recorder.RecordingChannelPolicy.BITRATE else 0L
+        if (primary > Long.MAX_VALUE - cabin) return null
+        return (primary + cabin).takeIf { it > 0 }
+    }
 }
 
 object RecordingCapacityReader {
@@ -54,13 +65,18 @@ object RecordingCapacityReader {
             return RecordingCapacity(RecordingStorageKind.USB_MEDIASTORE, usb.freeBytes,
                 RecordingCapacityMath.available(usb.freeBytes, UsbRecordingFreeSpace.RESERVE_BYTES, quota, usage))
         }
+        return readInternal(context, if (running) state.storageLimitBytes else settings.internalStorageLimitBytes)
+    }
+
+    @android.annotation.SuppressLint("UsableSpace")
+    fun readInternal(context: Context, quota: Long = SettingsStore.get(context).internalStorageLimitBytes): RecordingCapacity {
+        val settings = SettingsStore.get(context)
         val directory = File(context.filesDir, "recordings/segments")
         val free = runCatching { context.filesDir.usableSpace }.getOrNull()
         val usage = runCatching {
             if (!directory.exists()) 0L else directory.listFiles()?.filter { it.isFile }?.map(File::length)
                 ?.let(RecordingCapacityMath::knownUsage)
         }.getOrNull()
-        val quota = if (running) state.storageLimitBytes else settings.internalStorageLimitBytes
         return RecordingCapacity(RecordingStorageKind.INTERNAL, free,
             RecordingCapacityMath.available(free, settings.minFreeBytes, quota, usage))
     }

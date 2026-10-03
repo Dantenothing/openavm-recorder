@@ -40,6 +40,9 @@ import com.dante.zeekrbridge.core.SavedMediaStore
 import com.dante.zeekrbridge.core.ServerLog
 import com.dante.zeekrbridge.core.MediaIndexScanner
 import com.dante.zeekrbridge.core.MediaExportPlanner
+import com.dante.zeekrbridge.core.ContinuousRasterSupport
+import com.dante.zeekrbridge.core.IndexedLayoutKind
+import com.dante.zeekrbridge.core.withOwnedExportOutput
 import com.dante.zeekrbridge.player.StripCropEffect
 import io.github.dantenothing.avmtransfer.protocol.EmbeddedRecordingMetadata
 import io.github.dantenothing.avmtransfer.protocol.RecordingMetadataReader
@@ -140,15 +143,7 @@ class MediaExportService : Service() {
         updateNotification(next)
         operationTask = scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    next.plan.clips.forEach { clip ->
-                        clip.raster?.let {
-                            val current = MediaIndexScanner.readSegment(File(clip.filePath))
-                            MediaExportPlanner.validateFrozenInput(clip, current)
-                            validateTrack(File(clip.filePath), current.raster)
-                        }
-                    }
-                }
+                withContext(Dispatchers.IO) { validateSources(next) }
                 if (canCopyDirectly(next)) publishDirectCopy(next) else startTransformer(next)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { finishFailed(next, error.message ?: "Export failed") }
@@ -163,7 +158,7 @@ class MediaExportService : Service() {
 
     private suspend fun publishDirectCopy(job: MediaExportJob) {
         val source = File(job.plan.clips.single().filePath)
-        val result = runCatching { publishFile(source, job.outputName, job.plan.embeddedMetadata) }
+        val result = runCatching { publishFile(source, job) }
         result.onSuccess { finishCompleted(job, it) }
             .onFailure { finishFailed(job, it.message ?: "Save failed") }
     }
@@ -181,7 +176,7 @@ class MediaExportService : Service() {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     progressTask?.cancel()
                     operationTask = scope.launch {
-                        val result = runCatching { publishFile(temp, job.outputName, job.plan.embeddedMetadata) }
+                        val result = runCatching { publishFile(temp, job) }
                         temp.delete()
                         result.onSuccess { finishCompleted(job, it) }
                             .onFailure { finishFailed(job, it.message ?: "Save failed") }
@@ -304,7 +299,10 @@ class MediaExportService : Service() {
         drainQueue()
     }
 
-    private suspend fun publishFile(source: File, requestedName: String, metadata: String?): PublishedOutput = withContext(Dispatchers.IO) {
+    private suspend fun publishFile(source: File, job: MediaExportJob): PublishedOutput = withOwnedExportOutput(operation = { own -> withContext(Dispatchers.IO) {
+        val requestedName = job.outputName
+        val metadata = job.plan.embeddedMetadata
+        currentCoroutineContext().ensureActive()
         require(source.isFile && source.length() > 0L) { "Export produced no video" }
         val append = metadata?.let { document ->
             val duration = validateTrack(source, RecordingRasterMetadata.read(document))
@@ -321,11 +319,14 @@ class MediaExportService : Service() {
         if (Build.VERSION.SDK_INT < 29) {
             val root = File(filesDir, "exports").apply { mkdirs() }
             val target = uniqueFile(root, requestedName)
+            own(PublishedOutput(uri = null, filePath = target.absolutePath, sizeBytes = 0))
             try {
                 source.inputStream().use { input -> target.outputStream().use { output ->
                     copyCancellable(input, output); output.write(append); output.fd.sync()
                 } }
             } catch (error: Throwable) { target.delete(); throw error }
+            validateSources(job)
+            currentCoroutineContext().ensureActive()
             return@withContext PublishedOutput(uri = null, filePath = target.absolutePath, sizeBytes = target.length())
         }
         var uri: Uri? = null
@@ -338,24 +339,43 @@ class MediaExportService : Service() {
             }
             uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
                 ?: error("Cannot create Movies/OpenAVM output")
+            own(PublishedOutput(uri = uri.toString(), filePath = null, sizeBytes = 0))
             contentResolver.openOutputStream(uri)?.use { output ->
                 source.inputStream().use { input -> copyCancellable(input, output) }
                 output.write(append)
             } ?: error("Cannot write output video")
-            contentResolver.update(
+            validateSources(job)
+            currentCoroutineContext().ensureActive()
+            check(contentResolver.update(
                 uri,
                 ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
                 null,
                 null,
-            )
+            ) == 1) { "Cannot finalize saved video" }
             PublishedOutput(uri = uri.toString(), filePath = null, sizeBytes = publishedBytes)
         } catch (error: Throwable) {
             uri?.let { runCatching { contentResolver.delete(it, null, null) } }
             throw error
         }
+    } }, cleanup = { output -> withContext(Dispatchers.IO) {
+        output.uri?.let { contentResolver.delete(Uri.parse(it), null, null) }
+        output.filePath?.let { File(it).delete() }
+    } })
+
+    private suspend fun validateSources(job: MediaExportJob) {
+        job.plan.clips.forEach { clip ->
+            currentCoroutineContext().ensureActive()
+            if (clip.sessionBinding != null || clip.raster != null) {
+                val file = File(clip.filePath)
+                val current = MediaIndexScanner.readSegment(file)
+                val duration = validateTrack(file, current.raster, current.layoutKind)
+                MediaExportPlanner.validateFrozenInput(clip, current, duration)
+            }
+        }
+        currentCoroutineContext().ensureActive()
     }
 
-    private fun validateTrack(file: File, raster: RecordingRasterMetadata): Long {
+    private fun validateTrack(file: File, raster: RecordingRasterMetadata, layout: IndexedLayoutKind? = null): Long {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(file.absolutePath)
@@ -363,7 +383,8 @@ class MediaExportService : Service() {
             val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
             require(raster.trackError(width, height) == null) { raster.trackError(width, height).orEmpty() }
             val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            require(rotation == 0) { "RASTER_TRACK_ROTATION_UNSUPPORTED" }
+            require(rotation in setOf(0, 90, 180, 270) && (raster !is RecordingRasterMetadata.Repacked || rotation == 0)) { "RASTER_TRACK_ROTATION_UNSUPPORTED" }
+            layout?.let { require(ContinuousRasterSupport.trackError(raster, it, width, height, rotation) == null) { "RECORDING_TRACK_LAYOUT_CHANGED" } }
             return retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                 ?.takeIf { it > 0L } ?: error("VIDEO_DURATION_UNAVAILABLE")
         } finally { retriever.release() }

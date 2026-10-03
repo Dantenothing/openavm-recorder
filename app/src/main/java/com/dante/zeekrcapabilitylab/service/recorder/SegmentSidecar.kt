@@ -75,6 +75,10 @@ data class SegmentSidecar(
     val processStartId: String,
     /** Stable identity shared by every segment in one manually started recording Session. */
     val recordingSessionId: String? = null,
+    /** Parallel channels share the UUID/origin; missing fields retain legacy approximate playback. */
+    val channelId: String? = null,
+    val sessionStartedElapsedMs: Long? = null,
+    val videoClockAnchor: io.github.dantenothing.avmtransfer.protocol.VideoClockAnchor? = null,
     /** Recording behavior frozen at manual Start; old sidecars safely default to NORMAL. */
     val recordingMode: RecordingMode = RecordingMode.NORMAL,
     val timeLapseMultiplier: Int = 1,
@@ -98,6 +102,8 @@ data class SegmentSidecar(
     /** Stable ID shared by the pre/current/post files saved by one Save Clip action. */
     val eventId: String? = null,
     val eventRequestedAtEpochMs: Long? = null,
+    /** Real Save Clip observation on the current boot clock, never inferred from protection flags. */
+    val eventRequestedElapsedMs: Long? = null,
     /** PREVIOUS, CURRENT or NEXT; null for manual/legacy bookmarks. */
     val eventRole: String? = null,
     /** OpenAVM Sentry warnings, relative to this physical MP4; empty on legacy/normal recordings. */

@@ -25,8 +25,10 @@ internal object DriveAttachmentSnapshot {
         val session = json.parseToJsonElement(sidecar).jsonObject["recordingSessionId"]?.jsonPrimitive?.content
             ?: error("Recording session is missing")
         require(VehicleTelemetryStore.validId(session)) { "Recording session is invalid" }
-        val bytes = DriveDataCodec.encode(build(sidecar, RecordingTelemetry.store(context).load(session),
-            RecordingVehicleTelemetry.store(context).load(session)))
+        val gps = RecordingTelemetry.store(context).load(session)
+        val vehicle = RecordingVehicleTelemetry.store(context).load(session)
+        val report = SessionRecorderEvidence.collect(context, session, sidecar, gps, vehicle)
+        val bytes = DriveDataCodec.encode(build(sidecar, gps, vehicle).copy(recorderReport = report))
         val descriptor = requireNotNull(DriveDataCodec.descriptor(bytes))
         requireNotNull(DriveDataCodec.verify(bytes, descriptor, sidecar))
         val target = file(context, task.id)
@@ -67,15 +69,19 @@ internal object DriveAttachmentSnapshot {
             (sidecar["timeLapseMultiplier"]?.jsonPrimitive?.intOrNull ?: 1) == 1) { "Drive-data transfer currently supports normal recordings only" }
         val points = gps?.takeIf { it.header.sessionId == session }?.points.orEmpty()
             .filter { it.elapsedMs >= start && it.elapsedMs < end }
-            .mapIndexed { index, p -> DriveGpsSample(p.elapsedMs, p.epochMs, p.latitude, p.longitude, p.accuracyM,
-                p.provider, p.speedMps, p.speedAccuracyMps, p.breakBefore || index == 0) }
+            .map { p -> DriveGpsSample(p.elapsedMs, p.epochMs, p.latitude, p.longitude, p.accuracyM,
+                p.provider, p.speedMps, p.speedAccuracyMps, p.breakBefore) }
         val samples = vehicle?.takeIf { it.header.sessionId == session }?.samples.orEmpty()
             .filter { it.elapsedMs >= start && it.elapsedMs < end }
-            .mapIndexed { index, sample -> DriveVehicleSample(sample.elapsedMs, sample.epochMs,
+            .map { sample -> DriveVehicleSample(sample.elapsedMs, sample.epochMs,
                 sample.values.filterValues { it.readElapsedMs >= start && it.readElapsedMs < end }.mapValues { (_, field) ->
                     DriveVehicleValue(field.readElapsedMs, field.number, field.text, field.status)
-                }, sample.breakBefore || index == 0) }
-        return DriveDataBundle(recordingSessionId = session, segmentStartedElapsedMs = start, segmentEndedElapsedMs = end,
-            gps = points, vehicle = samples)
+                }, sample.breakBefore) }
+        val anchor = sidecar["videoClockAnchor"]?.takeUnless { it == JsonNull }?.let {
+            json.decodeFromJsonElement<VideoClockAnchor>(it).also { value -> require(value.valid()) }
+        }
+        return DriveDataBundle(schemaVersion = 2, recordingSessionId = session, segmentStartedElapsedMs = start, segmentEndedElapsedMs = end,
+            alignment = if (anchor != null) DriveDataCodec.ANCHORED_ALIGNMENT else DriveDataCodec.ALIGNMENT,
+            gps = points, vehicle = samples, videoClockAnchor = anchor)
     }
 }

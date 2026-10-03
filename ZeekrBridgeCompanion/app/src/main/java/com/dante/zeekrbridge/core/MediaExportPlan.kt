@@ -3,6 +3,7 @@ package com.dante.zeekrbridge.core
 import kotlin.math.max
 import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import io.github.dantenothing.avmtransfer.protocol.StripRepackContract
+import io.github.dantenothing.avmtransfer.protocol.SessionPlaybackTimeline
 
 enum class MediaExportTarget(val fileSuffix: String) {
     ORIGINAL("360"),
@@ -48,6 +49,7 @@ data class PlannedExportClip(
     val crop: PixelCrop?,
     val raster: StripRepackContract? = null,
     val sourceLanes: List<IndexedLane> = emptyList(),
+    val sessionBinding: SessionExportBinding? = null,
 ) {
     val outputDurationMs: Long get() = (clipEndMs - clipStartMs).coerceAtLeast(0L)
 }
@@ -70,6 +72,49 @@ data class MediaExportPlan(
 }
 
 object MediaExportPlanner {
+    /** Preserve monotonic channel order, with exact selected coverage and no skipped files. */
+    fun buildSession(
+        segments: List<IndexedMediaSegment>, timeline: SessionPlaybackTimeline, channelId: String,
+        target: MediaExportTarget, fromSessionMs: Long, toSessionMs: Long,
+    ): MediaExportPlan {
+        require(toSessionMs - fromSessionMs in 1..MAX_SESSION_EXPORT_MS) { "Select at most two hours per export" }
+        val slices = requireNotNull(timeline.range(channelId, fromSessionMs, toSessionMs)) {
+            "The selected camera has a gap or overlapping files in this range. Select a continuous range."
+        }
+        require(slices.size <= MAX_SESSION_EXPORT_SEGMENTS) { "Select at most 200 segments per export" }
+        val byId = segments.associateBy { it.id }
+        val windows = timeline.segments.associateBy { it.id }
+        val selected = slices.map { slice ->
+            val item = requireNotNull(byId[slice.segmentId]) { "A selected file is missing" }
+            require(item.file.isFile && item.file.length() > 0L) { "A selected file is missing or incomplete" }
+            require(item.recordingMode == IndexedRecordingMode.NORMAL && item.recordingSessionId == timeline.sessionId &&
+                item.playbackChannelId == channelId) { "This export requires one normal-recording session and camera" }
+            item.copy(durationMs = windows.getValue(item.id).mediaDurationMs)
+        }
+        val first = selected.first()
+        require(selected.all { it.sourceRole == first.sourceRole && it.layoutKind == first.layoutKind &&
+            it.raster == first.raster && it.lanes == first.lanes && it.originalWidth == first.originalWidth && it.originalHeight == first.originalHeight }) {
+            "The selected files have incompatible camera layouts"
+        }
+        val plans = selected.zip(slices).map { (segment, slice) -> build(listOf(segment), target, slice.fromMediaMs, slice.toMediaMs) }
+        val clips = plans.zip(selected).flatMap { (plan, segment) ->
+            val binding = SessionExportBinding.capture(segment, windows.getValue(segment.id))
+            plan.clips.map { it.copy(sessionBinding = binding) }
+        }
+        // The shared timeline proves coverage. A fractional continuous cut can round the
+        // global span by 1 ms, but each physical clip must still match its exact media slice.
+        require(clips.size == slices.size && clips.zip(slices).all { (clip, slice) ->
+            clip.clipStartMs == slice.fromMediaMs && clip.clipEndMs == slice.toMediaMs
+        }) { "The export range is incomplete" }
+        return plans.first().copy(clips = clips, requestedStartMs = fromSessionMs, requestedEndMs = toSessionMs,
+            missingGapCount = 0, missingGapDurationMs = 0,
+            embeddedMetadata = if (target == MediaExportTarget.ORIGINAL)
+                ContinuousRasterSupport.exportDocument(first, clips.sumOf { it.outputDurationMs }) else null)
+    }
+
+    const val MAX_SESSION_EXPORT_SEGMENTS = 200
+    const val MAX_SESSION_EXPORT_MS = 2L * 60 * 60 * 1_000
+
     fun supportedTargets(sourceRole: IndexedSourceRole): List<MediaExportTarget> =
         if (sourceRole == IndexedSourceRole.SURROUND) DIRECTION_TARGETS
         else listOf(MediaExportTarget.ORIGINAL)
@@ -203,7 +248,14 @@ object MediaExportPlanner {
         )
     }
 
-    internal fun validateFrozenInput(clip: PlannedExportClip, current: IndexedMediaSegment) {
+    internal fun validateFrozenInput(clip: PlannedExportClip, current: IndexedMediaSegment, measuredDurationMs: Long? = null) {
+        clip.sessionBinding?.let { binding ->
+            require(current.file.absolutePath == java.io.File(clip.filePath).absolutePath) { "SESSION_EXPORT_SOURCE_CHANGED" }
+            binding.requireMatches(current)
+            require(measuredDurationMs == clip.sourceDurationMs && current.raster ==
+                (clip.raster?.let { RecordingRasterMetadata.Repacked(it) } ?: RecordingRasterMetadata.Original) &&
+                current.lanes == clip.sourceLanes && ContinuousRasterSupport.error(current) == null) { "SESSION_EXPORT_SOURCE_CHANGED" }
+        }
         val raster = clip.raster ?: return
         require(current.raster == RecordingRasterMetadata.Repacked(raster) &&
             current.lanes.sortedBy { it.lane } == clip.sourceLanes.sortedBy { it.lane } &&
