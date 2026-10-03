@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -53,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
@@ -105,6 +108,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class PlaybackControls(
@@ -163,11 +167,13 @@ fun FourLanePlayerDialog(
     displayTitle: String? = null,
     onPrevious: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
-    onSendToPhone: ((List<File>) -> Boolean)? = null,
+    onSendToPhone: (suspend (List<File>, Boolean) -> Boolean)? = null,
+    allowDriveDataTransfer: Boolean = true,
     onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val playlist = remember(file, files) {
         files.ifEmpty { listOf(file) }.distinctBy { it.absolutePath }
     }
@@ -259,6 +265,17 @@ fun FourLanePlayerDialog(
     var selectedSegmentPaths by remember(playlist) {
         mutableStateOf(playlist.firstOrNull()?.let { setOf(it.absolutePath) } ?: emptySet())
     }
+    var includeDriveData by remember(playlist) { mutableStateOf(false) }
+    var queueing by remember(playlist) { mutableStateOf(false) }
+    val driveDataEligible = allowDriveDataTransfer && selectedSegmentPaths.isNotEmpty() && segmentItems
+        .filter { it.file.absolutePath in selectedSegmentPaths }.all { item ->
+            val metadata = item.sidecar
+            metadata?.recordingMode == RecordingMode.NORMAL && metadata.timeLapseMultiplier == 1 &&
+                metadata.recordingSessionId?.let(com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryStore::validId) == true &&
+                metadata.startedAtElapsedRealtimeMs?.let { start ->
+                    start >= 0 && (metadata.stoppedAtElapsedRealtimeMs ?: 0L) > start
+                } == true
+        }
     var status by remember(file, languageMode) {
         mutableStateOf(Utils.t("Opening recording…", "正在打开录像…"))
     }
@@ -509,7 +526,7 @@ fun FourLanePlayerDialog(
                         }
                     }
 
-                    Column(Modifier.weight(0.93f).fillMaxHeight()) {
+                    Column(Modifier.weight(0.93f).fillMaxHeight().verticalScroll(rememberScrollState())) {
                         PlaybackInfoCard(
                             diagnostics = diagnostics,
                             items = segmentItems,
@@ -527,18 +544,34 @@ fun FourLanePlayerDialog(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
-                        Spacer(Modifier.weight(1f))
                         Spacer(Modifier.height(10.dp))
+                        if (onSendToPhone != null && driveDataEligible) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = includeDriveData, onCheckedChange = { includeDriveData = it }, enabled = !queueing)
+                                Text(Utils.t("Include route & vehicle data", "同时发送路线和车辆数据"),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
+                            if (includeDriveData) Text(Utils.t(
+                                "Selected segments only · approximate sync · updated phone app required",
+                                "仅所选分段 · 近似同步 · 需要新版手机 App"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         Button(
                             onClick = {
                                 val selectedFiles = playlist.filter { it.absolutePath in selectedSegmentPaths }
-                                val queued = onSendToPhone?.invoke(selectedFiles) == true
-                                if (queued) status = Utils.t(
-                                    "Selected segments added to phone transfer queue",
-                                    "选中分段已加入手机传输队列",
-                                )
+                                val withData = includeDriveData && driveDataEligible
+                                queueing = true
+                                scope.launch {
+                                    try {
+                                        val queued = onSendToPhone?.invoke(selectedFiles, withData) == true
+                                        status = if (queued) Utils.t(
+                                            "Selected segments added to phone transfer queue", "选中分段已加入手机传输队列")
+                                        else Utils.t("Unable to queue transfer; check the transfer page", "无法加入队列，请查看传输页面")
+                                    } finally { queueing = false }
+                                }
                             },
-                            enabled = onSendToPhone != null && selectedSegmentPaths.isNotEmpty(),
+                            enabled = onSendToPhone != null && selectedSegmentPaths.isNotEmpty() && !queueing,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(56.dp),

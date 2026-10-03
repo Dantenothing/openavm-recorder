@@ -185,6 +185,8 @@ internal class TrashRepository(
     }
 
     private fun metadataTarget(restoredVideo: File, originalVideoName: String, metadataName: String): File = when {
+        metadataName == originalVideoName + DriveDataFiles.SUFFIX ->
+            DriveDataFiles.forVideo(restoredVideo) ?: error("Invalid drive attachment destination")
         metadataName == "$originalVideoName.sidecar.json" -> File(receivedRoot, "${restoredVideo.name}.sidecar.json")
         metadataName == "${originalVideoName.substringBeforeLast('.')}.sidecar.json" ->
             File(receivedRoot, "${restoredVideo.nameWithoutExtension}.sidecar.json")

@@ -4,6 +4,12 @@ Updated 2026-10-03. Target: **both OpenAVM Recorder and OpenAVM Phone**. This is
 
 ## Current implementation
 
+`5.1.0-drive2` extends this preview to both apps. In the head-unit playback panel, **Include route & vehicle data** is off by default. It sends a fixed GPS/vehicle-data attachment for each selected normal-recording segment through the existing paired TLS connection. The attachment is clipped to that segment's monotonic time window; selecting a segment does not send the full session history. Quick-send from the recording list remains video-only. A receiver without the new capability is rejected explicitly when data is selected; the sender does not silently discard it.
+
+The phone stores this attachment separately from the video and shows recorded route/vehicle data in playback, using the current segment and playback position. Video and metadata retain separate integrity checks. The receiver verifies the session UUID, time window, sidecar and content hash before publishing a declared video/data pair. Attachments follow Trash and restore, including renamed videos. Ordinary video sharing does not automatically include coordinates. The phone uses the car's recorded samples and does not need its own location permission for this view.
+
+The contract is `drive-data-v1`, with alignment `SEGMENT_ELAPSED_APPROX_V1`, a 4 MiB limit and at most 20,000 samples per source per segment. There is no interpolation of controls and no continuation across known gaps. The alignment is deliberately approximate: the current recorder observes the first frame after camera/queue latency, not at a calibrated sensor clock boundary. Phone clock, import time and file modification time are not alignment sources. Empty data remains an explicit no-recorded-data state; old videos cannot acquire a historical route later.
+
 `5.1.0-drive1` adds an optional, default-off **Vehicle data with recordings** setting to the head unit. It records the SDK's read-only speed, gear, indicator request, left/right indicator lamps, brake pedal and brake lamp observations. It is independent of the existing optional GPS recorder. No cloud account, protocol configuration or private server is needed for local recording and playback.
 
 Data is stored separately from the original video. The playback overlay identifies **Vehicle** or **GPS** speed rather than silently substituting one for the other. The drive playback panel shows both sources when available. Missing, rejected or stale observations remain unknown. Gear and ignition state are not treated as proof of movement.
@@ -23,7 +29,6 @@ The field report now includes read-only presence checks for Google Play services
 ## What is not implemented
 
 - A street-map SDK in either app; no Google API key, billing project or map-tile provider has been configured.
-- Phone transfer, storage or synchronized playback of GPS/vehicle journals. Existing video transfer and playback are retained.
 - Three-camera recording. The preview probe remains separate from production recording.
 - Time-lapse route/vehicle synchronization. `TelemetryVideoWindow` rejects unsupported time compression rather than inventing an offset.
 - Speed/GPS watermarks burned into original files, road snapping, inferred routes or background uploads.
@@ -50,15 +55,15 @@ The reviewed Zeekr Shortcut v2.0.0 source uses a recorder/encoder/file per camer
 ## Recommended dual-end architecture
 
 1. Record original video, GPS and vehicle observations locally, with one session UUID and a monotonic clock. Keep source, accuracy, freshness and gaps.
-2. Record the actual relationship between each segment's first encoded presentation timestamp and the session clock. Resolve normal recording first; compressed time requires an explicit mapping.
-3. Extend the paired transfer protocol with a versioned **Include route and vehicle data** opt-in. Transfer only requested time ranges, with bounded parsing, integrity checks and an explicit time base. Preserve existing TLS, pairing and access controls. Old clients must still download videos without metadata.
-4. Import into private phone storage and adapt both players to a common track/time contract. Do not load the old standalone `phone` module by mistake: the unified app's companion sources come from `ZeekrBridgeCompanion`.
+2. Improve the current approximate segment clock to a measured relationship between each segment's first encoded frame and the session clock. Resolve normal recording first; compressed time requires an explicit mapping.
+3. Verify the new versioned **Include route and vehicle data** opt-in on actual devices, including interrupted transfer and cancellation. It preserves existing TLS, pairing and access controls. Old clients retain video-only transfer.
+4. Verify the new phone playback contract against the same recording on the car. Do not load the old standalone `phone` module by mistake: the unified app's companion sources come from `ZeekrBridgeCompanion`.
 5. Add street-map adapters to both ends. Playback time drives the map marker. Seeking moves video and marker together; dragging the map temporarily suspends following until the user taps recenter. Keep a clear no-location state and a local trace when tiles are unavailable.
 6. Consider optional privacy trimming and annotated exports after the original recording/transfer path is verified.
 
 The car does not need internet while collecting GPS and vehicle observations. Online street tiles may need connectivity during review. A tile provider's offline license and cache rules are separate from the right to retain one's own GPS points.
 
-Existing `SegmentSidecar` already includes recording session/process IDs, monotonic and UTC start/stop times, recording mode and time-lapse multiplier; schema 9 also has continuous-encoding PTS fields. Preserve these rather than inventing an unrelated clock. A process ID is not a boot ID. The current paired upload is per MP4, with at most 256 KiB of sidecar JSON, so route history should be a separate bounded attachment, not an oversized inline field. Extend descriptor idempotency, stable snapshot hashes, authenticated upload, atomic commit, media indexing, trash/restore and explicit export together. The phone's playback entry currently drops some session/timing information; carry that through before claiming synchronization.
+Existing `SegmentSidecar` includes recording session/process IDs, monotonic and UTC start/stop times, recording mode and time-lapse multiplier; schema 9 also has continuous-encoding PTS fields. A process ID is not a boot ID. The upload remains per MP4 with at most 256 KiB of sidecar JSON; the new route attachment uses a separate bounded endpoint. Descriptor idempotency, stable snapshot hashes, authenticated upload, atomic commit and Trash/restore participate in the same lifecycle. The phone loads timing from the verified attachment bound to the video sidecar.
 
 ## Map provider decision
 

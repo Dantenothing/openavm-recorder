@@ -38,6 +38,8 @@ data class HealthResponse(
     val recordingRasterLayouts: List<String> = emptyList(),
     val securityVersions: List<Int> = emptyList(),
     val tlsPort: Int? = null,
+    /** Optional recorded GPS/vehicle attachment formats. Empty on legacy receivers. */
+    val driveDataFormats: List<String> = emptyList(),
 )
 
 @Serializable
@@ -57,6 +59,8 @@ data class UploadCreateRequest(
     val carId: String,
     /** Snapshot of the recording sidecar; it is committed beside the MP4. */
     val sidecarJson: String? = null,
+    /** Separately transferred, explicitly selected drive data bound to this video segment. */
+    val driveData: DriveDataDescriptor? = null,
 )
 
 @Serializable
@@ -70,6 +74,7 @@ data class UploadStatusResponse(
     val status: String,
     val chunkSize: Int,
     val sha256: String,
+    val driveDataReceived: Boolean = false,
 )
 
 @Serializable

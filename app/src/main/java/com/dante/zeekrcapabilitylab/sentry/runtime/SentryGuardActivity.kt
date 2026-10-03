@@ -253,7 +253,8 @@ class SentryGuardActivity : ComponentActivity() {
                 triggerMarkersByFile = event.assets.associate { asset ->
                     File(store.directory(event.id), asset.name).absolutePath to GuardVideoPresentation.markers(event, asset)
                 },
-                onSendToPhone = { send(event, it); true }, onDismiss = { playing = null })
+                allowDriveDataTransfer = false,
+                onSendToPhone = { selected, _ -> send(event, selected); true }, onDismiss = { playing = null })
         }
         usbSelection?.let { (event, targets) -> AlertDialog(onDismissRequest = { usbSelection = null }, title = { Text("选择 USB") },
             text = { Column { targets.forEach { target -> TextButton(onClick = { usbSelection = null; export(event, target) }) { Text("${target.description} · ${target.storageUuid}") } } } },

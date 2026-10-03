@@ -3,7 +3,7 @@ package com.dante.zeekrcapabilitylab.telemetry
 import kotlinx.serialization.Serializable
 import kotlin.math.*
 
-/** Local recording telemetry. This model is deliberately absent from transfer/diagnostic payloads. */
+/** Local recording telemetry. Only an explicit per-segment transfer may copy it into DriveDataBundle. */
 @Serializable
 data class TelemetryFix(
     val elapsedMs: Long,
@@ -88,7 +88,11 @@ object TelemetryPlayback {
     fun sampleAt(points: List<TelemetryFix>, atMs: Long?): TelemetryFix? {
         if (atMs == null) return null
         val index = points.binarySearchBy(atMs) { it.elapsedMs }.let { if (it >= 0) it else -it - 2 }
-        return points.getOrNull(index)?.takeIf { atMs >= it.elapsedMs && atMs - it.elapsedMs <= TelemetryPolicy.PLAYBACK_AGE_MS }
+        val point = points.getOrNull(index) ?: return null
+        if (!TelemetryPolicy.validStored(point) || atMs - point.elapsedMs !in 0..TelemetryPolicy.PLAYBACK_AGE_MS) return null
+        val next = points.getOrNull(index + 1)
+        if (atMs > point.elapsedMs && next != null && !connected(point, next)) return null
+        return point
     }
     fun connected(a: TelemetryFix, b: TelemetryFix): Boolean = !b.breakBefore && a.provider == b.provider &&
         b.elapsedMs - a.elapsedMs in 1..TelemetryPolicy.MAX_GAP_MS

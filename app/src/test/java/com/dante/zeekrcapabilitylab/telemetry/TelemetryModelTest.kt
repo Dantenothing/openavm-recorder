@@ -75,11 +75,20 @@ class TelemetryModelTest {
     @Test fun playbackNeverLooksAheadOrHoldsAnOldSpeed() {
         val points = listOf(fix(1_000), fix(9_000, 0f))
         assertNull(TelemetryPlayback.sampleAt(points, 999))
-        assertEquals(10f, TelemetryPlayback.sampleAt(points, 3_000)!!.speedMps)
+        assertNull(TelemetryPlayback.sampleAt(points, 3_000))
         assertNull(TelemetryPlayback.sampleAt(points, 3_001))
         assertNull(TelemetryPlayback.sampleAt(points, 8_999))
         assertEquals(0f, TelemetryPlayback.sampleAt(points, 9_000)!!.speedMps)
         assertNull(TelemetryPlayback.sampleAt(points, null))
+    }
+    @Test fun playbackMatchesPhoneGapAndFreshnessRules() {
+        assertEquals(10f, TelemetryPlayback.sampleAt(listOf(fix()), 3_000)!!.speedMps)
+        assertNull(TelemetryPlayback.sampleAt(listOf(fix()), 3_001))
+        for (next in listOf(fix(2_000).copy(breakBefore = true), fix(2_000).copy(provider = "network"))) {
+            assertNotNull(TelemetryPlayback.sampleAt(listOf(fix(), next), 1_000))
+            assertNull(TelemetryPlayback.sampleAt(listOf(fix(), next), 1_001))
+            assertEquals(next, TelemetryPlayback.sampleAt(listOf(fix(), next), 2_000))
+        }
     }
     @Test fun crossSegmentSeekingUsesEachSegmentsMonotonicStartAndRealGaps() {
         val timeline = PlaybackTimeline(2).apply { confirm(0, 60_000); confirm(1, 60_000) }

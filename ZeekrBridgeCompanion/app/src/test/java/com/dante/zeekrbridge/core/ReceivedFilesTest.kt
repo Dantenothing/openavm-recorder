@@ -54,4 +54,30 @@ class ReceivedFilesTest {
         assertFalse(File(root, "b.partial").exists())
         assertTrue(File(root, "..partial").exists())
     }
+
+    @Test
+    fun driveAttachmentIsHiddenButBelongsToItsVideoMetadata() {
+        val root = tmp.newFolder("received-drive")
+        val video = File(root, "drive.mp4").apply { writeBytes(byteArrayOf(1)) }
+        val attachment = DriveDataFiles.forVideo(video)!!.apply { parentFile!!.mkdirs(); writeText("private attachment") }
+        assertEquals(listOf(video), ReceivedFiles.visibleFiles(root))
+        assertEquals(listOf(attachment), ReceivedFiles.relatedMetadataFiles(video))
+    }
+
+    @Test
+    fun startupCleanupPreservesReservedAndCommittedAttachmentsOnly() {
+        val root = tmp.newFolder("received-drive-orphans")
+        val committed = File(root, "committed.mp4").apply { writeBytes(byteArrayOf(1)) }
+        val reserved = File(root, "reserved.mp4")
+        val orphan = File(root, "orphan.mp4")
+        listOf(committed, reserved, orphan).forEach { video ->
+            DriveDataFiles.forVideo(video)!!.apply { parentFile!!.mkdirs(); writeText("attachment") }
+        }
+        val partial = File(DriveDataFiles.forVideo(reserved)!!.absolutePath + ".partial").apply { writeText("partial") }
+        DriveDataFiles.cleanupOrphans(root, setOf(reserved.name))
+        assertTrue(DriveDataFiles.forVideo(committed)!!.isFile)
+        assertTrue(DriveDataFiles.forVideo(reserved)!!.isFile)
+        assertFalse(DriveDataFiles.forVideo(orphan)!!.exists())
+        assertFalse(partial.exists())
+    }
 }

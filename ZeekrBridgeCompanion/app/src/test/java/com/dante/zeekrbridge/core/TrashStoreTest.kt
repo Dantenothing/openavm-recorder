@@ -83,4 +83,25 @@ class TrashStoreTest {
         assertTrue(repository.deletePermanently(entries.first().id))
         assertEquals(1, repository.list().size)
     }
+
+    @Test
+    fun hiddenDriveAttachmentFollowsTrashAndCollisionRename() {
+        val received = temp.newFolder("received-drive")
+        val trash = temp.newFolder("trash-drive")
+        val original = File(received, "drive.mp4").apply { writeText("old video") }
+        val attachment = DriveDataFiles.forVideo(original)!!.apply { parentFile!!.mkdirs(); writeText("old drive data") }
+        File(received, "drive.json").writeText("old sidecar")
+        val repository = TrashRepository(received, trash) { 1_234L }
+        assertEquals(1, repository.moveToTrash(listOf(original)))
+        assertFalse(attachment.exists())
+        original.writeText("new video")
+        attachment.writeText("new drive data")
+        File(received, "drive.json").writeText("new sidecar")
+        assertEquals(1, repository.restore(repository.list().single().id))
+        val restored = File(received, "drive (2).mp4")
+        assertEquals("old drive data", DriveDataFiles.forVideo(restored)!!.readText())
+        assertEquals("new drive data", attachment.readText())
+        assertEquals("old sidecar", File(received, "drive (2).json").readText())
+        assertFalse(ReceivedFiles.visibleFiles(received).any { it.name.endsWith(DriveDataFiles.SUFFIX) })
+    }
 }

@@ -21,6 +21,7 @@ import com.dante.zeekrbridge.core.ReliableUploadStore
 import com.dante.zeekrbridge.core.SecureCompare
 import com.dante.zeekrbridge.core.ServerLog
 import io.github.dantenothing.avmtransfer.protocol.TransferProtocol
+import io.github.dantenothing.avmtransfer.protocol.DriveDataCodec
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -347,6 +348,11 @@ object BridgeServer {
                 respond(socket.getOutputStream(), 413, "application/json", """{"error":"body too large"}""")
                 return
             }
+            if (path.startsWith("/api/uploads/") && path.endsWith("/drive-data") &&
+                (contentLength ?: 0L) > DriveDataCodec.MAX_BYTES) {
+                respond(socket.getOutputStream(), 413, "application/json", """{"error":"drive data too large"}""")
+                return
+            }
             val body = if (contentLength != null && contentLength > 0) {
                 if (contentLength > Int.MAX_VALUE) {
                     respond(socket.getOutputStream(), 413, "application/json", """{"error":"body too large"}""")
@@ -425,6 +431,7 @@ object BridgeServer {
                             deviceName = android.os.Build.MODEL,
                             phoneDeviceId = PairingManager.phoneDeviceId.value,
                             recordingRasterLayouts = listOf(io.github.dantenothing.avmtransfer.protocol.StripRepackContract.TRANSFER_CAPABILITY),
+                            driveDataFormats = listOf(DriveDataCodec.CAPABILITY),
                         )
                         respond(
                             out,
@@ -623,20 +630,35 @@ object BridgeServer {
         }
         val parts = path.removePrefix("/api/uploads/").split("/")
         val uploadId = URLDecoder.decode(parts[0], "UTF-8")
-        val status = ReliableUploadStore.status(uploadId, device.carDeviceId)
-        if (status == null) {
+        val legacy = ReliableUploadStore.isLegacy(uploadId, device.carDeviceId)
+        if (legacy == null) {
             respond(out, 404, "application/json", """{"error":"unknown upload"}""")
             return
         }
-        val legacy = ReliableUploadStore.isLegacy(uploadId, device.carDeviceId) == true
         when {
             method == "GET" && parts.size == 1 -> {
+                val status = ReliableUploadStore.status(uploadId, device.carDeviceId) ?: run {
+                    respond(out, 404, "application/json", """{"error":"unknown upload"}""")
+                    return
+                }
                 respond(
                     out,
                     200,
                     "application/json",
                     json.encodeToString(io.github.dantenothing.avmtransfer.protocol.UploadStatusResponse.serializer(), status),
                 )
+            }
+            method == "PUT" && parts.size == 2 && parts[1] == "drive-data" -> {
+                if (body.size > DriveDataCodec.MAX_BYTES) {
+                    respond(out, 413, "application/json", """{"error":"drive data too large"}""")
+                    return
+                }
+                if (!ReliableUploadStore.storeDriveData(uploadId, device.carDeviceId, body) { PairingManager.withCurrent(device, it) }) {
+                    respond(out, 400, "application/json", """{"error":"drive data rejected"}""")
+                    return
+                }
+                ServerLog.log("DRIVE_DATA_RECEIVED id=" + uploadId.take(8) + " bytes=" + body.size)
+                respond(out, 200, "application/json", """{"ok":true}""")
             }
             method == "PUT" && parts.size == 3 && parts[1] == "chunks" -> {
                 val index = parts[2].toIntOrNull() ?: run {

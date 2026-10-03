@@ -1,6 +1,7 @@
 package com.dante.zeekrbridge.core
 
 import android.content.Context
+import io.github.dantenothing.avmtransfer.protocol.DriveDataCodec
 import io.github.dantenothing.avmtransfer.protocol.ProtocolValidation
 import io.github.dantenothing.avmtransfer.protocol.TransferProtocol
 import io.github.dantenothing.avmtransfer.protocol.UploadCompleteResponse as V2CompleteResponse
@@ -44,6 +45,8 @@ object ReliableUploadStore {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
     private lateinit var filesRoot: File
     private val locks = ConcurrentHashMap<String, Any>()
+    private val createLock = Any()
+    private val targetLock = Any()
 
     fun init(appContext: Context) = initAt(appContext.applicationContext.filesDir)
 
@@ -56,12 +59,15 @@ object ReliableUploadStore {
         cleanupOrphans()
     }
 
-    fun create(request: V2CreateRequest, authenticatedCarId: String, authorize: (() -> Unit) -> Boolean = { it(); true }): V2CreateResponse? {
+    fun create(request: V2CreateRequest, authenticatedCarId: String, authorize: (() -> Unit) -> Boolean = { it(); true }): V2CreateResponse? = synchronized(createLock) {
         if (request.carId != authenticatedCarId || !ProtocolValidation.validIdentity(request.carId)) return null
         if (!ProtocolValidation.validIdentity(request.clientTransferId)) return null
         val name = ProtocolValidation.cleanFileName(request.fileName) ?: return null
         val sha = ProtocolValidation.normalizedSha(request.sha256) ?: return null
         if ((request.sidecarJson?.toByteArray()?.size ?: 0) > TransferProtocol.MAX_SIDECAR_BYTES) return null
+        val driveDescriptor = request.driveData
+        if (driveDescriptor != null && (!DriveDataCodec.validDescriptor(driveDescriptor) ||
+                request.sidecarJson == null || !name.endsWith(".mp4", true) || request.mimeType != "video/mp4")) return null
         val total = ProtocolValidation.totalChunks(request.sizeBytes, TransferProtocol.CHUNK_SIZE) ?: return null
         uploadsRoot().listFiles().orEmpty().filter(File::isDirectory).forEach { dir ->
             val existing = load(dir.name) ?: return@forEach
@@ -69,7 +75,11 @@ object ReliableUploadStore {
                 return if (
                     existing.request.sizeBytes == request.sizeBytes &&
                     existing.request.sha256 == sha &&
-                    existing.request.fileName == name
+                    existing.request.fileName == name &&
+                    existing.request.mimeType == request.mimeType &&
+                    existing.request.sidecarJson == request.sidecarJson &&
+                    existing.request.driveData == request.driveData &&
+                    authorize { }
                 ) {
                     V2CreateResponse(existing.uploadId, existing.chunkSize, existing.totalChunks)
                 } else null
@@ -96,8 +106,43 @@ object ReliableUploadStore {
             status = session.status,
             chunkSize = session.chunkSize,
             sha256 = session.request.sha256,
+            driveDataReceived = hasDriveData(session),
         )
     }
+
+    fun storeDriveData(uploadId: String, carId: String, bytes: ByteArray, authorize: (() -> Unit) -> Boolean = { it(); true }): Boolean =
+        synchronized(lock(uploadId)) {
+            val session = load(uploadId) ?: return false
+            val descriptor = session.request.driveData ?: return false
+            if (session.request.carId != carId || session.status !in setOf("UPLOADING", "COMMITTING")) return false
+            if (DriveDataCodec.verify(bytes, descriptor, session.request.sidecarJson) == null) return false
+            val dir = uploadDir(uploadId)
+            val partial = File(dir, "drive-data.partial")
+            try {
+                FileOutputStream(partial).use { it.write(bytes); it.fd.sync() }
+                if (!authorize {
+                    moveReplacing(partial, File(dir, "drive-data.json"))
+                    writeMetadata(dir, session.copy(updatedAt = System.currentTimeMillis()))
+                }) return false
+                true
+            } finally { partial.delete() }
+        }
+
+    private fun stagedDriveData(session: ReliableStoredUpload): ByteArray? {
+        val descriptor = session.request.driveData ?: return null
+        val bytes = DriveDataFiles.readBounded(File(uploadDir(session.uploadId), "drive-data.json"), DriveDataCodec.MAX_BYTES) ?: return null
+        return bytes.takeIf { DriveDataCodec.verify(it, descriptor, session.request.sidecarJson) != null }
+    }
+
+    private fun committedDriveData(session: ReliableStoredUpload): Boolean {
+        val descriptor = session.request.driveData ?: return false
+        val name = session.completedFileName ?: return false
+        return DriveDataFiles.matches(File(receivedRoot(), name), descriptor, session.request.sidecarJson,
+            session.request.sizeBytes, session.request.sha256)
+    }
+
+    private fun hasDriveData(session: ReliableStoredUpload): Boolean =
+        session.request.driveData != null && (committedDriveData(session) || stagedDriveData(session) != null)
 
     fun isLegacy(uploadId: String, carId: String): Boolean? = synchronized(lock(uploadId)) {
         val session = load(uploadId) ?: return null
@@ -148,7 +193,15 @@ object ReliableUploadStore {
                 ?: return ReliableCommitResult.Rejected(500, "completed file missing")
             val existing = File(receivedRoot(), name)
             if (!existing.isFile) return ReliableCommitResult.Rejected(500, "completed file missing")
+            if (session.request.driveData != null && !committedDriveData(session)) {
+                return ReliableCommitResult.Rejected(409, "drive data missing or invalid")
+            }
+            if (!authorize { }) return ReliableCommitResult.Rejected(401, "unauthorized")
             return ReliableCommitResult.Success(V2CompleteResponse(uploadId, true, sha, name))
+        }
+        val driveBytes = if (session.request.driveData != null) stagedDriveData(session) else null
+        if (session.request.driveData != null && driveBytes == null && !committedDriveData(session)) {
+            return ReliableCommitResult.Rejected(409, "drive data missing or invalid")
         }
         val indices = chunks(uploadDir(uploadId))
         if (indices != (0 until session.totalChunks).toList()) {
@@ -156,22 +209,30 @@ object ReliableUploadStore {
         }
         val cleanName = ProtocolValidation.cleanFileName(requestedName)
             ?: return ReliableCommitResult.Rejected(400, "invalid file name")
+        if (session.request.driveData != null && !cleanName.endsWith(".mp4", true)) {
+            return ReliableCommitResult.Rejected(400, "drive data requires mp4")
+        }
         if (session.status !in setOf("UPLOADING", "COMMITTING")) {
             return ReliableCommitResult.Rejected(409, "upload not active")
         }
         if (session.status == "UPLOADING") {
-            session = session.copy(
-                status = "COMMITTING",
-                updatedAt = System.currentTimeMillis(),
-                completedFileName = uniqueTarget(cleanName).name,
-            )
-            if (!authorize { writeMetadata(uploadDir(uploadId), session) }) return ReliableCommitResult.Rejected(401, "unauthorized")
+            synchronized(targetLock) {
+                session = session.copy(
+                    status = "COMMITTING",
+                    updatedAt = System.currentTimeMillis(),
+                    completedFileName = uniqueTarget(cleanName).name,
+                )
+                if (!authorize { writeMetadata(uploadDir(uploadId), session) }) return ReliableCommitResult.Rejected(401, "unauthorized")
+            }
         }
         val targetName = session.completedFileName
             ?: return ReliableCommitResult.Rejected(500, "commit target missing")
         val target = File(receivedRoot(), targetName)
         val partial = File(receivedRoot(), "$targetName.partial")
         try {
+            if (target.isFile && (target.length() != session.request.sizeBytes || sha256(target) != sha)) {
+                return ReliableCommitResult.Rejected(500, "reserved target verification failed")
+            }
             if (!target.isFile) {
                 FileOutputStream(partial).use { out ->
                     indices.forEach { i ->
@@ -194,11 +255,30 @@ object ReliableUploadStore {
                         sidecarTmp.writeText(sidecar)
                         moveReplacing(sidecarTmp, sidecarTarget)
                     }
+                    session.request.driveData?.let { descriptor ->
+                        // This is intentionally before the MP4 commit point. A requested attachment
+                        // is part of this upload, never a later best-effort decoration.
+                        DriveDataFiles.write(target, driveBytes ?: error("MISSING_DRIVE_DATA"), descriptor,
+                            session.request.sidecarJson, session.request.sizeBytes, sha)
+                    }
                     moveWithoutReplace(partial, target)
                 }) { partial.delete(); return ReliableCommitResult.Rejected(401, "unauthorized") }
             }
             if (target.length() != session.request.sizeBytes || sha256(target) != sha) {
                 return ReliableCommitResult.Rejected(500, "reserved target verification failed")
+            }
+            if (session.request.driveData != null && !committedDriveData(session)) {
+                val descriptor = session.request.driveData!!
+                val repair = driveBytes ?: return ReliableCommitResult.Rejected(409, "drive data missing or invalid")
+                if (!authorize {
+                    // Recover a metadata write failure after a previously verified MP4 rename.
+                    val sidecarTarget = File(target.parentFile, target.nameWithoutExtension + ".json")
+                    val sidecarTmp = File(sidecarTarget.absolutePath + ".partial")
+                    sidecarTmp.writeText(session.request.sidecarJson!!)
+                    moveReplacing(sidecarTmp, sidecarTarget)
+                    DriveDataFiles.write(target, repair, descriptor, session.request.sidecarJson, session.request.sizeBytes, sha)
+                }) return ReliableCommitResult.Rejected(401, "unauthorized")
+                if (!committedDriveData(session)) return ReliableCommitResult.Rejected(500, "drive data verification failed")
             }
             if (!authorize {
                 writeMetadata(
@@ -214,6 +294,7 @@ object ReliableUploadStore {
             ReliableCommitResult.Success(V2CompleteResponse(uploadId, true, sha, target.name))
         } catch (t: Throwable) {
             partial.delete()
+            cleanupUncommittedTarget(session)
             ReliableCommitResult.Rejected(500, "commit failed")
         }
     }
@@ -229,7 +310,7 @@ object ReliableUploadStore {
                 target.length() == session.request.sizeBytes &&
                 sha256(target) == session.request.sha256
             ) {
-                authorize {
+                if (session.request.driveData == null || committedDriveData(session)) authorize {
                     writeMetadata(
                         uploadDir(uploadId),
                         session.copy(status = "COMPLETED", updatedAt = System.currentTimeMillis()),
@@ -238,11 +319,7 @@ object ReliableUploadStore {
                 }
                 return false
             }
-            if (!authorize { target?.let {
-                File(it.absolutePath + ".partial").delete()
-                File(it.parentFile, it.nameWithoutExtension + ".json.partial").delete()
-                File(it.parentFile, it.nameWithoutExtension + ".json").delete()
-            } }) return false
+            if (!authorize { cleanupUncommittedTarget(session) }) return false
         }
         if (!authorize { uploadDir(uploadId).deleteRecursively() }) return false
         true
@@ -253,21 +330,38 @@ object ReliableUploadStore {
         uploadsRoot().listFiles().orEmpty().filter(File::isDirectory).forEach { dir ->
             val session = load(dir.name)
             if (session == null || (session.status != "COMPLETED" && session.updatedAt < cutoff)) {
+                if (session != null) cleanupUncommittedTarget(session)
                 dir.deleteRecursively()
             } else if (session.status == "COMPLETED") {
                 cleanupCompletedChunks(dir)
             }
         }
         receivedRoot().listFiles().orEmpty().filter { it.name.endsWith(".partial") }.forEach(File::delete)
+        val reserved = uploadsRoot().listFiles().orEmpty().filter(File::isDirectory).mapNotNull {
+            load(it.name)?.takeIf { item -> item.status == "COMMITTING" }?.completedFileName
+        }.toSet()
+        DriveDataFiles.cleanupOrphans(receivedRoot(), reserved)
+    }
+
+    private fun cleanupUncommittedTarget(session: ReliableStoredUpload) {
+        val target = session.completedFileName?.let { File(receivedRoot(), it) } ?: return
+        if (target.exists()) return
+        File(target.absolutePath + ".partial").delete()
+        File(target.parentFile, target.nameWithoutExtension + ".json.partial").delete()
+        File(target.parentFile, target.nameWithoutExtension + ".json").delete()
+        DriveDataFiles.removeUncommitted(target)
     }
 
     private fun load(id: String): ReliableStoredUpload? {
         if (!ProtocolValidation.validIdentity(id)) return null
         return try {
+            val bytes = DriveDataFiles.readBounded(File(uploadDir(id), "metadata.json"), 1024 * 1024) ?: return null
             json.decodeFromString(
                 ReliableStoredUpload.serializer(),
-                File(uploadDir(id), "metadata.json").readText(),
-            ).takeIf { it.uploadId == id }
+                bytes.toString(Charsets.UTF_8),
+            ).takeIf { it.uploadId == id && ProtocolValidation.validIdentity(it.request.carId) &&
+                (it.completedFileName == null || ProtocolValidation.cleanFileName(it.completedFileName) == it.completedFileName) &&
+                it.request.driveData.let { descriptor -> descriptor == null || DriveDataCodec.validDescriptor(descriptor) } }
         } catch (_: Throwable) {
             null
         }
@@ -285,6 +379,8 @@ object ReliableUploadStore {
 
     private fun cleanupCompletedChunks(dir: File) {
         dir.listFiles().orEmpty().filter { it.name.startsWith("chunk-") }.forEach(File::delete)
+        File(dir, "drive-data.json").delete()
+        File(dir, "drive-data.partial").delete()
     }
 
     private fun sha256(file: File): String {
@@ -306,7 +402,13 @@ object ReliableUploadStore {
         val ext = if (dot > 0) name.substring(dot) else ""
         var result = File(receivedRoot(), name)
         var suffix = 1
-        while (result.exists() || File(result.absolutePath + ".partial").exists()) {
+        val reserved = uploadsRoot().listFiles().orEmpty().filter(File::isDirectory).mapNotNull {
+            load(it.name)?.takeIf { item -> item.status == "COMMITTING" }?.completedFileName
+        }
+        while (result.exists() || File(result.absolutePath + ".partial").exists() ||
+            MediaIndexScanner.sidecarCandidates(result).any(File::exists) ||
+            DriveDataFiles.forVideo(result)?.exists() == true ||
+            reserved.any { it == result.name || it.substringBeforeLast('.') == result.nameWithoutExtension }) {
             result = File(receivedRoot(), "$base-$suffix$ext")
             suffix++
         }

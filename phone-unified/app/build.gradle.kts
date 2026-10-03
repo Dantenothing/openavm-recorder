@@ -12,8 +12,8 @@ android {
         applicationId = "com.dante.zeekrbridge"
         minSdk = 26
         targetSdk = 36
-        versionCode = 52
-        versionName = "5.0.1"
+        versionCode = 53
+        versionName = "5.1.0-drive2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {

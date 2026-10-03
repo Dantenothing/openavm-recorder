@@ -29,11 +29,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.dante.zeekrbridge.core.IndexedLayoutKind
 import com.dante.zeekrbridge.core.isFourLane
 import com.dante.zeekrbridge.core.ContinuousRasterSupport
+import com.dante.zeekrbridge.core.DriveDataFiles
+import io.github.dantenothing.avmtransfer.protocol.DriveDataBundle
 import io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata
 import com.dante.zeekrbridge.player.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /** One player stays mounted while the detail page's actions and segment selection change. */
 @Composable
@@ -119,6 +122,15 @@ internal fun InlineMediaPlayer(
     var surfaceAttached by remember(player) { mutableStateOf(false) }
     var decodedSize by remember(player) { mutableStateOf<PlaybackDisplaySize?>(null) }
     val activeEntry = playable[currentIndex.coerceIn(playable.indices)]
+    val loadedDriveData by produceState<Pair<String, DriveDataBundle?>?>(null, activeEntry.id, activeEntry.uri) {
+        value = withContext(Dispatchers.IO) {
+            activeEntry.id to if (activeEntry.uri.scheme.equals("file", ignoreCase = true)) {
+                activeEntry.uri.path?.let { DriveDataFiles.load(File(it)) }
+            } else null
+        }
+    }
+    // A previous segment's attachment must disappear while the next one is being checked.
+    val driveData = loadedDriveData?.takeIf { it.first == activeEntry.id }?.second
     var metadataSize by remember(activeEntry.id) { mutableStateOf<PlaybackDisplaySize?>(null) }
     val currentOnActiveMediaChanged by rememberUpdatedState(onActiveMediaChanged)
     SideEffect { resumePlaying = intent.wantsToPlay }
@@ -167,7 +179,14 @@ internal fun InlineMediaPlayer(
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 currentIndex = player.currentMediaItemIndex.coerceIn(playable.indices)
+                resumeId = playable[currentIndex].id
+                resumePositionMs = player.currentPosition.coerceAtLeast(0L)
                 decodedSize = null
+            }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                currentIndex = newPosition.mediaItemIndex.coerceIn(playable.indices)
+                resumeId = playable[currentIndex].id
+                resumePositionMs = newPosition.positionMs.coerceAtLeast(0L)
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 val id = player.currentMediaItem?.mediaId ?: return
@@ -275,6 +294,9 @@ internal fun InlineMediaPlayer(
                     )
                 }
             }
+        }
+        driveData?.let { bundle ->
+            RecordedDrivePanel(bundle, resumePositionMs.takeIf { resumeId == activeEntry.id }, activeEntry.id)
         }
         if (first.layoutKind.isFourLane) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

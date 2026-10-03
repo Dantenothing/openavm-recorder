@@ -10,6 +10,7 @@ import java.io.File
 object ReceivedFiles {
     fun visibleFiles(root: File): List<File> =
         root.walkTopDown()
+            .onEnter { it == root || it.name != DriveDataFiles.DIRECTORY }
             .filter { it.isFile && !it.name.endsWith(".partial") }
             .sortedBy { it.absolutePath }
             .toList()
@@ -24,5 +25,6 @@ object ReceivedFiles {
             .forEach { it.delete() }
     }
 
-    fun relatedMetadataFiles(video: File): List<File> = MediaIndexScanner.sidecarCandidates(video).filter(File::isFile)
+    fun relatedMetadataFiles(video: File): List<File> =
+        (MediaIndexScanner.sidecarCandidates(video) + listOfNotNull(DriveDataFiles.forVideo(video))).filter(File::isFile)
 }

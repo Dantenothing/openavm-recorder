@@ -84,6 +84,8 @@ class TransferService : Service() {
                     TransferRepository.markConnected(endpoint, true, "Connected to ${endpoint.phoneName}")
                     if (step == QueueStep.PAUSE) break
                 } catch (t: Throwable) {
+                    if (t is TransferCancelledException) continue
+                    if (TransferRepository.get(task.id)?.state in TransferRepository.TERMINAL) continue
                     if (t is PhoneSecurityException) {
                         val latest = TransferRepository.get(task.id) ?: break
                         val message = phoneSecurityMessage(t.error)
@@ -92,6 +94,11 @@ class TransferService : Service() {
                         break
                     }
                     val latest = TransferRepository.get(task.id) ?: continue
+                    if (latest.state == TransferTaskState.CANCEL_PENDING) {
+                        TransferRepository.update(latest.copy(reason = "Waiting for phone to remove the partial transfer"))
+                        TransferRepository.markConnected(endpoint, false, t.message ?: "Phone unavailable")
+                        break
+                    }
                     if (latest.sourceKind == TransferSourceKind.FACTORY_SENTRY_USB) {
                         when (val source = resolveFactorySentry(latest)) {
                             is FactorySentrySourceResolution.WaitingForUsb -> {
@@ -167,9 +174,17 @@ class TransferService : Service() {
 
     private fun upload(initial: TransferTask, endpoint: PhoneEndpoint): QueueStep {
         var task = TransferRepository.get(initial.id) ?: return QueueStep.CONTINUE
+        if (stopped(task.id)) return QueueStep.CONTINUE
         val raster = io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.read(task.sidecarJson)
-        val capabilities = if (raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
-            TransferHttp.health(task.id, endpoint).recordingRasterLayouts else emptyList()
+        val health = if (task.includeDriveData || raster is io.github.dantenothing.avmtransfer.protocol.RecordingRasterMetadata.Repacked)
+            TransferHttp.health(task.id, endpoint) else null
+        val capabilities = health?.recordingRasterLayouts.orEmpty()
+        if (stopped(task.id)) return QueueStep.CONTINUE
+        if (task.includeDriveData && io.github.dantenothing.avmtransfer.protocol.DriveDataCodec.CAPABILITY !in health?.driveDataFormats.orEmpty()) {
+            TransferRepository.finish(task, TransferTaskState.FAILED,
+                Utils.t("Update the phone app to receive drive data, or send video only.", "请更新手机版以接收行车数据，或选择仅发送视频。"))
+            return QueueStep.CONTINUE
+        }
         raster.receiverError(capabilities)?.let { reason ->
             TransferRepository.finish(task, TransferTaskState.FAILED,
                 if (reason == "RECEIVER_RASTER_UPGRADE_REQUIRED")
@@ -184,6 +199,7 @@ class TransferService : Service() {
                 return QueueStep.CONTINUE
             }
         }
+        if (stopped(task.id)) return QueueStep.CONTINUE
         val file = when (task.sourceKind) {
             TransferSourceKind.MANAGED_RECORDING -> File(task.filePath).takeIf {
                 it.isFile && it.length() == task.sizeBytes
@@ -219,30 +235,54 @@ class TransferService : Service() {
         if (task.sha256 == null) {
             task = task.copy(state = TransferTaskState.PREPARING, reason = null)
             TransferRepository.update(task)
-            task = task.copy(sha256 = sha256(file))
+            task = task.copy(sha256 = sha256(file, task.id))
             TransferRepository.update(task)
         }
-        if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return QueueStep.CONTINUE
+        if (stopped(task.id)) return QueueStep.CONTINUE
+        if (task.includeDriveData) {
+            try {
+                if (task.driveData == null) {
+                    val descriptor = DriveAttachmentSnapshot.prepare(applicationContext, task)
+                    task = TransferRepository.attachDriveData(task.id, descriptor) ?: run {
+                        DriveAttachmentSnapshot.remove(applicationContext, task.id)
+                        return QueueStep.CONTINUE
+                    }
+                }
+                DriveAttachmentSnapshot.read(applicationContext, task)
+            } catch (_: Exception) {
+                TransferRepository.finish(task, TransferTaskState.FAILED, Utils.t(
+                    "Drive data could not be prepared. Check recording history or send video only.",
+                    "未能准备行车数据，请检查录像记录或选择仅发送视频。"))
+                return QueueStep.CONTINUE
+            }
+        }
+        if (stopped(task.id)) return QueueStep.CONTINUE
         if (task.uploadId == null) {
-            val created = TransferHttp.create(task.id, endpoint, UploadCreateRequest(
+            TransferHttp.create(task.id, endpoint, UploadCreateRequest(
                 clientTransferId = task.id,
                 fileName = task.fileName,
                 sizeBytes = task.sizeBytes,
                 sha256 = task.sha256!!,
                 carId = PhoneConnectionStore.carId,
                 sidecarJson = task.sidecarJson,
+                driveData = task.driveData,
             ))
-            task = task.copy(uploadId = created.uploadId, chunkSize = created.chunkSize, totalChunks = created.totalChunks)
-            TransferRepository.update(task)
+            // Its create response persisted the cleanup handle before leaving the HTTP registry.
+            task = TransferRepository.get(task.id) ?: return QueueStep.CONTINUE
         }
+        if (stopped(task.id)) return QueueStep.CONTINUE
         val status = TransferHttp.status(task.id, endpoint, task.uploadId!!)
         if (status.status == "COMPLETED") {
             TransferRepository.finish(task, TransferTaskState.COMPLETED)
             return QueueStep.CONTINUE
         }
         val received = status.receivedChunks.toSet()
+        if (stopped(task.id)) return QueueStep.CONTINUE
+        if (task.driveData != null && !status.driveDataReceived) {
+            TransferHttp.driveData(task.id, endpoint, task.uploadId!!, DriveAttachmentSnapshot.read(applicationContext, task))
+        }
         for (index in 0 until task.totalChunks) {
-            if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return QueueStep.CONTINUE
+            if (stopped(task.id)) return QueueStep.CONTINUE
             if (index !in received) {
                 val offset = index.toLong() * task.chunkSize
                 val length = minOf(task.chunkSize.toLong(), task.sizeBytes - offset).toInt()
@@ -252,7 +292,7 @@ class TransferService : Service() {
             task = TransferRepository.get(task.id)?.copy(uploadedChunks = index + 1) ?: return QueueStep.CONTINUE
             TransferRepository.update(task)
         }
-        if (TransferRepository.get(task.id)?.state == TransferTaskState.CANCEL_PENDING) return QueueStep.CONTINUE
+        if (stopped(task.id)) return QueueStep.CONTINUE
         task = task.copy(state = TransferTaskState.COMMITTING, reason = null)
         TransferRepository.update(task)
         val completed = TransferHttp.complete(task.id, endpoint, task.uploadId!!, task.sha256!!, task.fileName)
@@ -292,10 +332,15 @@ class TransferService : Service() {
         }
     }
 
-    private fun sha256(file: File): String {
+    private fun stopped(id: String): Boolean = TransferRepository.get(id)?.let { !TransferCancellationPolicy.canUpload(it.state) } != false
+
+    private fun sha256(file: File, taskId: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(64 * 1024)
-        file.inputStream().use { input -> while (true) { val n = input.read(buffer); if (n < 0) break; if (n > 0) digest.update(buffer, 0, n) } }
+        file.inputStream().use { input -> while (true) {
+            if (stopped(taskId)) throw TransferCancelledException()
+            val n = input.read(buffer); if (n < 0) break; if (n > 0) digest.update(buffer, 0, n)
+        } }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 

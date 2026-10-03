@@ -43,6 +43,9 @@ data class TransferTask(
     val fileName: String,
     val sizeBytes: Long,
     val sidecarJson: String? = null,
+    /** Frozen user choice for this transfer; never inherited by existing queued tasks. */
+    val includeDriveData: Boolean = false,
+    val driveData: io.github.dantenothing.avmtransfer.protocol.DriveDataDescriptor? = null,
     val state: TransferTaskState = TransferTaskState.QUEUED,
     val reason: String? = null,
     val sha256: String? = null,
@@ -178,6 +181,7 @@ object TransferRepository {
     fun enqueueSelection(
         recordingSessionId: String?,
         files: List<File>,
+        includeDriveData: Boolean = false,
     ): Result<TransferSelectionResult> {
         val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
         val result = synchronized(lock) {
@@ -226,6 +230,7 @@ object TransferRepository {
                         fileName = file.name,
                         sizeBytes = file.length(),
                         sidecarJson = sidecarJson,
+                        includeDriveData = includeDriveData,
                         state = decision.initialState,
                         reason = decision.reason,
                         selectionId = selectionId,
@@ -334,6 +339,7 @@ object TransferRepository {
         storageUuid: String,
         recordingSessionId: String,
         files: List<File>,
+        includeDriveData: Boolean = false,
     ): Result<TransferSelectionResult> {
         val target = UsbExportVolumeResolver.mountedTargets(ZeekrApp.appContext).singleOrNull {
             it.storageUuid.equals(storageUuid, ignoreCase = true)
@@ -380,6 +386,7 @@ object TransferRepository {
                     fileName = file.name,
                     sizeBytes = file.length(),
                     sidecarJson = sidecarJson,
+                    includeDriveData = includeDriveData,
                     state = decision.initialState,
                     reason = decision.reason,
                     selectionId = selectionId,
@@ -428,7 +435,7 @@ object TransferRepository {
         synchronized(lock) {
             val task = _tasks.value.firstOrNull { it.id == id } ?: return
             if (task.state in TERMINAL) return
-            if (TransferCancelPolicy.action(task.uploadId) == TransferCancelAction.FINISH_LOCALLY) {
+            if (TransferCancelPolicy.action(task.uploadId) == TransferCancelAction.FINISH_LOCALLY && !TransferHttp.isCreating(id)) {
                 updateLocked(
                     task.copy(
                         state = TransferTaskState.CANCELLED,
@@ -436,7 +443,9 @@ object TransferRepository {
                         updatedAt = System.currentTimeMillis(),
                     ),
                 )
+                TransferHttp.cancel(id)
                 releaseSourcePin(task)
+                DriveAttachmentSnapshot.remove(ZeekrApp.appContext, task.id)
                 return
             }
             updateLocked(task.copy(state = TransferTaskState.CANCEL_PENDING, reason = "Cancelled by user", updatedAt = System.currentTimeMillis()))
@@ -464,6 +473,7 @@ object TransferRepository {
     }
 
     fun clearFinished() = synchronized(lock) {
+        _tasks.value.filter { it.state in TERMINAL }.forEach { DriveAttachmentSnapshot.remove(ZeekrApp.appContext, it.id) }
         _tasks.value = _tasks.value.filterNot { it.state in TERMINAL }
         saveLocked()
     }
@@ -472,7 +482,27 @@ object TransferRepository {
     fun nextWork(): TransferTask? = _tasks.value.firstOrNull { it.state !in TERMINAL }
     fun hasWork(): Boolean = _tasks.value.any { it.state !in TERMINAL }
 
-    fun update(task: TransferTask) = synchronized(lock) { updateLocked(task.copy(updatedAt = System.currentTimeMillis())) }
+    fun update(task: TransferTask) = synchronized(lock) {
+        val current = _tasks.value.firstOrNull { it.id == task.id } ?: return@synchronized
+        val accepted = TransferCancellationPolicy.workerUpdate(current, task) ?: return@synchronized
+        updateLocked(accepted.copy(updatedAt = System.currentTimeMillis()))
+    }
+    internal fun registerRequest(id: String, method: String, path: String, register: () -> Unit): Boolean =
+        TransferCancellationPolicy.admit(lock, { _tasks.value.firstOrNull { it.id == id } }, method, path, register)
+
+    /** Called before the create request leaves the active HTTP registry, including late responses. */
+    internal fun recordRemoteCreation(id: String, response: io.github.dantenothing.avmtransfer.protocol.UploadCreateResponse): TransferTask? =
+        synchronized(lock) {
+            val current = _tasks.value.firstOrNull { it.id == id } ?: return@synchronized null
+            val next = TransferCancellationPolicy.created(current, response).copy(updatedAt = System.currentTimeMillis())
+            updateLocked(next)
+            next
+        }
+    fun attachDriveData(id: String, descriptor: io.github.dantenothing.avmtransfer.protocol.DriveDataDescriptor): TransferTask? = synchronized(lock) {
+        val current = _tasks.value.firstOrNull { it.id == id } ?: return@synchronized null
+        if (current.state in TERMINAL || current.state == TransferTaskState.CANCEL_PENDING) return@synchronized null
+        current.copy(driveData = descriptor, updatedAt = System.currentTimeMillis()).also(::updateLocked)
+    }
     fun markConnected(endpoint: PhoneEndpoint, connected: Boolean, message: String) {
         if (!PhoneConnectionStore.isCurrentPairing(endpoint)) return
         _connection.value = PhoneConnectionState(PhoneConnectionStore.saved(), connected, message,
@@ -482,7 +512,11 @@ object TransferRepository {
 
     fun finish(task: TransferTask, state: TransferTaskState, reason: String? = null) = synchronized(lock) {
         val current = _tasks.value.firstOrNull { it.id == task.id } ?: return@synchronized
+        if (!TransferCancellationPolicy.canFinish(current.state, state)) return@synchronized
         updateLocked(current.copy(state = state, reason = reason, updatedAt = System.currentTimeMillis()))
+        if (state == TransferTaskState.COMPLETED || state == TransferTaskState.CANCELLED) {
+            DriveAttachmentSnapshot.remove(ZeekrApp.appContext, current.id)
+        }
         if (current.state !in TERMINAL && current.state != TransferTaskState.CANCEL_PENDING) {
             releaseSourcePin(current)
         }
@@ -543,7 +577,7 @@ object TransferRepository {
                     synchronized(lock) {
                         val taskIds = selection.taskIds.toSet()
                         _tasks.value = _tasks.value.map { task ->
-                            if (task.id in taskIds) task.copy(
+                            if (task.id in taskIds && TransferCancellationPolicy.canUpload(task.state)) task.copy(
                                 state = TransferTaskState.WAITING_RETRY,
                                 reason = failure.message ?: "Transfer service unavailable",
                                 updatedAt = System.currentTimeMillis(),

@@ -417,13 +417,14 @@ fun EventsScreen() {
         }
     }
 
-    fun queueForPhone(files: List<File>): Boolean {
-        val uniqueFiles = files.distinctBy { it.absolutePath }
-        val sessionIds = uniqueFiles.mapNotNull { file ->
-            SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.recordingSessionId
-        }.distinct()
-        val sessionId = sessionIds.singleOrNull()
-        val result = TransferRepository.enqueueSelection(sessionId, uniqueFiles)
+    suspend fun queueForPhone(files: List<File>, includeDriveData: Boolean = false): Boolean {
+        val result = withContext(Dispatchers.IO) {
+            val uniqueFiles = files.distinctBy { it.absolutePath }
+            val sessionId = uniqueFiles.mapNotNull { file ->
+                SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.recordingSessionId
+            }.distinct().singleOrNull()
+            TransferRepository.enqueueSelection(sessionId, uniqueFiles, includeDriveData)
+        }
         statusText = result.fold(
             onSuccess = { queued ->
                 if (phoneConnection.connected) {
@@ -471,7 +472,7 @@ fun EventsScreen() {
         return result.isSuccess
     }
 
-    fun queueUsbForPhone(recording: VehicleUsbRecording, files: List<File>): Boolean {
+    suspend fun queueUsbForPhone(recording: VehicleUsbRecording, files: List<File>, includeDriveData: Boolean = false): Boolean {
         if (recording.availability != MediaAvailability.ONLINE) {
             statusText = Utils.t(
                 "Reconnect the same USB before sending these segments.",
@@ -479,11 +480,12 @@ fun EventsScreen() {
             )
             return false
         }
-        val result = TransferRepository.enqueueOpenAvmUsb(
+        val result = withContext(Dispatchers.IO) { TransferRepository.enqueueOpenAvmUsb(
             storageUuid = recording.storageUuid,
             recordingSessionId = recording.logicalId.removePrefix("session:"),
             files = files,
-        )
+            includeDriveData = includeDriveData,
+        ) }
         statusText = result.fold(
             onSuccess = { queued ->
                 if (phoneConnection.connected) {
@@ -968,7 +970,7 @@ fun EventsScreen() {
                                 cover = covers[first.file.name],
                                 onPlay = { playRecording = recordings.firstOrNull { first.file in it.files } },
                                 onToggleProtect = { toggleGroupProtection(event) },
-                                onSendToPhone = { queueForPhone(event.segments.map { it.file }) },
+                                onSendToPhone = { scope.launch { queueForPhone(event.segments.map { it.file }) } },
                                 onExportToUsb = {
                                     requestUsbExport(
                                         UsbExportSelection(
@@ -997,7 +999,7 @@ fun EventsScreen() {
                                 cover = covers[segment.file.name],
                                 onPlay = { playRecording = recording },
                                 onToggleProtect = { toggleRecordingProtection(recording) },
-                                onSendToPhone = { queueForPhone(recording.files) },
+                                onSendToPhone = { scope.launch { queueForPhone(recording.files) } },
                                 onBrowserShare = { shareInBrowser(ShareSelection.Internal(recording.files)) },
                                 onExportToUsb = {
                                     requestUsbExport(
@@ -1028,7 +1030,7 @@ fun EventsScreen() {
                                         playUsbRecording = recording
                                     }
                                 },
-                                onSendToPhone = { queueUsbForPhone(recording, recording.files) },
+                                onSendToPhone = { scope.launch { queueUsbForPhone(recording, recording.files) } },
                                 onBrowserShare = { shareInBrowser(ShareSelection.Usb(recording)) },
                                 onDelete = { pendingDeleteUsbRecording = recording },
                                 deleteEnabled = entry.key in selectableKeys && !deletingSelection,
@@ -1082,7 +1084,7 @@ fun EventsScreen() {
                 triggerMarkersByFile = markers,
                 onPrevious = previousItem?.let { previous -> { openPlayback(previous) } },
                 onNext = nextItem?.let { next -> { openPlayback(next) } },
-                onSendToPhone = { queueForPhone(it) },
+                onSendToPhone = { selected, withData -> queueForPhone(selected, withData) },
                 onDismiss = { playGuardRow = null },
             )
         }
@@ -1104,8 +1106,8 @@ fun EventsScreen() {
             realDurationMs = recording.realDurationMs.takeIf { recording.isTimeLapse },
             onPrevious = previousItem?.let { previous -> { openPlayback(previous) } },
             onNext = nextItem?.let { next -> { openPlayback(next) } },
-            onSendToPhone = {
-                queueForPhone(it)
+            onSendToPhone = { selected, withData ->
+                queueForPhone(selected, withData)
             },
             onDelete = {
                 playRecording = null
@@ -1141,7 +1143,7 @@ fun EventsScreen() {
                 } else Utils.t("USB recording playback", "U 盘录像回放"),
                 onPrevious = previousItem?.let { previous -> { openPlayback(previous) } },
                 onNext = nextItem?.let { next -> { openPlayback(next) } },
-                onSendToPhone = { selected -> queueUsbForPhone(recording, selected) },
+                onSendToPhone = { selected, withData -> queueUsbForPhone(recording, selected, withData) },
                 onDelete = if (recording.ownedUnits.isNotEmpty() && !CameraRecordingService.isRunning() && pendingCameraCleanup == 0) {
                     {
                         playUsbRecording = null
@@ -1187,7 +1189,7 @@ fun EventsScreen() {
                 displayTitle = Utils.t("Factory Sentry video", "原车哨兵视频"),
                 onPrevious = previousItem?.let { previous -> { openPlayback(previous) } },
                 onNext = nextItem?.let { next -> { openPlayback(next) } },
-                onSendToPhone = { queueSentryForPhone(sentry) },
+                onSendToPhone = { _, _ -> queueSentryForPhone(sentry) },
                 onDismiss = { playSentryRecording = null },
             )
         } else {
