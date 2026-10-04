@@ -9,11 +9,12 @@ import com.dante.zeekrcapabilitylab.diagnostic.AwayReportEvidence
 import com.dante.zeekrcapabilitylab.event.EventLogger
 
 internal object ContinuousFailureAndroid {
-    fun forSession(sessionId: String) = ContinuousFailureCapture(sessionId, SystemClock::elapsedRealtime,
+    fun forSession(sessionId: String, channelId: String? = null) = ContinuousFailureCapture(sessionId, SystemClock::elapsedRealtime,
         System::currentTimeMillis, ::numbers, onCaptured = { evidence ->
             // WARN records evidence without changing the UI's last error or the existing stop path.
             EventLogger.logEvent(Categories.SYSTEM, AwayReportEvidence.FIRST_CONTINUOUS_FAILURE,
-                severity = Severity.WARN, payload = evidence.facts())
+                severity = Severity.WARN, payload = evidence.facts() + mapOf(
+                    "channelId" to (channelId?.takeIf { it in RecordingChannelId.all } ?: "UNKNOWN")))
         })
 
     /** Bounded cause walk, typed fields only. Never use diagnosticInfo/message/stack trace as upload data. */

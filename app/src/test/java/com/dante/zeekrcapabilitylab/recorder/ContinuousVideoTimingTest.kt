@@ -32,10 +32,22 @@ class ContinuousVideoTimingTest {
         assertEquals(5_233_333L, clock.sourceEndUs(66_666, 5_200_000))
         assertEquals(9_999_900L, clock.sourceEndUs(66_666, 10_000_000))
     }
-    @Test fun sourceWaitDoesNotReopenCameraOrConfuseAnAliveWorkerWithANativeHang() {
-        assertNull(ContinuousSourceWaitPolicy.problem(20, 10 * 60_000))
+    @Test fun liveWorkerCannotHideLossOfCameraFramesBeyondFifteenSeconds() {
+        assertNull(ContinuousSourceWaitPolicy.problem(20, 14_999))
         assertEquals("PRODUCT_INPUT_THREAD_STALLED", ContinuousSourceWaitPolicy.problem(5_000, 20))
-        assertEquals("PRODUCT_SOURCE_WAIT_TIMEOUT", ContinuousSourceWaitPolicy.problem(20, 30 * 60_000))
+        assertEquals("PRODUCT_SOURCE_WAIT_TIMEOUT", ContinuousSourceWaitPolicy.problem(20, 15_000))
+        // drive6 kept an alive polling worker while the source was frozen for over nine minutes.
+        assertEquals("PRODUCT_SOURCE_WAIT_TIMEOUT", ContinuousSourceWaitPolicy.problem(20, 573_319))
+    }
+    @Test fun aShortSourcePauseStillAllowsTheSameInputToReturn() {
+        assertNull(ContinuousSourceWaitPolicy.problem(20, 4_000))
+        assertNull(ContinuousSourceWaitPolicy.problem(20, 20))
+    }
+    @Test fun aQuietCutDoesNotExemptTheSourceFromItsOwnDeadline() {
+        val progress = ContinuousCutProgress()
+        progress.request(3, 1_000)
+        assertNull(progress.problem(16_000, sourceQuiet = true))
+        assertEquals("PRODUCT_SOURCE_WAIT_TIMEOUT", ContinuousSourceWaitPolicy.problem(20, 15_000))
     }
     @Test fun sparseKeyframeWaitAndUsbWriterWaitUseDifferentBudgets() {
         val clock = ContinuousVideoTiming(30, 150)

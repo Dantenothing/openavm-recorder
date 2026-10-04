@@ -79,10 +79,10 @@ class ShortRecorderReportTest {
     }
 
     @Test fun continuousCodecEvidenceRemainsSeparateFromCaptureAndRejectsStaleSessions() {
-        val state = RecorderState(recordingSessionId = "codec", segmentNumber = 4,
+        val state = RecorderState(recordingSessionId = "codec", segmentNumber = 4, channelId = "SURROUND",
             recordingBackend = "CONTINUOUS_CODEC", captureSessionRevision = 1)
         val evidence = CaptureEvidence("codec", 4, SegmentFrameStats(count = 300), 900,
-            encoder = EncoderEvidence(61, 1_000, 2_001_000, 990, 12345, 3, 3))
+            encoder = EncoderEvidence(61, 1_000, 2_001_000, 990, 12345, 3, 3), channelId = "SURROUND")
         val snapshot = ShortRecorderReport.snapshot(state, evidence, buildJsonObject {}, emptyList(), 2000, 1000)
         val measured = snapshot.getValue("measured").jsonObject
         assertEquals("CONTINUOUS_CODEC", snapshot.getValue("recordingBackend").jsonPrimitive.content)
@@ -99,10 +99,10 @@ class ShortRecorderReportTest {
     }
 
     @Test fun previewResultsAndTextureCallbacksDoNotBecomeEncodedFrameEvidence() {
-        val state = RecorderState(recordingSessionId = "run", segmentNumber = 2)
+        val state = RecorderState(recordingSessionId = "run", segmentNumber = 2, channelId = "SURROUND")
         val capture = CaptureEvidence("run", 2, preview = PreviewCaptureStats(
             completedWithPreviewTarget = 244, lastCompletedHadPreviewTarget = true,
-            lastPreviewResultElapsedMs = 9_979, previewBuffersLost = 241))
+            lastPreviewResultElapsedMs = 9_979, previewBuffersLost = 241), channelId = "SURROUND")
         val mirror = com.dante.zeekrcapabilitylab.mirror.MirrorEvidence(
             frames = 1685, lastFrameAgeMs = 8_071, textureCallbacks = 1926,
             duplicateTimestampCallbacks = 241, lastTextureCallbackAgeMs = 21,
@@ -135,9 +135,9 @@ class ShortRecorderReportTest {
         assertFalse(snapshot.toString().contains("/storage"))
     }
     @Test fun displayFailureDoesNotInventACameraFailureOrLoseItsFrameEvidence() {
-        val state = RecorderState(status = RecorderStatus.RECORDING, recordingSessionId = "run", segmentNumber = 4,
+        val state = RecorderState(status = RecorderStatus.RECORDING, recordingSessionId = "run", segmentNumber = 4, channelId = "SURROUND",
             previewRequested = true, previewActive = true)
-        val capture = CaptureEvidence("run", 4, SegmentFrameStats(count = 100), 9_990)
+        val capture = CaptureEvidence("run", 4, SegmentFrameStats(count = 100), 9_990, channelId = "SURROUND")
         val mirror = com.dante.zeekrcapabilitylab.mirror.MirrorEvidence(reason = "FRAME_STALLED", frames = 12, lastFrameAgeMs = 8_001)
         val snapshot = ShortRecorderReport.snapshot(state, capture, buildJsonObject {}, emptyList(), 20_000, 10_000, mirror)
         assertEquals(RecorderStatus.RECORDING, snapshot["status"]!!.jsonPrimitive.content)
@@ -176,8 +176,8 @@ class ShortRecorderReportTest {
         assertEquals(JsonNull, snapshot["measured"]!!.jsonObject["encodedFps"])
     }
     @Test fun captureEvidenceIsMeasuredSeparatelyFromUnavailableEncoderStatistics() {
-        val state = RecorderState(recordingSessionId = "one", segmentNumber = 2)
-        val evidence = CaptureEvidence("one", 2, SegmentFrameStats(25, 10, 1_000_000_010, 42_000_000), 2000)
+        val state = RecorderState(recordingSessionId = "one", segmentNumber = 2, channelId = "SURROUND")
+        val evidence = CaptureEvidence("one", 2, SegmentFrameStats(25, 10, 1_000_000_010, 42_000_000), 2000, channelId = "SURROUND")
         val snapshot = ShortRecorderReport.snapshot(state, evidence, buildJsonObject {}, emptyList(), 5000, 2500)
         val measured = snapshot.getValue("measured").jsonObject
         assertEquals(24.0, measured.getValue("captureCallbackFps").jsonPrimitive.double, 0.0001)
@@ -185,6 +185,34 @@ class ShortRecorderReportTest {
         assertEquals(JsonNull, measured["encodedFps"])
         val old = ShortRecorderReport.snapshot(state.copy(segmentNumber = 3), evidence, buildJsonObject {}, emptyList(), 5000, 2500)
         assertEquals(JsonNull, old["measured"]!!.jsonObject["captureCallbackCount"])
+    }
+
+    @Test fun auxiliaryFaultCannotBorrowPrimaryCountersFromTheSameSessionAndSegment() {
+        val primary = CaptureEvidence("shared-run", 1, SegmentFrameStats(count = 900), 999,
+            preview = PreviewCaptureStats(completedWithoutPreviewTarget = 900),
+            encoder = EncoderEvidence(frames = 899, lastOutputElapsedMs = 998, queueItems = 2), channelId = "SURROUND")
+        val auxiliary = RecorderState(recordingSessionId = "shared-run", segmentNumber = 1, channelId = "FRONT_CABIN")
+        val snapshot = ShortRecorderReport.snapshot(auxiliary, primary, buildJsonObject {}, emptyList(), 2000, 1000)
+        val measured = snapshot["measured"]!!.jsonObject
+        assertFalse(measured["captureEvidenceMatchesSession"]!!.jsonPrimitive.boolean)
+        assertEquals("SURROUND", measured["captureEvidenceChannelId"]!!.jsonPrimitive.content)
+        listOf("captureCallbackCount", "lastCaptureAgeMs", "encodedFrames", "lastEncodedOutputAgeMs", "encoderQueueDepth")
+            .forEach { assertEquals(it, JsonNull, measured[it]) }
+        assertEquals(JsonNull, snapshot["previewCapture"])
+
+        val own = primary.copy(channelId = "FRONT_CABIN")
+        val matched = ShortRecorderReport.snapshot(auxiliary, own, buildJsonObject {}, emptyList(), 2000, 1000)
+        assertEquals(899L, matched["measured"]!!.jsonObject["encodedFrames"]!!.jsonPrimitive.long)
+    }
+
+    @Test fun unknownCaptureOwnershipNeverDefaultsToPrimary() {
+        val state = RecorderState(recordingSessionId = "shared-run", segmentNumber = 1, channelId = "SURROUND")
+        val unknown = CaptureEvidence("shared-run", 1, SegmentFrameStats(count = 900))
+        assertFalse(unknown.matches(state))
+        assertFalse(unknown.matches(state.copy(channelId = null)))
+        assertFalse(unknown.copy(channelId = "SURROUND").matches(state.copy(channelId = null)))
+        assertFalse(unknown.copy(channelId = "SURROUND").matches(state.copy(recordingSessionId = "other")))
+        assertFalse(unknown.copy(channelId = "SURROUND").matches(state.copy(segmentNumber = 2)))
     }
 
     @Test fun detailedHistoryIsBoundedAndPathsAndTokensDoNotEnterTheShortReport() {

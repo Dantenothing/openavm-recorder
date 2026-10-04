@@ -34,6 +34,49 @@ class ContinuousFailureEvidenceTest {
         assertFalse(result.toString().contains("secret"))
     }
 
+    @Test fun directRecorderGuardCodesKeepOnlyExplicitConstants() {
+        val codes = listOf("ENCODED_TIMESTAMP_NOT_INCREASING", "CONTINUOUS_OUTPUT_STILL_OWNED",
+            "ENCODER_FORMAT_CHANGED_MID_RUN", "ENCODER_QUEUE_FULL", "WRITER_QUEUE_REJECTED",
+            "ENCODER_EOS_TIMEOUT", "ENCODER_WRITER_STOP_TIMEOUT", "ENCODER_WORKER_EXIT_UNCONFIRMED",
+            "ENCODER_WORKER_REJECTED", "ENCODER_WORKER_TIMEOUT", "SEGMENT_MUST_START_WITH_KEYFRAME",
+            "CODEC_CLOCK_REGRESSED", "INVALID_CODEC_FILE_BOUNDARY")
+        for (code in codes) {
+            val facts = capture().capture(IllegalStateException("$code: /storage/private.mp4?token=secret"),
+                ContinuousFailureStage.FILE_FINALIZE).facts()
+            assertEquals(code, facts["errorCode"])
+            assertFalse(facts.toString().contains("private"))
+            assertFalse(facts.toString().contains("secret"))
+        }
+        for (unknown in listOf("ENCODER_NEW_PRIVATE_ERROR", "SEGMENT_MUST_START_WITH_KEYFRAME_SECRET", "CODEC_CLOCK_REGRESSED2")) {
+            assertEquals("UNCLASSIFIED_THROWABLE", capture().capture(IllegalStateException(unknown),
+                ContinuousFailureStage.CODEC_DRAIN).errorCode)
+        }
+    }
+
+    @Test fun directRecorderFirstBoundaryEvidenceSurvivesOuterFailureAndCleanup() {
+        for (stage in listOf(ContinuousFailureStage.CUT_REQUEST, ContinuousFailureStage.CODEC_DRAIN,
+                ContinuousFailureStage.OUTPUT_PREPARE, ContinuousFailureStage.FILE_WRITER,
+                ContinuousFailureStage.FILE_FINALIZE, ContinuousFailureStage.OUTPUT_PUBLISH,
+                ContinuousFailureStage.FILE_CLEANUP)) {
+            val recorder = capture()
+            val sample = ContinuousFailureSample(975, 4096, 2, 1800, 15_000_000, 0, sourceAgeMs = null)
+            val first = recorder.capture(IllegalStateException("native private error"), stage, sample)
+            val outer = recorder.capture(IllegalStateException("CONTINUOUS_ENCODER_FAILED"),
+                ContinuousFailureStage.SESSION_CALLBACK,
+                sample.copy(sampledAtElapsedMs = 1000, queueBytes = 0, queueItems = 0))
+            assertSame(first, outer)
+            val facts = first.facts()
+            assertEquals(stage.name, facts["failureStage"])
+            assertEquals("25", facts["snapshotAgeMs"])
+            assertEquals("1800", facts["faultEncodedFrames"])
+            assertEquals("15000000", facts["faultEncodedBytes"])
+            assertEquals("4096", facts["faultQueueBytes"])
+            assertEquals("2", facts["faultQueueItems"])
+            assertEquals("UNKNOWN", facts["faultSourceAgeAtSampleMs"])
+            assertFalse(facts.toString().contains("private"))
+        }
+    }
+
     @Test fun absentThrowableAndSampleRemainExplicitlyUnknownNotFabricatedZeroes() {
         val facts = capture().capture(null, ContinuousFailureStage.SESSION_CALLBACK).facts()
         assertEquals("UNCLASSIFIED_SIGNAL", facts["errorCode"])

@@ -44,7 +44,7 @@ internal object AwayJournal {
         "reason","lastReason","route","authorityReason","finalizeReason","generation","cameraGeneration","decision",
         "backgroundPowerOffEvidence","recordingMode","testType","detail","standalonePreview","floatingControls","captureCallbackAgeMs",
         "cleanupOwners","recordingBackend","elapsed","uptime","remoteLabActive","experimentalC0Active",
-        "recordingSessionId","callbackType","cameraErrorCode","errorCode","callbackEntryElapsedMs","staleCallback",
+        "recordingSessionId","channelId","callbackType","cameraErrorCode","errorCode","callbackEntryElapsedMs","staleCallback",
         "closeId","closeStep","stepElapsedMs","closeRequestedElapsedMs","closeDurationMs","safeToContinue","deviceClosed",
         "terminal","outputLost","status","cleanupPending","cleanupUnconfirmed","recoverableContention","deviceOwnerId") +
         com.dante.zeekrcapabilitylab.service.recorder.ContinuousFailureEvidence.FACT_KEYS + setOf(

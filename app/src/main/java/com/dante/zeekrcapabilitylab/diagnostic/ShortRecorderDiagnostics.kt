@@ -22,6 +22,8 @@ object ShortRecorderDiagnostics {
     private val writer = Executors.newSingleThreadExecutor { Thread(it, "recorder-fault-summary").apply { isDaemon = true } }
     private fun file(context: Context) = AtomicFile(File(context.filesDir, "diagnostics/last-recorder-fault.json"))
     private fun runFile(context: Context) = AtomicFile(File(context.filesDir, "diagnostics/last-recorder-run.json"))
+    // This cache belongs to the primary recorder. The report rejects it for a different channel,
+    // even when an auxiliary recorder shares the same recording session and segment number.
     private fun snapshot(state: RecorderState) = ShortRecorderReport.snapshot(state, RecorderCaptureEvidence.latest,
         CaptureCleanupRuntime.snapshot(), EventLogger.events.value, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
         com.dante.zeekrcapabilitylab.mirror.MirrorPreviewRuntime.evidence)
@@ -40,7 +42,7 @@ object ShortRecorderDiagnostics {
         if (state.encoderSelection == null) return
         val fields = setOf("atEpochMs", "atElapsedMs", "status", "recordingMode", "segmentNumber", "storage",
             "recordingBackend", "encoderSelection", "captureSessionRevision", "cameraGeneration",
-            "nativeFileSwitches", "nativePendingFiles", "requested")
+            "nativeFileSwitches", "nativePendingFiles", "requested", "sessionCorrelation", "channelId")
         val saved = buildJsonObject {
             snapshot(state).filterKeys { it in fields }.forEach { (key, value) -> put(key, value) }
             put("capturedVersion", BuildConfig.VERSION_NAME)
@@ -119,6 +121,7 @@ object ShortRecorderDiagnostics {
                 put("lastDrawAgeMs", mirror.lastDrawAgeMs)
             })
             put("processExit", RecentRuntimeEvidence.processExits(exits))
+            put("continuousFailures", exits["continuousFailures"] ?: JsonNull)
         }
     }
 

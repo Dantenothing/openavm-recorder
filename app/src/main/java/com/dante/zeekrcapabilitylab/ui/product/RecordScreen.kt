@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -61,6 +62,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dante.zeekrcapabilitylab.product.ProductHomeCameraPolicy
 import com.dante.zeekrcapabilitylab.product.HomePreviewRecoveryPolicy
+import com.dante.zeekrcapabilitylab.product.HomePreviewRetryPolicy
 import com.dante.zeekrcapabilitylab.product.SurroundPreviewLifecyclePolicy
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
 import com.dante.zeekrcapabilitylab.product.SettingsStore
@@ -654,6 +656,35 @@ fun RecordScreen() {
         }
     }
 
+    fun previewRetryState(): HomePreviewRetryPolicy.State {
+        val current = CameraRecordingService.state.value
+        val mirror = com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.state.value
+        val work = com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value
+        return HomePreviewRetryPolicy.State(
+            source = activeSourceRole,
+            floatingActive = mirror.active, floatingFailed = mirror.error != null, floatingBusy = mirror.busy,
+            foreground = ZeekrApp.isForeground.value,
+            permission = context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
+            recording = RecorderCommandPolicy.isActive(current.status), recorderRunning = CameraRecordingService.isRunning(),
+            previewRunning = com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.isRunning(),
+            otherOwnerActive = work.active, otherOwnerFailed = work.error != null,
+            transitionPending = sourceHandoffPending || awaitingRecorderStart || configState is RecordConfigState.Loading ||
+                CameraRecordingService.modeSwitchProgress.value != null,
+            cleanupPending = current.cleanupPending, cleanupUnconfirmed = current.cleanupUnconfirmed,
+            cleanupOwners = CaptureCleanupRuntime.pendingOwners.value,
+            nativeIdle = com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock.normalIdle(),
+            glIdle = com.dante.zeekrcapabilitylab.mirror.MirrorGlPreview.isIdle(),
+        )
+    }
+    val retryState = previewRetryState()
+    val showPreviewRetry = HomePreviewRetryPolicy.visible(retryState)
+    // Native/GL ownership and Service.onDestroy have no observable flow. Their
+    // final release can follow cleanup=0, so reuse the existing page clock to
+    // resample only this visible failed-preview control. No retry is dispatched.
+    val previewRetryEnabled = if (showPreviewRetry && appForeground) remember(now, retryState) {
+        HomePreviewRetryPolicy.allowed(retryState)
+    } else false
+
     Row(
         Modifier
             .fillMaxSize()
@@ -676,6 +707,16 @@ fun RecordScreen() {
             appForeground = appForeground,
             surroundPreviewGeneration = surroundPreviewGeneration,
             mirrorManaged = (recorderState.mirrorPreviewManaged && recordingActive) || independentMirrorActive || (floatingMirror.active && !recordingActive),
+            showRetry = showPreviewRetry,
+            retryEnabled = previewRetryEnabled,
+            onRetry = {
+                val current = previewRetryState()
+                if (HomePreviewRetryPolicy.allowed(current) &&
+                    com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.selectPreviewSource(current.source)) {
+                    sourceHandoffBlocked = false
+                    configState = RecordConfigState.Idle
+                }
+            },
             modifier = Modifier
                 .weight(1.75f)
                 .fillMaxHeight(),
@@ -1006,6 +1047,9 @@ private fun HomePreviewPane(
     appForeground: Boolean,
     surroundPreviewGeneration: Int,
     mirrorManaged: Boolean,
+    showRetry: Boolean,
+    retryEnabled: Boolean,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val hudContext = LocalContext.current
@@ -1086,6 +1130,23 @@ private fun HomePreviewPane(
                 hudVisible = it; hudPreferences.edit().putBoolean("live-visible", it).apply()
             }, Modifier.align(Alignment.BottomStart).padding(8.dp).fillMaxWidth(if (previewSide < 450.dp) 1f else 0.72f),
                 compact = previewSide < 450.dp)
+            if (showRetry) HomePreviewRetryControl(retryEnabled, onRetry,
+                Modifier.align(Alignment.BottomCenter).padding(16.dp))
+        }
+    }
+}
+
+@Composable
+internal fun HomePreviewRetryControl(enabled: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(if (enabled) Utils.t("Preview stopped. You can try again.", "预览已停止，可手动重试。")
+                else Utils.t("Wait for recording and camera operations to finish before retrying.", "请等待录像与相机操作结束后再重试。"),
+                style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = onRetry, enabled = enabled, modifier = Modifier.testTag("home-preview-retry")) {
+                Text(Utils.t("Retry preview", "重试预览"))
+            }
         }
     }
 }

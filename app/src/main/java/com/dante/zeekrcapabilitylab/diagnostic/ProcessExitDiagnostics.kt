@@ -62,6 +62,7 @@ internal object ProcessExitDiagnostics {
             put("historicalExits", exits)
             put("lastJavaCrash", crash ?: JsonNull)
             put("persistedEvents", ProcessExitReport.events(history.events + EventLogger.events.value))
+            put("continuousFailures", ProcessExitReport.continuousFailures(history.events + EventLogger.events.value))
             put("historyBytesRead", history.bytes)
             put("historyReadErrors", history.errors)
             put("historyByteLimit", HISTORY_BYTES)
@@ -109,8 +110,8 @@ internal object ProcessExitDiagnostics {
                         if (event != null && ProcessExitReport.relevant(event)) {
                             events.addLast(event)
                             if (events.size > 512) {
-                                // Files are visited newest first: discard the oldest timestamp, not the newest file.
-                                val oldest = events.minBy { it.epochMs }; events.remove(oldest)
+                                val retained = ProcessExitReport.retainHistory(events.toList())
+                                events.clear(); events.addAll(retained)
                             }
                         }
                     }

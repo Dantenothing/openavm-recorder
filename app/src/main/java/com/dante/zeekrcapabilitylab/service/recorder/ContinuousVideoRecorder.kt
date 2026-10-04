@@ -75,12 +75,14 @@ internal class ContinuousVideoRecorder(
     private var target: Target? = null // writer worker
     @Volatile var lastCompleted: EncodedSegmentSummary? = null; private set
     @Volatile private var encodedFrames = 0L
+    @Volatile private var encodedBytes = 0L
     @Volatile private var firstPtsUs: Long? = null
     @Volatile private var lastPtsUs: Long? = null
     @Volatile private var lastOutputElapsedMs: Long? = null
     @Volatile private var completedFiles = 0L
     @Volatile private var writtenFrames = 0L
     @Volatile private var lastWriteElapsedMs: Long? = null
+    @Volatile private var cachedFailureSample: ContinuousFailureSample? = null
 
     private sealed interface Item {
         data class Frame(val bytes: ByteArray, val ptsUs: Long, val flags: Int,
@@ -91,42 +93,44 @@ internal class ContinuousVideoRecorder(
 
     override fun prepare(config: RecorderConfig, output: RecordingOutputHandle) {
         check(!closing && !ending && firstFailure.get() == null)
-        call(codecHandler) {
+        observed(ContinuousFailureStage.SESSION_SETUP) { call(codecHandler) {
             if (codec == null) {
                 codec = MediaCodec.createByCodecName(codecName)
                 codec!!.configure(format(config), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 input = codec!!.createInputSurface()
             }
-        }
-        call(writerHandler) {
+        } }
+        observed(ContinuousFailureStage.OUTPUT_PREPARE) { call(writerHandler) {
             check(!closing && target == null) { "CONTINUOUS_OUTPUT_STILL_OWNED" }
             target = Target(output)
             writerFormat?.let { target!!.configure(it) }
-        }
+        } }
         schedulePump()
     }
 
     override fun start() {
-        call(codecHandler) {
+        observed(ContinuousFailureStage.SESSION_SETUP) { call(codecHandler) {
             check(!closing && !ending && firstFailure.get() == null)
             if (!started) { codec!!.start(); started = true; codecHandler.post(drain) }
-        }
+        } }
     }
 
     fun requestCut(done: (EncodedSegmentSummary) -> Unit) {
-        check(codecHandler.post {
+        observed(ContinuousFailureStage.CUT_REQUEST) { check(codecHandler.post {
+            cacheCounters()
             try {
                 check(started && !closing && !ending && cutCallback == null)
                 planner.requestCut(); cutCallback = done
                 codec!!.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
-            } catch (t: Throwable) { fail(t) }
-        })
+            } catch (t: Throwable) { fail(t, ContinuousFailureStage.CUT_REQUEST) }
+        }) }
     }
 
     fun evidence(): EncoderEvidence {
         val (bytes, count) = queue.snapshot()
+        cacheCounters(bytes, count)
         return EncoderEvidence(encodedFrames, firstPtsUs, lastPtsUs, lastOutputElapsedMs, bytes, count, completedFiles,
-            writtenFrames = writtenFrames, lastWriteElapsedMs = lastWriteElapsedMs)
+            encodedBytes = encodedBytes, writtenFrames = writtenFrames, lastWriteElapsedMs = lastWriteElapsedMs)
     }
 
     private val drain = object : Runnable {
@@ -145,7 +149,7 @@ internal class ContinuousVideoRecorder(
                                 writerFormat = outputFormat
                                 target?.configure(outputFormat)
                                 schedulePump()
-                            } catch (t: Throwable) { fail(t) }
+                            } catch (t: Throwable) { fail(t, ContinuousFailureStage.OUTPUT_PREPARE) }
                         })
                     } else if (index >= 0) {
                         try {
@@ -160,7 +164,7 @@ internal class ContinuousVideoRecorder(
                     } else break
                     if (eosSeen) break
                 }
-            } catch (t: Throwable) { fail(t) }
+            } catch (t: Throwable) { fail(t, ContinuousFailureStage.CODEC_DRAIN) }
             // After a writer failure, keep draining/discarding until the camera owner stops input.
             if (!closing && !eosSeen) codecHandler.postDelayed(this, 5)
         }
@@ -182,9 +186,10 @@ internal class ContinuousVideoRecorder(
             Item.Frame(ByteArray(info.size).also { source.get(it) }, placement.ptsUs,
                 info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv(), stamp)
         }) { "ENCODER_QUEUE_FULL" }
-        encodedFrames++
+        encodedFrames++; encodedBytes += info.size
         if (firstPtsUs == null) firstPtsUs = info.presentationTimeUs
         lastPtsUs = info.presentationTimeUs; lastOutputElapsedMs = elapsedNs / 1_000_000L
+        cacheCounters()
         schedulePump()
     }
 
@@ -192,7 +197,7 @@ internal class ContinuousVideoRecorder(
         if (pumpQueued.compareAndSet(false, true) && !writerHandler.post {
                 pumpQueued.set(false)
                 pump()
-            }) { pumpQueued.set(false); fail(IllegalStateException("WRITER_QUEUE_REJECTED")) }
+            }) { pumpQueued.set(false); fail(IllegalStateException("WRITER_QUEUE_REJECTED"), ContinuousFailureStage.FILE_WRITER) }
     }
 
     private fun pump() {
@@ -218,20 +223,22 @@ internal class ContinuousVideoRecorder(
                 writerEnded.countDown()
             }
         } catch (t: Throwable) {
-            fail(t)
+            fail(t, ContinuousFailureStage.FILE_WRITER)
             // release() retries finishing the owned target after producer acknowledgement.
         }
     }
 
     private fun finishTarget(epoch: Long, elapsed: Long, closeOutput: Boolean, nextKeyframePtsUs: Long? = null): EncodedSegmentSummary? {
         val current = target ?: return null
-        current.finish(abandoned, nextKeyframePtsUs)
+        observed(ContinuousFailureStage.FILE_FINALIZE) { current.finish(abandoned, nextKeyframePtsUs) }
         // Descriptor lifetime belongs to the close transaction on terminal stop.
         if (closeOutput) {
-            if (abandoned && current.output is UsbMediaStoreRecordingOutputHandle) current.output.abandonUnavailableTarget()
-            else current.output.close()
+            observed(ContinuousFailureStage.OUTPUT_PUBLISH) {
+                if (abandoned && current.output is UsbMediaStoreRecordingOutputHandle) current.output.abandonUnavailableTarget()
+                else current.output.close()
+            }
         }
-        val summary = current.summary(epoch, elapsed, nextKeyframePtsUs)
+        val summary = observed(ContinuousFailureStage.FILE_FINALIZE) { current.summary(epoch, elapsed, nextKeyframePtsUs) }
         lastCompleted = summary; completedFiles++
         target = null
         return summary
@@ -278,9 +285,32 @@ internal class ContinuousVideoRecorder(
         input?.release(); input = null
     }
 
-    private fun fail(error: Throwable) {
+    /** Cache existing counters during ordinary work. Failure reporting never waits for this queue lock. */
+    private fun cacheCounters() {
+        val (bytes, count) = queue.snapshot()
+        cacheCounters(bytes, count)
+    }
+
+    private fun cacheCounters(bytes: Long, count: Int) {
+        cachedFailureSample = ContinuousFailureSample(SystemClock.elapsedRealtime(), bytes, count,
+            encodedFrames, encodedBytes, completedFiles, sourceAgeMs = null)
+    }
+
+    private fun captureFailure(error: Throwable, stage: ContinuousFailureStage) {
+        runCatching { failureCapture?.capture(error, stage, cachedFailureSample) }
+    }
+
+    /** Adds evidence only; native calls, exception propagation and stop authority stay unchanged. */
+    private inline fun <T> observed(stage: ContinuousFailureStage, action: () -> T): T = try {
+        action()
+    } catch (error: Throwable) {
+        captureFailure(error, stage)
+        throw error
+    }
+
+    private fun fail(error: Throwable, stage: ContinuousFailureStage) {
         if (firstFailure.compareAndSet(null, error)) {
-            runCatching { failureCapture?.capture(error, ContinuousFailureStage.LEGACY_CONTINUOUS) }
+            captureFailure(error, stage)
             // Revoke writer use immediately, even if the camera worker is waiting for an EOS/close acknowledgement.
             abandoned = true
             queue.clear()
@@ -325,10 +355,13 @@ internal class ContinuousVideoRecorder(
                             set(0, 0, coverage.durationUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         })
                     }
-                } catch (t: Throwable) { error = t }
-                try { active.stop() } catch (t: Throwable) { if (error == null) error = t else error.addSuppressed(t) }
+                } catch (t: Throwable) { captureFailure(t, ContinuousFailureStage.FILE_FINALIZE); error = t }
+                try { active.stop() } catch (t: Throwable) {
+                    captureFailure(t, ContinuousFailureStage.FILE_FINALIZE)
+                    if (error == null) error = t else error.addSuppressed(t)
+                }
             }
-            active.release()
+            observed(ContinuousFailureStage.FILE_CLEANUP) { active.release() }
             muxer = null; started = false
             error?.let { throw it }
         }

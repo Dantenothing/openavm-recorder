@@ -34,11 +34,12 @@ internal class ContinuousVideoTiming(val fps: Int, val multiplier: Int) {
     }
 }
 
-/** Passive waiting retains the existing input Surface. It NEVER grants permission to reopen a
- * camera. Only a native contention callback plus confirmed cleanup may arm that separate path. */
+/** Brief source interruptions retain the existing input Surface, but a live reader thread must
+ * not hide sustained loss of camera frames. Expiry uses the normal recording failure/cleanup path;
+ * it NEVER grants permission to reopen a camera or bypass confirmed cleanup. */
 internal object ContinuousSourceWaitPolicy {
     const val QUIET_AFTER_MS = 1_000L
-    const val LIMIT_MS = 30 * 60_000L
+    const val LIMIT_MS = 15_000L
     fun problem(heartbeatAgeMs: Long, sourceAgeMs: Long): String? = when {
         heartbeatAgeMs >= 5_000 -> "PRODUCT_INPUT_THREAD_STALLED"
         sourceAgeMs >= LIMIT_MS -> "PRODUCT_SOURCE_WAIT_TIMEOUT"

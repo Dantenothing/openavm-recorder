@@ -325,7 +325,7 @@ class RecorderSession(
                 RecordingChannelId.forRole(config.source.sourceRole))
             require(channelIdentity?.channelId == RecordingChannelId.forRole(config.source.sourceRole))
             statePublication.begin(recordingSessionId)
-            continuousFailureCapture = ContinuousFailureAndroid.forSession(recordingSessionId)
+            continuousFailureCapture = ContinuousFailureAndroid.forSession(recordingSessionId, channelIdentity?.channelId)
             val sessionStartedAtEpochMs = System.currentTimeMillis()
             manualSessionGeneration++
             activeUsbTarget = selectedUsb
@@ -1727,7 +1727,8 @@ class RecorderSession(
         previewCaptureTracker.reset(segmentGeneration)
         lastTimestampNs = null
         lastFrameReceivedAtElapsedMs = null
-        latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber)
+        latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber,
+            channelId = channelIdentity?.channelId)
         if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
         if (diagnosticScope == null && currentIncidentTag == null) {
             val pendingIncident = if (auxiliaryChannel) null else incidentStore.pending(nowEpoch)
@@ -2473,9 +2474,11 @@ class RecorderSession(
             ?: runCatching { continuousFailureCapture.capture(originalError, failureStage, signal = reason) }.getOrNull()
         if (recordingEncoder is ProductContinuousRecorder) publishCaptureEvidence()
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CONTINUOUS_FAILED", severity = com.dante.zeekrcapabilitylab.data.Severity.ERROR,
-            payload = evidence?.facts() ?: mapOf("failureCategory" to "CONTINUOUS_PIPELINE_FAILURE",
+            payload = (evidence?.facts() ?: mapOf("failureCategory" to "CONTINUOUS_PIPELINE_FAILURE",
                 "failureStage" to failureStage.name, "exceptionType" to "UNKNOWN", "errorCode" to "EVIDENCE_UNAVAILABLE",
-                "recordingSessionId" to (state.recordingSessionId ?: "UNKNOWN")),
+                "recordingSessionId" to (state.recordingSessionId ?: "UNKNOWN"))) + mapOf(
+                    "channelId" to (channelIdentity?.channelId ?: "UNKNOWN"),
+                    "recordingBackend" to state.recordingBackend),
             errorMessage = reason)
         updateState(state.copy(lastError = reason))
         com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.recordFault(context, state)
@@ -3300,7 +3303,8 @@ class RecorderSession(
     private fun publishCaptureEvidence() {
         latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber,
             frameStats, lastFrameReceivedAtElapsedMs, previewCaptureTracker.stats,
-            (recordingEncoder as? ProductContinuousRecorder)?.evidence() ?: (recordingEncoder as? ContinuousVideoRecorder)?.evidence())
+            (recordingEncoder as? ProductContinuousRecorder)?.evidence() ?: (recordingEncoder as? ContinuousVideoRecorder)?.evidence(),
+            channelId = channelIdentity?.channelId)
         if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
     }
 

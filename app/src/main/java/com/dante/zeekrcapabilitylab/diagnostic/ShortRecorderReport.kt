@@ -19,6 +19,8 @@ object ShortRecorderReport {
         put("lastErrorCode", code(state.lastError))
         put("recordingMode", state.recordingMode.name)
         put("segmentNumber", state.segmentNumber)
+        put("sessionCorrelation", ProcessExitReport.sessionCorrelation(state.recordingSessionId))
+        put("channelId", ProcessExitReport.channel(state.channelId))
         put("storage", state.activeStorageKind.name)
         put("previewActive", state.previewActive)
         put("previewRequested", state.previewRequested)
@@ -93,7 +95,7 @@ object ShortRecorderReport {
             put("bitrateBps", state.profile?.bitrateBps)
             put("timeLapseMultiplier", state.timeLapseMultiplier)
         })
-        val matching = capture.sessionId != null && capture.sessionId == state.recordingSessionId && capture.segment == state.segmentNumber
+        val matching = capture.matches(state)
         put("previewCapture", if (!matching) JsonNull else buildJsonObject {
             val stats = capture.preview
             put("completedWithPreviewTarget", stats.completedWithPreviewTarget)
@@ -108,6 +110,8 @@ object ShortRecorderReport {
         })
         put("measured", buildJsonObject {
             put("captureEvidenceMatchesSession", matching)
+            put("captureEvidenceChannelId", ProcessExitReport.channel(capture.channelId))
+            put("captureEvidenceOwnership", if (matching) "SESSION_SEGMENT_CHANNEL_MATCH" else "NOT_MATCHED")
             put("captureCallbackCount", capture.frames.count.takeIf { matching })
             put("lastCaptureAgeMs", capture.lastReceivedElapsedMs?.takeIf { matching && it <= elapsed }?.let { elapsed - it })
             val first = capture.frames.firstTimestampNs
@@ -183,13 +187,15 @@ object ShortRecorderReport {
                processExit: JsonObject? = null, startupAndTransfer: JsonObject? = null): String {
         var retainedFault = lastFault
         var retainedCurrent = current
+        var retainedRun = lastRun
+        var retainedExits = processExit
         val omitted = mutableListOf<String>()
         fun render() = buildJsonObject {
             put("schemaVersion", 1); put("format", "OPENAVM_RECORDER_SHORT_JSON")
             put("version", version); put("versionCode", code); put("androidSdk", sdk)
             put("current", retainedCurrent); put("lastFault", retainedFault ?: JsonNull)
-            put("lastRun", lastRun ?: JsonNull)
-            put("processExit", processExit ?: JsonNull)
+            put("lastRun", retainedRun ?: JsonNull)
+            put("processExit", retainedExits ?: JsonNull)
             put("startupAndTransfer", startupAndTransfer ?: JsonNull)
             put("omittedForSize", buildJsonArray { omitted.forEach { add(it) } })
             put("videoIncluded", false); put("pathsOrShareTokensIncluded", false)
@@ -197,13 +203,45 @@ object ShortRecorderReport {
         var report = render()
         if (report.toByteArray(Charsets.UTF_8).size > MAX_BYTES && retainedFault != null) {
             retainedFault = JsonObject(retainedFault!!.filterKeys { it in setOf("atEpochMs", "atElapsedMs", "status",
-                "lastErrorCode", "recordingBackend", "capturedVersion", "capturedVersionCode") })
+                "lastErrorCode", "recordingBackend", "capturedVersion", "capturedVersionCode", "sessionCorrelation", "channelId") })
             omitted += "lastFault.details"
             report = render()
         }
         if (report.toByteArray(Charsets.UTF_8).size > MAX_BYTES) {
             retainedCurrent = JsonObject(current.filterKeys { it != "recentEvents" && it != "cameraCleanup" })
             omitted += "current.recentEvents"; omitted += "current.cameraCleanup"
+            report = render()
+        }
+        if (report.toByteArray(Charsets.UTF_8).size > MAX_BYTES && retainedExits != null) {
+            // Typed first/recent pipeline faults have priority over native backtraces and a duplicate event tail.
+            retainedExits = buildJsonObject {
+                retainedExits!!.forEach { (key, value) -> when (key) {
+                    "persistedEvents", "lastJavaCrash" -> omitted += "processExit.$key"
+                    "historicalExits" -> put(key, buildJsonArray {
+                        (value as? JsonArray)?.forEach { raw ->
+                            val row = raw as? JsonObject ?: return@forEach
+                            if ("nativeTrace" in row && "processExit.historicalExits.nativeTrace" !in omitted)
+                                omitted += "processExit.historicalExits.nativeTrace"
+                            add(JsonObject(row.filterKeys { it != "nativeTrace" }))
+                        }
+                    })
+                    else -> put(key, value)
+                } }
+            }
+            report = render()
+        }
+        if (report.toByteArray(Charsets.UTF_8).size > MAX_BYTES) {
+            // Keep identity, scalar camera/codec counters, and the independent bounded first-fault summary.
+            val core = setOf("atEpochMs", "atElapsedMs", "status", "lastErrorCode", "recordingMode", "segmentNumber",
+                "storage", "cameraGeneration", "recordingBackend", "captureSessionRevision", "sessionCorrelation", "channelId",
+                "capturedVersion", "capturedVersionCode", "requested", "recovery", "wakeLockHeld", "measured")
+            retainedCurrent = JsonObject(retainedCurrent.filterKeys { it in core }.mapValues { (key, value) ->
+                if (key == "measured" && value is JsonObject) JsonObject(value.filterKeys {
+                    it != "continuousStages" && it != "continuousFaultStages"
+                }) else value
+            })
+            retainedRun = retainedRun?.let { JsonObject(it.filterKeys { key -> key in core }) }
+            omitted += "current.detailedSnapshots"; omitted += "lastRun.encoderSelection"
             report = render()
         }
         check(report.toByteArray(Charsets.UTF_8).size <= MAX_BYTES)
