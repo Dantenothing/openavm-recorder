@@ -1,6 +1,6 @@
 # Drive7 investigation — drive6 stops recording around the first split
 
-Status: secondary handling and diagnostic changes verified locally; first-cause investigation awaits the owner's existing sleep report. This is not a release receipt or confirmation that the first recording failure is fixed.
+Status: secondary handling and diagnostic changes verified locally; the received sleep report identifies the direct-recorder failure path, but not the exact failing operation. Existing detailed recording logs are the next evidence source. This is not a release receipt or confirmation that the first recording failure is fixed.
 
 ## Owner observation
 
@@ -26,6 +26,18 @@ An earlier run in the same supplied history failed 60,042 ms after its second st
 
 The contradictory boot-count/elapsed-time evidence remains `CLOCK_CONFLICT`; it does not establish why the ZEEKR logo appeared.
 
+## Additional sleep report received — 2026-10-04
+
+The owner supplied a drive6 / code 111 `OPENAVM_AWAY_SHORT_JSON` containing a later recording session, rather than the earlier session listed above. Its last recorded start is at 22,925,124 ms. The first continuous fault is at 22,985,395 ms, **60,271 ms later**. It records `LEGACY_CONTINUOUS`, `UNCLASSIFIED_THROWABLE`, exact exception type `java.lang.IllegalStateException`, and no cached failure counters.
+
+In the shipped drive6 source (`7968390`), the only production site that writes `LEGACY_CONTINUOUS` is `ContinuousVideoRecorder.fail`. The shared-input primary uses `ProductContinuousRecorder`. Combined with the owner's cabin-only auxiliary setting, the primary still reporting `SURROUND / segment 2`, and the distinct camera owners, this identifies the initial failing recorder as the cabin/direct continuous path. It does not identify which operation inside its broad catch failed.
+
+That recorder requests close at 22,985,399 ms and settles at 22,985,581 ms. Two subsequent primary power snapshots independently place the last surround capture at **22,985,580 ms**. The near-identical timing strengthens the correlation between auxiliary cleanup and primary source loss; it is still not proof that a HAL camera-close operation caused the loss.
+
+The manual primary stop follows the first fault by 9,134 ms. Its close is marked unconfirmed at 23,001,534 ms, then actually settles at 23,003,879 ms (9,349 ms after the close request). There are no unsettled owners at export. The original recording fault therefore precedes this cleanup timeout. The reported mirror wake/automatic-start cycle is around 20,398 seconds earlier; it must not be treated as the current recording's failure trigger. Screen observations around the fault remain on.
+
+`IllegalStateException` alone does not distinguish a sync-frame request, queue/target state check, codec drain, muxer write, stop or release. Do not assert a muxer/EOS root cause. The existing **Settings → Recording diagnostics → Prepare detailed report → Copy full JSON** path reads recent recorder history and preserves up to 400 characters of the original event `errorMessage`. The relevant `RECORDER_CONTINUOUS_FAILED` event is at elapsed 22,985,395 ms. It may retain `CONTINUOUS_ENCODER_FAILED:<original message>` without another recording. No caught-exception stack trace was persisted by this old path, so a full stack cannot be promised.
+
 ## Confirmed defects addressed independently
 
 1. The shared-input reader kept updating its worker heartbeat while receiving no frames. Its source wait policy allowed thirty minutes of silence, while the pending keyframe-cut deadline was paused. A 15-second source deadline now uses the existing terminal failure and cleanup path. It detects missing footage; it does not repair or silently restart the camera. Brief pauses remain allowed. Time-lapse selection does not affect the incoming source heartbeat.
@@ -35,7 +47,7 @@ The contradictory boot-count/elapsed-time evidence remains `CLOCK_CONFLICT`; it 
 
 ## Remaining boundary
 
-The initial black preview and the first approximately 60-second recording failure are not yet explained by a retained first-cause exception. The owner is preparing the existing sleep report. Do not describe these as fixed merely because the secondary handling and diagnostics pass local tests. Do not change EOS handling, keyframe parameters, camera ownership or native teardown speculatively.
+The initial black preview and the precise operation behind the approximately 60-second recording failure remain unresolved. The sleep report establishes the failing recorder and exception class; the existing detailed report may recover the original error message. Do not describe these as fixed merely because the secondary handling and diagnostics pass local tests. Do not change EOS handling, keyframe parameters, camera ownership or native teardown speculatively.
 
 The source watchdog intentionally terminates a recording that has no fresh camera input for 15 seconds. A silent OEM interruption longer than that will therefore need a new recording after cleanup; the separate native contention-callback recovery path remains in place. Hardware behavior and UI rendering still require validation on the head unit.
 
