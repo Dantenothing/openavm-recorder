@@ -122,6 +122,66 @@ class ContinuousFailureReportTest {
         assertEquals("UNCLASSIFIED_THROWABLE", group["firstAvailable"]!!.jsonObject["errorCode"]!!.jsonPrimitive.content)
     }
 
+    @Test fun fourLegacyFormatChangesRemainSpecificInTheShortReport() {
+        val events = listOf(292945398L, 267510L, 9672236L, 22985395L).map { at ->
+            failure(at, "RECORDER_CONTINUOUS_FAILED", mapOf("errorCode" to "UNCLASSIFIED_THROWABLE"))
+                .let { it.copy(payload = it.payload - "channelId",
+                    errorMessage = "CONTINUOUS_ENCODER_FAILED:ENCODER_FORMAT_CHANGED_MID_RUN") }
+        }
+        val snapshot = ShortRecorderReport.snapshot(RecorderState(), CaptureEvidence(), buildJsonObject {}, emptyList(), 6, 6)
+        val report = Json.parseToJsonElement(ShortRecorderReport.report("test", 1, 32, snapshot, null,
+            processExit = buildJsonObject {
+                put("continuousFailures", ProcessExitReport.continuousFailures(events))
+                put("persistedEvents", ProcessExitReport.events(events))
+            })).jsonObject
+        val exits = report["processExit"]!!.jsonObject
+        val groups = exits["continuousFailures"]!!.jsonObject["groups"]!!.jsonArray
+        assertEquals(4, groups.size)
+        groups.forEach { group -> listOf("firstAvailable", "latestAvailable").forEach { edge ->
+            assertEquals("ENCODER_FORMAT_CHANGED_MID_RUN", group.jsonObject[edge]!!.jsonObject["errorCode"]!!.jsonPrimitive.content)
+        } }
+        assertTrue(exits["persistedEvents"]!!.jsonArray.all {
+            it.jsonObject["errorCode"]!!.jsonPrimitive.content == "ENCODER_FORMAT_CHANGED_MID_RUN"
+        })
+        assertFalse(report.toString().contains(session))
+    }
+
+    @Test fun knownCallbackCodeOutranksOnlyUnclassifiedTypedPlaceholders() {
+        listOf("UNCLASSIFIED_SIGNAL", "UNCLASSIFIED_THROWABLE", "EVIDENCE_UNAVAILABLE").forEach { placeholder ->
+            listOf("", "CONTINUOUS_ENCODER_FAILED:").forEach { wrapper ->
+                val event = failure(1, extra = mapOf("errorCode" to placeholder))
+                    .copy(errorMessage = "${wrapper}ENCODER_FORMAT_CHANGED_MID_RUN:/storage/private.mp4?token=secret")
+                val brief = ProcessExitReport.events(listOf(event)).single().jsonObject
+                val groups = ProcessExitReport.continuousFailures(listOf(event))["groups"]!!.jsonArray
+                val edge = groups.single().jsonObject["firstAvailable"]!!.jsonObject
+                assertEquals("ENCODER_FORMAT_CHANGED_MID_RUN", brief["errorCode"]!!.jsonPrimitive.content)
+                assertEquals("ENCODER_FORMAT_CHANGED_MID_RUN", edge["errorCode"]!!.jsonPrimitive.content)
+                assertFalse((brief.toString() + edge).contains("private"))
+                assertFalse((brief.toString() + edge).contains("secret"))
+            }
+        }
+        val specific = failure(1).copy(errorMessage = "CONTINUOUS_ENCODER_FAILED:ENCODER_FORMAT_CHANGED_MID_RUN")
+        assertEquals("PRODUCT_ENCODER_BACKPRESSURE", ProcessExitReport.events(listOf(specific))
+            .single().jsonObject["errorCode"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun genericOrUnknownCallbackDoesNotOverwriteUnclassifiedEvidenceOrLeakText() {
+        listOf("CONTINUOUS_ENCODER_FAILED:/storage/private", "PRIVATE_UNKNOWN_CODE secret", "https://private/path",
+            "ENCODER_FORMAT_CHANGED_MID_RUN_PRIVATE",
+            "CONTINUOUS_ENCODER_FAILED:ENCODER_FORMAT_CHANGED_MID_RUN_PRIVATE",
+            "CONTINUOUS_ENCODER_FAILED:CONTINUOUS_ENCODER_FAILED:ENCODER_FORMAT_CHANGED_MID_RUN",
+            "PRIVATE_UNKNOWN_CODE:ENCODER_FORMAT_CHANGED_MID_RUN",
+            "CONTINUOUS_ENCODER_FAILED:private ENCODER_FORMAT_CHANGED_MID_RUN").forEach { message ->
+            val event = failure(1, extra = mapOf("errorCode" to "UNCLASSIFIED_THROWABLE")).copy(errorMessage = message)
+            val brief = ProcessExitReport.events(listOf(event)).single().jsonObject
+            val group = ProcessExitReport.continuousFailures(listOf(event))["groups"]!!.jsonArray.single().jsonObject
+            assertEquals("UNCLASSIFIED_THROWABLE", brief["errorCode"]!!.jsonPrimitive.content)
+            assertEquals("UNCLASSIFIED_THROWABLE", group["firstAvailable"]!!.jsonObject["errorCode"]!!.jsonPrimitive.content)
+            assertFalse((brief.toString() + group).contains("private", ignoreCase = true))
+            assertFalse((brief.toString() + group).contains("secret"))
+        }
+    }
+
     private fun failure(at: Long, name: String = "RECORDER_CONTINUOUS_FIRST_FAILURE", extra: Map<String, String> = emptyMap()) =
         ProbeEvent(at, "app", at, at, "SYSTEM", name, "WARN", payload = mapOf(
             "recordingSessionId" to session, "channelId" to "FRONT_CABIN", "failureStage" to "FILE_WRITER",

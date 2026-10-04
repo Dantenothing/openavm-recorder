@@ -39,9 +39,21 @@ internal object ProcessExitReport {
     }
     fun channel(value: String?): String = value?.takeIf { it in channels } ?: "UNKNOWN"
     private fun backend(value: String?): String = value?.takeIf { it in backends } ?: "UNKNOWN"
-    private fun typedError(event: ProbeEvent): String? = event.payload["errorCode"]?.let { value ->
-        value.takeIf { it in setOf("UNCLASSIFIED_SIGNAL", "UNCLASSIFIED_THROWABLE", "EVIDENCE_UNAVAILABLE") }
-            ?: ContinuousFailureCapture.knownCode(value)?.takeIf { it == value }
+    private fun typedError(event: ProbeEvent): String? {
+        val value = event.payload["errorCode"] ?: return null
+        if (value in setOf("UNCLASSIFIED_SIGNAL", "UNCLASSIFIED_THROWABLE", "EVIDENCE_UNAVAILABLE")) {
+            // Legacy evidence may be unclassified even when its control callback
+            // carries a precise application code. Never export the raw message,
+            // and do not replace a placeholder with the generic callback wrapper.
+            val message = event.errorMessage
+            val callbackCode = if (message?.startsWith("CONTINUOUS_ENCODER_FAILED:") == true) {
+                // Exactly one known control wrapper; never scan arbitrary text or nested wrappers.
+                ContinuousFailureCapture.knownCode(message.removePrefix("CONTINUOUS_ENCODER_FAILED:"))
+            } else ContinuousFailureCapture.knownCode(message)
+            return callbackCode
+                ?.takeUnless { it == "CONTINUOUS_ENCODER_FAILED" } ?: value
+        }
+        return ContinuousFailureCapture.knownCode(value)?.takeIf { it == value }
     }
     private fun failureKey(event: ProbeEvent): String {
         val correlation = sessionCorrelation(event.payload["recordingSessionId"])

@@ -65,6 +65,7 @@ internal class ProductContinuousRecorder(
     private var current: Target? = null
     @Volatile private var next: Target? = null
     @Volatile private var format: MediaFormat? = null
+    private val trackFormatState = ContinuousTrackFormatState()
     @Volatile private var ending = false
     @Volatile private var continuationRevoked = false
     @Volatile private var outputLost = false
@@ -197,12 +198,18 @@ internal class ProductContinuousRecorder(
                 }
                 val index = active.dequeueOutputBuffer(info, 5_000)
                 if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    check(format == null) { "PRODUCT_CODEC_FORMAT_CHANGED_TWICE" }
-                    val changed = ProbeCodecFormat.snapshot(active.outputFormat)
-                    check(RASTER.matchesTrack(changed.getInteger(MediaFormat.KEY_WIDTH), changed.getInteger(MediaFormat.KEY_HEIGHT))) {
+                    val changed = try {
+                        ContinuousTrackFormatAndroid.capture(active.outputFormat)
+                    } catch (error: Exception) {
+                        trackFormatState.incomplete()
+                        throw error
+                    }
+                    check(RASTER.matchesTrack(changed.format.getInteger(MediaFormat.KEY_WIDTH), changed.format.getInteger(MediaFormat.KEY_HEIGHT))) {
                         "PRODUCT_ENCODED_TRACK_MISMATCH"
                     }
-                    format = changed
+                    // Keep the established MP4 track for equivalent notifications, including at a cut.
+                    // Real decoder-configuration changes still fail before accepting the new samples.
+                    if (trackFormatState.accept(changed.spec) == ContinuousFormatDecision.INSTALL) format = changed.format
                 } else if (index >= 0) {
                     try {
                         if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && failure.get() == null && !outputLost) {
@@ -376,9 +383,12 @@ internal class ProductContinuousRecorder(
         codecInput?.release(); codecInput = null
     }
     fun evidence(): EncoderEvidence = queue.snapshot().let { (bytes, items) ->
+        val observedFormat = trackFormatState.snapshot()
         EncoderEvidence(encodedFrames, firstEncodedPts, lastEncodedPts, lastOutputAt.takeIf { it > 0 }, bytes, items, completedFiles,
             encodedBytes = encodedBytes, continuousStages = stageEvidence, continuousFaultStages = faultEvidence.get(),
-            writtenFrames = writtenFrames, lastWriteElapsedMs = lastWrittenAt?.takeIf { it > 0 })
+            writtenFrames = writtenFrames, lastWriteElapsedMs = lastWrittenAt?.takeIf { it > 0 },
+            formatNotifications = observedFormat.notificationCount,
+            repeatedFormatNotifications = observedFormat.compatibleRepeats, formatDecision = observedFormat.decision)
     }
     private fun cacheFailureSample() {
         val (bytes, items) = queue.snapshot()

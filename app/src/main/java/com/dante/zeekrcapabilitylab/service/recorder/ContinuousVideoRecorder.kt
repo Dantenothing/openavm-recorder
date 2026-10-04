@@ -36,6 +36,9 @@ data class EncoderEvidence(
     val continuousFaultStages: kotlinx.serialization.json.JsonObject? = null,
     val writtenFrames: Long? = null,
     val lastWriteElapsedMs: Long? = null,
+    val formatNotifications: Long? = null,
+    val repeatedFormatNotifications: Long? = null,
+    val formatDecision: String? = null,
 )
 
 /**
@@ -43,6 +46,7 @@ data class EncoderEvidence(
  * Codec output is copied into a bounded queue before its native buffer is returned. USB never runs
  * on the codec/camera worker. Caller MUST confirm the camera producer ended before stop/release.
  */
+@android.annotation.SuppressLint("NewApi") // inspectEncoder() rejects SDK < 29 before this backend is selected.
 internal class ContinuousVideoRecorder(
     private val codecName: String,
     private val onError: (RecordingEncoder, String) -> Unit,
@@ -72,6 +76,7 @@ internal class ContinuousVideoRecorder(
     private val clock = ObservedCodecClock()
     private var cutCallback: ((EncodedSegmentSummary) -> Unit)? = null // codec worker
     private var writerFormat: MediaFormat? = null // writer worker
+    private val trackFormatState = ContinuousTrackFormatState() // codec worker
     private var target: Target? = null // writer worker
     @Volatile var lastCompleted: EncodedSegmentSummary? = null; private set
     @Volatile private var encodedFrames = 0L
@@ -129,8 +134,11 @@ internal class ContinuousVideoRecorder(
     fun evidence(): EncoderEvidence {
         val (bytes, count) = queue.snapshot()
         cacheCounters(bytes, count)
+        val formats = trackFormatState.snapshot()
         return EncoderEvidence(encodedFrames, firstPtsUs, lastPtsUs, lastOutputElapsedMs, bytes, count, completedFiles,
-            encodedBytes = encodedBytes, writtenFrames = writtenFrames, lastWriteElapsedMs = lastWriteElapsedMs)
+            encodedBytes = encodedBytes, writtenFrames = writtenFrames, lastWriteElapsedMs = lastWriteElapsedMs,
+            formatNotifications = formats.notificationCount, repeatedFormatNotifications = formats.compatibleRepeats,
+            formatDecision = formats.decision)
     }
 
     private val drain = object : Runnable {
@@ -142,15 +150,23 @@ internal class ContinuousVideoRecorder(
                 for (attempt in 0 until 16) {
                     val index = active.dequeueOutputBuffer(info, 0)
                     if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        val outputFormat = active.outputFormat
-                        check(writerHandler.post {
-                            try {
-                                check(writerFormat == null) { "ENCODER_FORMAT_CHANGED_MID_RUN" }
-                                writerFormat = outputFormat
-                                target?.configure(outputFormat)
-                                schedulePump()
-                            } catch (t: Throwable) { fail(t, ContinuousFailureStage.OUTPUT_PREPARE) }
-                        })
+                        if (firstFailure.get() != null || abandoned) continue
+                        try {
+                            val snapshot = try { ContinuousTrackFormatAndroid.capture(active.outputFormat) }
+                                catch (error: Throwable) { trackFormatState.incomplete(); throw error }
+                            // Decide before dequeueing subsequent samples. An asynchronous writer-only
+                            // check could let an already-running pump write changed data to the old track.
+                            if (trackFormatState.accept(snapshot.spec) == ContinuousFormatDecision.INSTALL) {
+                                check(writerHandler.post {
+                                    if (closing || abandoned || firstFailure.get() != null) return@post
+                                    try {
+                                        writerFormat = snapshot.format
+                                        target?.configure(snapshot.format)
+                                        schedulePump()
+                                    } catch (error: Throwable) { fail(error, ContinuousFailureStage.OUTPUT_PREPARE) }
+                                }) { "WRITER_QUEUE_REJECTED" }
+                            }
+                        } catch (error: Throwable) { fail(error, ContinuousFailureStage.OUTPUT_PREPARE) }
                     } else if (index >= 0) {
                         try {
                             if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
@@ -334,7 +350,8 @@ internal class ContinuousVideoRecorder(
 
         fun configure(format: MediaFormat) {
             check(!started)
-            track = muxer!!.addTrack(format)
+            // Each muxer gets its own CSD cursors; rotating must not reuse buffers consumed by addTrack.
+            track = muxer!!.addTrack(ContinuousTrackFormatAndroid.copyForMuxer(format))
             muxer!!.start(); started = true
         }
         fun write(frame: Item.Frame) {

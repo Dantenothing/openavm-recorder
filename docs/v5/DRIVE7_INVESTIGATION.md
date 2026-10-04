@@ -1,6 +1,6 @@
 # Drive7 investigation — drive6 stops recording around the first split
 
-Status: secondary handling and diagnostic changes verified locally; the received sleep report identifies the direct-recorder failure path, but not the exact failing operation. Existing detailed recording logs are the next evidence source. This is not a release receipt or confirmation that the first recording failure is fixed.
+Status: supplied detailed log fragments identify the application guard that stops cabin recording at the first split. The compatible-format correction and prior secondary handling are implemented in the private drive7 candidate. Device validation remains necessary.
 
 ## Owner observation
 
@@ -38,6 +38,18 @@ The manual primary stop follows the first fault by 9,134 ms. Its close is marked
 
 `IllegalStateException` alone does not distinguish a sync-frame request, queue/target state check, codec drain, muxer write, stop or release. Do not assert a muxer/EOS root cause. The existing **Settings → Recording diagnostics → Prepare detailed report → Copy full JSON** path reads recent recorder history and preserves up to 400 characters of the original event `errorMessage`. The relevant `RECORDER_CONTINUOUS_FAILED` event is at elapsed 22,985,395 ms. It may retain `CONTINUOUS_ENCODER_FAILED:<original message>` without another recording. No caught-exception stack trace was persisted by this old path, so a full stack cannot be promised.
 
+## Detailed fragments identify the application guard
+
+The next attachment contains parts **2–5 of 17**, all with the same declared report hash. Four complete `RECORDER_CONTINUOUS_FAILED` events can be parsed from these contiguous fragments. Every one contains `CONTINUOUS_ENCODER_FAILED:ENCODER_FORMAT_CHANGED_MID_RUN`. The full-report hash cannot be verified without all parts; the complete individual event records are sufficient to identify this error and no further copying was requested.
+
+The preceding cabin segment start to failure intervals are **60,015 / 60,042 / 60,025 / 60,015 ms**. These are time/configuration matches to Camera 1, 640×480, internal storage and 60-second segments; old start events do not support a strict channel/session-ID join.
+
+In drive6, `ContinuousVideoRecorder` unconditionally checks `writerFormat == null` for every `INFO_OUTPUT_FORMAT_CHANGED`. The second notification therefore throws this exact application error regardless of whether the actual video track changed. The shared-input backend contains the equivalent `PRODUCT_CODEC_FORMAT_CHANGED_TWICE` check. This confirms the immediate software stop trigger. The old logs did not save both formats, so they do not prove that the device's second format was compatible.
+
+The correction compares immutable decoder configuration, retains the established muxer track for compatible repeats, and rejects unreadable or incompatible formats before accepting subsequent samples. It compares the AVC SPS/PPS bytes and stable video properties, rather than runtime bitrate or vendor counters. The original format remains available for subsequent files, and each muxer receives an independent copy. This follows the [MediaCodec output-format contract](https://developer.android.com/reference/kotlin/android/media/MediaCodec#INFO_OUTPUT_FORMAT_CHANGED) and the [MediaMuxer track lifecycle](https://developer.android.com/reference/android/media/MediaMuxer#addTrack(android.media.MediaFormat)); it does not add a track to an already started muxer.
+
+The short-report parser also recovers an allowlisted specific code from a single `CONTINUOUS_ENCODER_FAILED:` wrapper when the old typed evidence is unclassified. Raw error messages are not exported. This makes the known failure visible without a detailed multi-part report.
+
 ## Confirmed defects addressed independently
 
 1. The shared-input reader kept updating its worker heartbeat while receiving no frames. Its source wait policy allowed thirty minutes of silence, while the pending keyframe-cut deadline was paused. A 15-second source deadline now uses the existing terminal failure and cleanup path. It detects missing footage; it does not repair or silently restart the camera. Brief pauses remain allowed. Time-lapse selection does not affect the incoming source heartbeat.
@@ -47,14 +59,15 @@ The manual primary stop follows the first fault by 9,134 ms. Its close is marked
 
 ## Remaining boundary
 
-The initial black preview and the precise operation behind the approximately 60-second recording failure remain unresolved. The sleep report establishes the failing recorder and exception class; the existing detailed report may recover the original error message. Do not describe these as fixed merely because the secondary handling and diagnostics pass local tests. Do not change EOS handling, keyframe parameters, camera ownership or native teardown speculatively.
+The initial black preview, actual contents of the device's repeated output format, and any HAL interaction between closing cabin and surround cameras still require head-unit confirmation. The unconditional second-format guard is identified and corrected; uninterrupted real-camera recording cannot be claimed from unit tests alone. EOS handling, keyframe requests, camera ownership and native teardown remain unchanged.
 
 The source watchdog intentionally terminates a recording that has no fresh camera input for 15 seconds. A silent OEM interruption longer than that will therefore need a new recording after cleanup; the separate native contention-callback recovery path remains in place. Hardware behavior and UI rendering still require validation on the head unit.
 
 ## Local verification — 2026-10-04
 
 - Source-deadline regression: 11 tests, with 2 expected failures under the original 30-minute policy, then all 11 passing after the change. Logs: `build/drive7-source-red.log` and `build/drive7-source-green.log`.
-- Car app unit suite: 1,413 tests, zero failures, errors or skipped tests.
-- `:app:compileDebugAndroidTestKotlin` passed. These UI tests were compiled, not executed on a head unit.
-- `:app:lintDebug` passed. Full command output: `build/drive7-car-checks.log`.
-- No APK was delivered or installed, no vehicle controls were sent, and no public release was modified. The phone app and transfer format are unchanged.
+- Codec-format regression: the original unconditional second-format guard produced 6 expected failures among 9 tests; after the fix and one added hint-history case, all 10 passed. Logs: `build/drive7-format-red.log` and `build/drive7-format-green.log`.
+- Final car app unit suite: 1,426 tests; map module: 26; shared transfer protocol: 80. All 1,532 passed, with zero errors or skipped tests.
+- `:app:compileDebugAndroidTestKotlin` passed, including the new synthetic MediaFormat/CSD buffer isolation test. Android tests were compiled, not executed on a device. An initial missing test annotation dependency was corrected using the project's existing JUnit SDK assumption approach.
+- App and map lint passed with zero errors; existing warnings remain (209 app warnings plus 21 hints, 3 map warnings). Final command output: `build/drive7-car-final-tests.log`.
+- No head unit was connected, no vehicle controls were sent, and no public release was modified. The phone app and transfer format are unchanged. APK packaging and signing verification are recorded separately in the delivery folder's `validation.json`.

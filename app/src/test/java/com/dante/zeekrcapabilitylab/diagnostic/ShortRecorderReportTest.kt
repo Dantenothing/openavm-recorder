@@ -82,7 +82,8 @@ class ShortRecorderReportTest {
         val state = RecorderState(recordingSessionId = "codec", segmentNumber = 4, channelId = "SURROUND",
             recordingBackend = "CONTINUOUS_CODEC", captureSessionRevision = 1)
         val evidence = CaptureEvidence("codec", 4, SegmentFrameStats(count = 300), 900,
-            encoder = EncoderEvidence(61, 1_000, 2_001_000, 990, 12345, 3, 3), channelId = "SURROUND")
+            encoder = EncoderEvidence(61, 1_000, 2_001_000, 990, 12345, 3, 3,
+                formatNotifications = 3, repeatedFormatNotifications = 2, formatDecision = "KEEP"), channelId = "SURROUND")
         val snapshot = ShortRecorderReport.snapshot(state, evidence, buildJsonObject {}, emptyList(), 2000, 1000)
         val measured = snapshot.getValue("measured").jsonObject
         assertEquals("CONTINUOUS_CODEC", snapshot.getValue("recordingBackend").jsonPrimitive.content)
@@ -92,10 +93,14 @@ class ShortRecorderReportTest {
         assertEquals(300L, measured.getValue("captureCallbackCount").jsonPrimitive.long)
         assertEquals(10L, measured.getValue("lastEncodedOutputAgeMs").jsonPrimitive.long)
         assertEquals(12345L, measured.getValue("encoderQueueBytes").jsonPrimitive.long)
+        assertEquals(3L, measured.getValue("formatNotifications").jsonPrimitive.long)
+        assertEquals(2L, measured.getValue("repeatedFormatNotifications").jsonPrimitive.long)
+        assertEquals("KEEP", measured.getValue("formatDecision").jsonPrimitive.content)
         val stale = ShortRecorderReport.snapshot(state.copy(recordingSessionId = "next"), evidence,
             buildJsonObject {}, emptyList(), 2000, 1000).getValue("measured").jsonObject
         assertEquals(JsonNull, stale["encodedFrames"])
         assertEquals(JsonNull, stale["encoderQueueBytes"])
+        assertEquals(JsonNull, stale["formatNotifications"])
     }
 
     @Test fun previewResultsAndTextureCallbacksDoNotBecomeEncodedFrameEvidence() {
