@@ -122,6 +122,7 @@ object ShortRecorderDiagnostics {
             })
             put("processExit", RecentRuntimeEvidence.processExits(exits))
             put("continuousFailures", exits["continuousFailures"] ?: JsonNull)
+            put("codecFormats", exits["codecFormats"] ?: JsonNull)
         }
     }
 

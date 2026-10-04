@@ -14,6 +14,23 @@ class ContinuousFailureReportTest {
     @get:Rule val temporary = TemporaryFolder()
     private val session = "34695741-c1ed-4e36-bccf-a85e4015a775"
 
+    @Test fun typedFormatDifferenceSurvivesLaterPrimaryFaultAndSavedHistory() {
+        val first = failure(60_000, extra = mapOf("errorCode" to "ENCODER_TRACK_FORMAT_INCOMPATIBLE",
+            "failureStage" to "OUTPUT_PREPARE", "formatDecision" to "INCOMPATIBLE", "formatNotifications" to "2",
+            "formatCutPending" to "true", "formatField_CSD_0" to "CHANGED|true|true|18|20"))
+        val primary = failure(75_000, extra = mapOf("channelId" to "SURROUND", "errorCode" to "PRODUCT_SOURCE_WAIT_TIMEOUT"))
+        val events = listOf(first, primary) + (75_001L..75_700L).map(::stop)
+        val directory = temporary.newFolder()
+        File(directory, "app.jsonl").writeText(events.joinToString("\n", postfix = "\n") { Json.encodeToString(ProbeEvent.serializer(), it) })
+        val groups = ProcessExitReport.continuousFailures(ProcessExitDiagnostics.recentHistory(directory).events)["groups"]!!.jsonArray
+        val cabin = groups.single { it.jsonObject["channelId"]!!.jsonPrimitive.content == "FRONT_CABIN" }.jsonObject
+        val format = cabin["firstAvailable"]!!.jsonObject["format"]
+        assertNotNull("The actual field difference must be retained with the original channel fault", format)
+        assertEquals("CHANGED", format!!.jsonObject["fields"]!!.jsonObject["CSD_0"]!!.jsonObject["kind"]!!.jsonPrimitive.content)
+        assertEquals(18, format.jsonObject["fields"]!!.jsonObject["CSD_0"]!!.jsonObject["beforeBytes"]!!.jsonPrimitive.int)
+        assertTrue(format.jsonObject["cutPending"]!!.jsonPrimitive.boolean)
+    }
+
     @Test fun firstTypedFaultSurvivesLaterCloseFailureAndMoreThan512OrdinaryEvents() {
         val first = failure(10)
         val events = listOf(first) + (11L..700L).map(::stop)

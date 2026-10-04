@@ -20,6 +20,7 @@ internal object ContinuousTrackFormatAndroid {
         })
         Snapshot(spec, copyForMuxer(source))
     } catch (error: Exception) {
-        throw IllegalStateException(ContinuousTrackFormatSpec.INCOMPLETE, error)
+        if (error is ContinuousTrackFormatException) throw error
+        throw ContinuousTrackFormatSpec.incompleteField("FORMAT_COPY", "COPY_FAILED", null, cause = error)
     }
 }

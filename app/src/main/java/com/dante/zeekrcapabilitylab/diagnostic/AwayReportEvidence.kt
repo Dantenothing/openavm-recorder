@@ -2,6 +2,7 @@ package com.dante.zeekrcapabilitylab.diagnostic
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
+import com.dante.zeekrcapabilitylab.service.recorder.ContinuousFormatFacts
 
 /** Pure export helpers: no camera work, timers, networking, or extra vehicle tests. */
 internal object AwayReportEvidence {
@@ -18,18 +19,19 @@ internal object AwayReportEvidence {
             put("event", it.event); put("wall", it.wall); put("elapsed", it.elapsed); put("process", it.process)
             put("facts", buildJsonObject {
                 listOf("recordingMode", "authorityReason", "finalizeReason", "reason", "errorCode", "generation", "segment",
-                    "recordingSessionId", "cameraGeneration", "source", "status", "callbackType", "cameraErrorCode",
+                    "recordingSessionId", "channelId", "recordingBackend", "cameraGeneration", "source", "status", "callbackType", "cameraErrorCode",
                     "callbackEntryElapsedMs", "staleCallback", "closeId", "closeStep", "stepElapsedMs", "closeRequestedElapsedMs",
                     "closeDurationMs", "safeToContinue", "deviceClosed", "terminal", "outputLost", "cleanupPending", "cleanupUnconfirmed",
                     "screenOn", "mainDisplayOn", "backgroundPowerOffEvidence", "appForeground", "deviceOwnerId")
                     .forEach { key -> it.facts[key]?.let { value ->
                         if (value.length<=80 && value.all { c -> c.isLetterOrDigit() || c in "_.-" }) put(key, value)
                     } }
-                com.dante.zeekrcapabilitylab.service.recorder.ContinuousFailureEvidence.FACT_KEYS.forEach { key ->
+                (com.dante.zeekrcapabilitylab.service.recorder.ContinuousFailureEvidence.FACT_KEYS - ContinuousFormatFacts.keys).forEach { key ->
                     it.facts[key]?.takeIf { value -> value.length in 1..160 &&
                         value.all { c -> c.isLetterOrDigit() || c in "_.$-" } }?.let { value -> put(key, value) }
                 }
             })
+            CodecFormatReport.format(it.facts)?.let { format -> put("format", format) }
         }
     } ?: JsonNull
 
@@ -43,6 +45,9 @@ internal object AwayReportEvidence {
         put("lastContinuousFailure", edge(rows.lastOrNull { it.event==CONTINUOUS_FAILURE }))
         val startIndex = rows.indexOfLast { it.event == "RECORDER_START" }
         val start = rows.getOrNull(startIndex)
+        // Independent retained-window history: a new recording must not erase the previous run's format cause.
+        // The projector groups by session/channel; current-recording failure attribution below stays separate.
+        put("codecFormats", CodecFormatReport.report(rows.map(CodecFormatReport::row)))
         val failures = (if (startIndex >= 0) rows.drop(startIndex) else rows).filter {
             it.event in setOf(CONTINUOUS_FAILURE, FIRST_CONTINUOUS_FAILURE) && (start == null || it.process == start.process &&
                 (it.facts["recordingSessionId"] == null || AwayTimeline.sameRun(start, it)))
@@ -131,11 +136,27 @@ internal object AwayReportEvidence {
                 base.forEach { (key, value) -> put(key, value) }
                 put("eventsRetained", rows.size)
                 put("eventsOmittedFromCopy", rows.size-take)
-                put("timeline", Json.parseToJsonElement(Json.encodeToString(rows.takeLast(take))))
+                put("timeline", Json.parseToJsonElement(Json.encodeToString(rows.takeLast(take).map { row ->
+                    row.copy(facts = sanitizeFormatFacts(row.facts))
+                })))
             }
             if(result.toString().toByteArray(Charsets.UTF_8).size<=MAX_BYTES) return result
             check(take>0) { "AWAY_SUMMARY_TOO_LARGE" }
             take--
         }
+    }
+
+    internal fun sanitizeFormatFacts(facts: Map<String, String>): Map<String, String> =
+        facts.filterKeys { it !in ContinuousFormatFacts.keys && !it.startsWith("formatField_") } + ContinuousFormatFacts.sanitize(facts)
+
+    /** Keep small first/latest format evidence even after routine power/stop rows fill the journal. */
+    internal fun retainRows(rows: List<AwayRow>, limit: Int = 1200): List<AwayRow> {
+        require(limit >= CodecFormatReport.MAX_GROUPS * 3)
+        if (rows.size <= limit) return rows
+        val selected = CodecFormatReport.retained(rows.map(CodecFormatReport::row))
+        val protected = rows.filter { CodecFormatReport.row(it).identity in selected }
+            .distinctBy { CodecFormatReport.row(it).identity }.toSet()
+        return (rows.filter { it !in protected }.takeLast((limit - protected.size).coerceAtLeast(0)) + protected)
+            .sortedWith(compareBy<AwayRow> { it.wall }.thenBy { it.elapsed })
     }
 }

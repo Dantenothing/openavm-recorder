@@ -198,18 +198,22 @@ internal class ProductContinuousRecorder(
                 }
                 val index = active.dequeueOutputBuffer(info, 5_000)
                 if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    val changed = try {
-                        ContinuousTrackFormatAndroid.capture(active.outputFormat)
-                    } catch (error: Exception) {
-                        trackFormatState.incomplete()
-                        throw error
+                    try {
+                        val changed = try {
+                            ContinuousTrackFormatAndroid.capture(active.outputFormat)
+                        } catch (error: Exception) {
+                            trackFormatState.incomplete(error)
+                            throw error
+                        }
+                        check(RASTER.matchesTrack(changed.format.getInteger(MediaFormat.KEY_WIDTH), changed.format.getInteger(MediaFormat.KEY_HEIGHT))) {
+                            "PRODUCT_ENCODED_TRACK_MISMATCH"
+                        }
+                        // The shared-input writer retains its existing strict track policy.
+                        // Direct-codec rollover is a separate, explicitly gated path.
+                        if (trackFormatState.accept(changed.spec) == ContinuousFormatDecision.INSTALL) format = changed.format
+                    } finally {
+                        failureCapture?.observeFormat(trackFormatState.snapshot())
                     }
-                    check(RASTER.matchesTrack(changed.format.getInteger(MediaFormat.KEY_WIDTH), changed.format.getInteger(MediaFormat.KEY_HEIGHT))) {
-                        "PRODUCT_ENCODED_TRACK_MISMATCH"
-                    }
-                    // Keep the established MP4 track for equivalent notifications, including at a cut.
-                    // Real decoder-configuration changes still fail before accepting the new samples.
-                    if (trackFormatState.accept(changed.spec) == ContinuousFormatDecision.INSTALL) format = changed.format
                 } else if (index >= 0) {
                     try {
                         if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && failure.get() == null && !outputLost) {

@@ -24,6 +24,12 @@ class ShortRecorderReportBoundsTest {
         } }
         val faults = ProcessExitReport.continuousFailures(failureEvents)
         assertEquals(6, faults["groups"]!!.jsonArray.size)
+        val formatFields = ContinuousFormatFacts.fields.take(24).associate {
+            "formatField_$it" to "TYPE_MISMATCH|UNKNOWN|UNKNOWN|2147483647|2147483647"
+        }
+        val formats = CodecFormatReport.report(failureEvents.map { event -> CodecFormatReport.row(event.copy(
+            eventName = ContinuousFormatFacts.EVENT,
+            payload = event.payload + formatFields + mapOf("formatDecision" to "INCOMPLETE", "formatNotifications" to "2"))) })
         val snapshot = largeSnapshot()
         val run = JsonObject(snapshot.filterKeys { it in setOf("atEpochMs", "atElapsedMs", "status", "recordingMode",
             "segmentNumber", "storage", "recordingBackend", "encoderSelection", "captureSessionRevision", "requested") })
@@ -34,6 +40,7 @@ class ShortRecorderReportBoundsTest {
         assertEquals(24, persisted.size)
         val exits = buildJsonObject {
             put("systemExitQuery", "AVAILABLE"); put("persistedEvents", persisted); put("continuousFailures", faults)
+            put("codecFormats", formats)
             put("historicalExits", buildJsonArray { repeat(8) { index -> add(buildJsonObject {
                 put("atEpochMs", Long.MAX_VALUE); put("reason", "NATIVE_CRASH"); put("status", Int.MAX_VALUE)
                 put("pid", Int.MAX_VALUE); put("process", "a".repeat(120)); put("importance", Int.MAX_VALUE)
@@ -65,6 +72,7 @@ class ShortRecorderReportBoundsTest {
         assertTrue(text.toByteArray(Charsets.UTF_8).size <= ShortRecorderReport.MAX_BYTES)
         assertTrue(report["omittedForSize"]!!.jsonArray.isNotEmpty())
         assertEquals(faults, report["processExit"]!!.jsonObject["continuousFailures"])
+        assertEquals(formats, report["processExit"]!!.jsonObject["codecFormats"])
         assertEquals(startup, report["startupAndTransfer"])
         val first = faults["groups"]!!.jsonArray.first().jsonObject["firstAvailable"]!!.jsonObject
         assertEquals(Long.MAX_VALUE, first["faultEncodedBytes"]!!.jsonPrimitive.long)

@@ -15,6 +15,9 @@ internal object ContinuousFailureAndroid {
             EventLogger.logEvent(Categories.SYSTEM, AwayReportEvidence.FIRST_CONTINUOUS_FAILURE,
                 severity = Severity.WARN, payload = evidence.facts() + mapOf(
                     "channelId" to (channelId?.takeIf { it in RecordingChannelId.all } ?: "UNKNOWN")))
+        }, onFormatObserved = { facts ->
+            EventLogger.logEvent(Categories.SYSTEM, ContinuousFormatFacts.EVENT, severity = Severity.WARN,
+                payload = facts + mapOf("channelId" to (channelId?.takeIf { it in RecordingChannelId.all } ?: "UNKNOWN")))
         })
 
     /** Bounded cause walk, typed fields only. Never use diagnosticInfo/message/stack trace as upload data. */

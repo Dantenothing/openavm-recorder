@@ -34,7 +34,7 @@ internal object AwayJournal {
     private val names=setOf("PROCESS_STARTED","APP_FOREGROUND","APP_BACKGROUND","SCREEN_ON","SCREEN_OFF",
         "DISPLAY_CHANGED","POWER_DELAYED_SNAPSHOT","POWER_PASSIVE_SNAPSHOT","VEHICLE_AWAY_TEST_MARKER","NATURAL_AWAY_TEST_ENDED_BY_C0",
         "RECORDER_START","RECORDER_STOP","RECORDER_STOPPED","RECORDER_SEGMENT_START","RECORDER_SEGMENT_FINALIZE_BEGIN",AwayReportEvidence.CONTINUOUS_FAILURE,
-        AwayReportEvidence.FIRST_CONTINUOUS_FAILURE,
+        AwayReportEvidence.FIRST_CONTINUOUS_FAILURE, com.dante.zeekrcapabilitylab.service.recorder.ContinuousFormatFacts.EVENT,
         "RECORDER_CAMERA_RESUME_GATE_ARMED","RECORDER_CAMERA_RESUME_GATE_DISARMED","RECORDER_POWER_SNAPSHOT_RECONCILED",
         "RECORDER_CAMERA_LOSS_ROUTE","RECORDER_CAMERA_LOSS_OBSERVED","RECORDER_CAMERA_CALLBACK",
         "RECORDER_CLOSE_REQUESTED","RECORDER_CLOSE_PROGRESS","RECORDER_CLOSE_UNCONFIRMED","RECORDER_CLOSE_SETTLED",
@@ -57,14 +57,15 @@ internal object AwayJournal {
         io.execute {
             runCatching { file!!.openRead().use { input ->
                 check(input.channel.size()<=3*1024*1024)
-                json.decodeFromString<List<AwayRow>>(input.bufferedReader().readText()).takeLast(1200).forEach(rows::addLast)
+                AwayReportEvidence.retainRows(json.decodeFromString<List<AwayRow>>(input.bufferedReader().readText())).forEach(rows::addLast)
             } }.onFailure { if(file!!.baseFile.exists())writeError="READ_${it.javaClass.simpleName}" }
         }
     }
     fun observe(e:ProbeEvent) {
         if(file==null || (e.eventName !in names && !e.eventName.startsWith("RECORDER_VEHICLE_AWAY_") && !e.eventName.startsWith("RECORDER_CAMERA_RECOVERY_") &&
             !e.eventName.startsWith("MIRROR_SLEEP_") && !e.eventName.startsWith("MIRROR_PREVIEW_")))return
-        val facts=e.payload.filterKeys { it in safeKeys }.mapValues { it.value.take(160) }.toMutableMap()
+        val facts=AwayReportEvidence.sanitizeFormatFacts(e.payload.filterKeys { it in safeKeys })
+            .mapValues { it.value.take(160) }.toMutableMap()
         facts["errorCode"]?.let { value ->
             facts["errorCode"] = AwayReportEvidence.errorCode(value) ?: "UNKNOWN_ERROR"
         }
@@ -95,7 +96,11 @@ internal object AwayJournal {
         com.dante.zeekrcapabilitylab.event.EventLogger.logEvent(com.dante.zeekrcapabilitylab.data.Categories.SYSTEM,"NATURAL_AWAY_TEST_ENDED_BY_C0")
     }
     private fun drainAndSave() {
-        while(true) { val e=queue.poll() ?: break; rows.addLast(e); while(rows.size>1200)rows.removeFirst() }
+        while(true) { val e=queue.poll() ?: break; rows.addLast(e) }
+        if (rows.size > 1200) {
+            val retained = AwayReportEvidence.retainRows(rows.toList())
+            rows.clear(); retained.forEach(rows::addLast)
+        }
         runCatching {
             val target=file ?: return; target.baseFile.parentFile?.mkdirs()
             val bytes=json.encodeToString(rows.toList()).toByteArray(); check(bytes.size<=3*1024*1024)

@@ -114,4 +114,37 @@ class ContinuousTrackFormatTest {
             assertEquals(2L, state.snapshot().compatibleRepeats)
         }
     }
+
+    @Test fun incompleteEvidenceDistinguishesMissingWrongTypeEmptyAndMalformedWithoutRawValues() {
+        val cases = listOf(
+            Triple(fields().apply { remove("csd-1") }, "CSD_1", "MISSING"),
+            Triple(fields(mapOf("profile" to 42L)), "PROFILE", "TYPE_MISMATCH"),
+            Triple(fields(mapOf("color-standard" to 2.0f)), "COLOR_STANDARD", "TYPE_MISMATCH"),
+            Triple(fields(mapOf("csd-0" to ByteBuffer.allocate(0))), "CSD_0", "EMPTY"),
+            Triple(fields(mapOf("csd-0" to ByteBuffer.wrap(byteArrayOf(11, 12, 13)))), "CSD_0", "INVALID"),
+            Triple(fields(mapOf("crop-right" to 640)), "CROP_RIGHT", "OUT_OF_RANGE"),
+            Triple(fields(mapOf("sar-width" to 2)), "SAR_HEIGHT", "MISSING"),
+            Triple(fields(mapOf("csd-user-secret-value" to ByteBuffer.wrap(pps))), "FORMAT_KEYS", "INVALID"),
+        )
+        cases.forEach { (values, label, kind) ->
+            val error = try { spec(values); throw AssertionError("Expected typed failure") }
+                catch (caught: ContinuousTrackFormatException) { caught }
+            assertEquals(ContinuousTrackFormatSpec.INCOMPLETE, error.errorCode)
+            assertEquals(label, error.fields.single().field); assertEquals(kind, error.fields.single().kind)
+            assertFalse(error.fields.toString().contains("secret-value"))
+            val state = ContinuousTrackFormatState(); state.incomplete(IllegalStateException("wrapper", error))
+            assertEquals(error.fields, state.snapshot().fields)
+        }
+    }
+
+    @Test fun changedTrackEvidenceHasOnlyFieldIdentityPresenceAndByteCounts() {
+        val state = ContinuousTrackFormatState(); state.accept(spec())
+        val changed = fields(mapOf("csd-0" to ByteBuffer.wrap(sps + byteArrayOf(42, 43))))
+        val error = try { state.accept(spec(changed)); throw AssertionError("Expected typed failure") }
+            catch (caught: ContinuousTrackFormatException) { caught }
+        assertEquals(listOf(ContinuousTrackFieldEvidence("CSD_0", "CHANGED", true, true, sps.size, sps.size + 2)), error.fields)
+        assertEquals(error.fields, state.snapshot().fields)
+        assertFalse(error.fields.toString().contains("42, 43"))
+        assertFalse(error.message.orEmpty().contains("AAAA"))
+    }
 }

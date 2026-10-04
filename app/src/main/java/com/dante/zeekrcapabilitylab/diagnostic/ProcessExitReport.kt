@@ -4,6 +4,7 @@ import com.dante.zeekrcapabilitylab.data.CrashRecord
 import com.dante.zeekrcapabilitylab.data.ProbeEvent
 import com.dante.zeekrcapabilitylab.service.recorder.ContinuousFailureCapture
 import com.dante.zeekrcapabilitylab.service.recorder.ContinuousFailureStage
+import com.dante.zeekrcapabilitylab.service.recorder.ContinuousFormatFacts
 import java.security.MessageDigest
 import java.util.Locale
 import kotlinx.serialization.json.*
@@ -17,7 +18,7 @@ internal object ProcessExitReport {
         "RECORDER_MIRROR_HANDOFF_STOPPED", "RECORDER_MIRROR_HANDOFF_RECORDING_STOP_CONFIRMED",
         "RECORDER_MIRROR_HANDOFF_RECORDING_STOP_ACKNOWLEDGED",
         "PRODUCT_HOME_PREVIEW_RESTORED", "PRODUCT_HOME_PREVIEW_RELEASE_TIMEOUT")
-    fun relevant(event: ProbeEvent): Boolean = event.eventName in eventNames ||
+    fun relevant(event: ProbeEvent): Boolean = event.eventName in eventNames || event.eventName == ContinuousFormatFacts.EVENT ||
         event.eventName.startsWith("RECORDER_NATIVE_")
 
     private const val MAX_FAILURE_GROUPS = 6
@@ -83,9 +84,11 @@ internal object ProcessExitReport {
 
     /** Protect first/recent typed failures from ordinary STOP/start noise within the same bounded read. */
     fun retainHistory(events: List<ProbeEvent>, limit: Int = 512): List<ProbeEvent> {
-        require(limit >= MAX_FAILURE_GROUPS * 2)
+        require(limit >= MAX_FAILURE_GROUPS * 2 + CodecFormatReport.MAX_GROUPS * 3)
         if (events.size <= limit) return events
-        val protected = failureGroups(events).flatMap { listOf(firstFailure(it), it.last()) }.toSet()
+        val formats = CodecFormatReport.retained(events.map(CodecFormatReport::row))
+        val protected = (failureGroups(events).flatMap { listOf(firstFailure(it), it.last()) } +
+            events.filter { CodecFormatReport.row(it).identity in formats }).toSet()
         return (events.filter { it !in protected }.sortedWith(eventOrder).takeLast(limit - protected.size) + protected)
             .sortedWith(eventOrder)
     }
@@ -124,6 +127,7 @@ internal object ProcessExitReport {
         put("errorCode", typedError(event) ?: ContinuousFailureCapture.knownCode(event.errorMessage) ?: "UNKNOWN")
         put("exceptionType", symbol(event.payload["exceptionType"], 160) ?: "UNKNOWN")
         put("causeType", symbol(event.payload["causeType"], 160) ?: "UNKNOWN")
+        CodecFormatReport.format(event.payload)?.let { put("format", it) }
         listOf("codecErrorCode", "errno").forEach { key ->
             put(key, event.payload[key]?.toIntOrNull())
         }

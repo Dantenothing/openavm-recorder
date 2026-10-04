@@ -216,7 +216,7 @@ object ShortRecorderReport {
             report = render()
         }
         if (report.toByteArray(Charsets.UTF_8).size > MAX_BYTES && retainedExits != null) {
-            // Typed first/recent pipeline faults have priority over native backtraces and a duplicate event tail.
+            // Typed faults and per-channel format changes outrank native backtraces and duplicate event tails.
             retainedExits = buildJsonObject {
                 retainedExits!!.forEach { (key, value) -> when (key) {
                     "persistedEvents", "lastJavaCrash" -> omitted += "processExit.$key"

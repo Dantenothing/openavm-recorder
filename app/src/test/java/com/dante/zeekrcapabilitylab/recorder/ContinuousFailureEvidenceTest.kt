@@ -7,6 +7,85 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ContinuousFailureEvidenceTest {
+    @Test fun typedFormatFieldsTraverseOnlyFourCausesAndKeepUnknownTimingHonest() {
+        val field = ContinuousTrackFieldEvidence("CSD_1", "MISSING", null, false)
+        val typed = ContinuousTrackFormatException(ContinuousTrackFormatSpec.INCOMPLETE, listOf(field))
+        val wrapped = RuntimeException("private outer", RuntimeException("private", RuntimeException("private", typed)))
+        val facts = capture().capture(wrapped, ContinuousFailureStage.OUTPUT_PREPARE).facts()
+        assertEquals("ENCODER_TRACK_FORMAT_INCOMPLETE", facts["errorCode"])
+        assertEquals("MISSING|UNKNOWN|false|UNKNOWN|UNKNOWN", facts["formatField_CSD_1"])
+        assertEquals("INCOMPLETE", facts["formatDecision"])
+        assertNull(facts["formatNotifications"]); assertNull(facts["formatCutPending"])
+        assertFalse(facts.toString().contains("private"))
+        val deeper = capture().capture(RuntimeException("private", wrapped), ContinuousFailureStage.OUTPUT_PREPARE).facts()
+        assertNull(deeper["formatField_CSD_1"])
+    }
+
+    @Test fun formatObservationIsImmutableDeduplicatedAndIndependentOfTheFirstFault() {
+        var now = 100L
+        val journal = mutableListOf<Map<String, String>>()
+        val recorder = ContinuousFailureCapture("owner-a", { now }, { 1000 }, onFormatObserved = journal::add)
+        val install = ContinuousFormatObservation(1, 0, "INSTALL")
+        recorder.observeFormat(install)
+        recorder.observeFormat(install)
+        assertEquals(1, journal.size)
+        assertNull(journal.first()["formatCutPending"])
+        val first = recorder.capture(IllegalStateException("PRODUCT_SOURCE_WAIT_TIMEOUT"), ContinuousFailureStage.SOURCE_WATCHDOG)
+        val mutableFields = mutableListOf(ContinuousTrackFieldEvidence("CSD_0", "EMPTY", null, true, null, 0))
+        now = 200
+        recorder.observeFormat(ContinuousFormatObservation(2, 0, "INCOMPLETE", mutableFields), false)
+        mutableFields.clear()
+        assertEquals(2, journal.size)
+        assertEquals("EMPTY|UNKNOWN|true|UNKNOWN|0", journal.last()["formatField_CSD_0"])
+        assertEquals("false", journal.last()["formatCutPending"])
+        assertEquals("owner-a", journal.last()["recordingSessionId"])
+        assertEquals("INSTALL", first.facts()["formatDecision"])
+        assertSame(first, recorder.value)
+        val next = ContinuousFailureCapture("owner-b", { now }, { 1000 })
+        assertNull(next.capture(Exception(), ContinuousFailureStage.INPUT).facts()["formatDecision"])
+    }
+
+    @Test fun typedFormatFailureUsesOnlyItsMatchingObservedCountsAndFixedFields() {
+        val recorder = capture()
+        recorder.observeFormat(ContinuousFormatObservation(1, 0, "INSTALL"), false)
+        val fields = listOf(ContinuousTrackFieldEvidence("CSD_0", "CHANGED", true, true, 18, 20),
+            ContinuousTrackFieldEvidence("/storage/private", "CHANGED", true, true))
+        val mismatch = recorder.capture(ContinuousTrackFormatException(ContinuousTrackFormatSpec.INCOMPATIBLE, fields),
+            ContinuousFailureStage.OUTPUT_PREPARE).facts()
+        assertEquals("CHANGED|true|true|18|20", mismatch["formatField_CSD_0"])
+        assertNull(mismatch["formatNotifications"]); assertNull(mismatch["formatCutPending"])
+        assertFalse(mismatch.toString().contains("private"))
+        val matching = capture()
+        matching.observeFormat(ContinuousFormatObservation(2, 0, "INCOMPATIBLE", fields), true)
+        val facts = matching.capture(ContinuousTrackFormatException(ContinuousTrackFormatSpec.INCOMPATIBLE, fields),
+            ContinuousFailureStage.OUTPUT_PREPARE).facts()
+        assertEquals("2", facts["formatNotifications"]); assertEquals("true", facts["formatCutPending"])
+        assertEquals("1000", facts["formatObservedElapsedMs"])
+    }
+
+    @Test fun formatJournalFailureDoesNotThrowOrEraseTheSnapshot() {
+        val recorder = ContinuousFailureCapture("owner", { 100 }, { 1000 }, onFormatObserved = { error("storage unavailable") })
+        recorder.observeFormat(ContinuousFormatObservation(1, 0, "INSTALL"))
+        assertEquals("INSTALL", recorder.capture(Exception(), ContinuousFailureStage.INPUT).facts()["formatDecision"])
+    }
+
+    @Test fun slowNumericInspectionCannotBorrowAFormatObservedAfterTheCatch() {
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        val recorder = capture(numbers = {
+            entered.countDown(); check(release.await(2, TimeUnit.SECONDS)); ContinuousFailureNumbers()
+        })
+        recorder.observeFormat(ContinuousFormatObservation(1, 0, "INSTALL"))
+        val worker = Thread { recorder.capture(Exception(), ContinuousFailureStage.OUTPUT_PREPARE) }
+        worker.start()
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            recorder.observeFormat(ContinuousFormatObservation(2, 1, "KEEP"))
+        } finally { release.countDown(); worker.join(2_000) }
+        assertFalse(worker.isAlive)
+        assertEquals("INSTALL", recorder.value!!.facts()["formatDecision"])
+        assertEquals("1", recorder.value!!.facts()["formatNotifications"])
+    }
+
     private fun capture(id: String = "run-a", at: Long = 1_000,
                         numbers: (Throwable) -> ContinuousFailureNumbers = { ContinuousFailureNumbers() }) =
         ContinuousFailureCapture(id, { at }, { 10_000 }, numbers)

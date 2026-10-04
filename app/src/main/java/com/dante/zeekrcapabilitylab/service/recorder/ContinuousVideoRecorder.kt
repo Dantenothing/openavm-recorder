@@ -77,6 +77,11 @@ internal class ContinuousVideoRecorder(
     private var cutCallback: ((EncodedSegmentSummary) -> Unit)? = null // codec worker
     private var writerFormat: MediaFormat? = null // writer worker
     private val trackFormatState = ContinuousTrackFormatState() // codec worker
+    private var allowFormatRollover = false // frozen on first codec prepare
+    private var pendingTrackFormat: ContinuousTrackFormatAndroid.Snapshot? = null // codec worker
+    private var nextTargetFormatObservation: ContinuousFormatObservation? = null // writer worker
+    @Volatile private var lastAppliedFormatNotification = 0L
+    @Volatile private var lastCancelledFormatNotification = 0L
     private var target: Target? = null // writer worker
     @Volatile var lastCompleted: EncodedSegmentSummary? = null; private set
     @Volatile private var encodedFrames = 0L
@@ -93,13 +98,18 @@ internal class ContinuousVideoRecorder(
         data class Frame(val bytes: ByteArray, val ptsUs: Long, val flags: Int,
                          val stamp: ObservedCodecClock.Stamp) : Item
         data class Boundary(val done: (EncodedSegmentSummary) -> Unit,
-                            val nextKeyframe: ObservedCodecClock.Stamp) : Item
+                            val nextKeyframe: ObservedCodecClock.Stamp,
+                            val rollover: TrackRollover? = null) : Item
     }
+    private data class TrackRollover(val snapshot: ContinuousTrackFormatAndroid.Snapshot,
+                                     val observation: ContinuousFormatObservation)
 
     override fun prepare(config: RecorderConfig, output: RecordingOutputHandle) {
         check(!closing && !ending && firstFailure.get() == null)
         observed(ContinuousFailureStage.SESSION_SETUP) { call(codecHandler) {
             if (codec == null) {
+                allowFormatRollover = config.recordingMode == RecordingMode.NORMAL &&
+                    config.source.sourceRole in setOf(RecordingSourceRole.CABIN, RecordingSourceRole.IR)
                 codec = MediaCodec.createByCodecName(codecName)
                 codec!!.configure(format(config), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 input = codec!!.createInputSurface()
@@ -107,7 +117,8 @@ internal class ContinuousVideoRecorder(
         } }
         observed(ContinuousFailureStage.OUTPUT_PREPARE) { call(writerHandler) {
             check(!closing && target == null) { "CONTINUOUS_OUTPUT_STILL_OWNED" }
-            target = Target(output)
+            target = Target(output, nextTargetFormatObservation)
+            nextTargetFormatObservation = null
             writerFormat?.let { target!!.configure(it) }
         } }
         schedulePump()
@@ -138,7 +149,12 @@ internal class ContinuousVideoRecorder(
         return EncoderEvidence(encodedFrames, firstPtsUs, lastPtsUs, lastOutputElapsedMs, bytes, count, completedFiles,
             encodedBytes = encodedBytes, writtenFrames = writtenFrames, lastWriteElapsedMs = lastWriteElapsedMs,
             formatNotifications = formats.notificationCount, repeatedFormatNotifications = formats.compatibleRepeats,
-            formatDecision = formats.decision)
+            formatDecision = when {
+                formats.decision != "ROLLOVER_PENDING" -> formats.decision
+                formats.notificationCount <= lastCancelledFormatNotification -> "ROLLOVER_CANCELLED"
+                formats.notificationCount <= lastAppliedFormatNotification -> "ROLLOVER_APPLIED"
+                else -> formats.decision
+            })
     }
 
     private val drain = object : Runnable {
@@ -152,28 +168,60 @@ internal class ContinuousVideoRecorder(
                     if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         if (firstFailure.get() != null || abandoned) continue
                         try {
+                            // stop() publishes ending before its codec-worker cancellation runs. A
+                            // format notification can win that race; never turn a revoked cut fatal.
+                            if (ending || closing) cancelPendingFormatForEnd()
                             val snapshot = try { ContinuousTrackFormatAndroid.capture(active.outputFormat) }
-                                catch (error: Throwable) { trackFormatState.incomplete(); throw error }
+                                catch (error: Exception) {
+                                    val terminal = ending || closing
+                                    trackFormatState.incomplete(error, terminal)
+                                    if (terminal) {
+                                        pendingTrackFormat = null; cutCallback = null
+                                        continue
+                                    }
+                                    throw error
+                                }
                             // Decide before dequeueing subsequent samples. An asynchronous writer-only
                             // check could let an already-running pump write changed data to the old track.
-                            if (trackFormatState.accept(snapshot.spec) == ContinuousFormatDecision.INSTALL) {
-                                check(writerHandler.post {
-                                    if (closing || abandoned || firstFailure.get() != null) return@post
-                                    try {
-                                        writerFormat = snapshot.format
-                                        target?.configure(snapshot.format)
-                                        schedulePump()
-                                    } catch (error: Throwable) { fail(error, ContinuousFailureStage.OUTPUT_PREPARE) }
-                                }) { "WRITER_QUEUE_REJECTED" }
+                            when (trackFormatState.accept(snapshot.spec,
+                                cutPending = allowFormatRollover && cutCallback != null && !ending && !closing,
+                                terminal = ending || closing)) {
+                                ContinuousFormatDecision.INSTALL -> check(writerHandler.post {
+                                        if (closing || abandoned || firstFailure.get() != null) return@post
+                                        try {
+                                            writerFormat = snapshot.format
+                                            target?.configure(snapshot.format)
+                                            schedulePump()
+                                        } catch (error: Throwable) { fail(error, ContinuousFailureStage.OUTPUT_PREPARE) }
+                                    }) { "WRITER_QUEUE_REJECTED" }
+                                ContinuousFormatDecision.KEEP -> Unit
+                                ContinuousFormatDecision.STAGE_ROLLOVER -> pendingTrackFormat = snapshot
+                                ContinuousFormatDecision.DISCARD_TERMINAL -> {
+                                    pendingTrackFormat = null; cutCallback = null
+                                }
                             }
-                        } catch (error: Throwable) { fail(error, ContinuousFailureStage.OUTPUT_PREPARE) }
+                        } catch (error: Throwable) {
+                            // ending can flip after accept read it. Preserve the rejection evidence,
+                            // but revoke that uncommitted format instead of abandoning a valid old file.
+                            if ((ending || closing) && error is ContinuousTrackFormatException) {
+                                pendingTrackFormat = null; cutCallback = null
+                                trackFormatState.discardAtEnd()
+                                continue
+                            }
+                            // Publish the exact rejected observation before first-failure capture.
+                            observeFormat(cutPending = cutCallback != null)
+                            fail(error, ContinuousFailureStage.OUTPUT_PREPARE)
+                        } finally { observeFormat(cutPending = cutCallback != null) }
                     } else if (index >= 0) {
                         try {
+                            // A final EOS carrying bytes cannot create a fresh file for a pending format.
+                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) cancelPendingFormatForEnd()
                             if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
                                 firstFailure.get() == null && !abandoned) {
                                 receive(active, index, info)
                             }
                             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                cancelPendingFormatForEnd()
                                 eosSeen = true; eos.countDown(); schedulePump()
                             }
                         } finally { active.releaseOutputBuffer(index, false) }
@@ -187,14 +235,34 @@ internal class ContinuousVideoRecorder(
     }
 
     private fun receive(active: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-        val placement = planner.accept(info.presentationTimeUs,
-            info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) ?: return
+        if (ending) cancelPendingFormatForEnd()
+        if (trackFormatState.discardTerminalMedia) return
+        val keyframe = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+        val placement: KeyframeSegmentPlanner.Placement
+        val rollover: TrackRollover?
+        try {
+            // Check before planner.accept can drop a sample or consume the pending cut.
+            trackFormatState.beforeMediaSample(keyframe)
+            placement = planner.accept(info.presentationTimeUs, keyframe) ?: return
+            rollover = if (trackFormatState.commitBoundary(placement.cutBefore)) {
+                TrackRollover(requireNotNull(pendingTrackFormat), trackFormatState.snapshot()).also { pendingTrackFormat = null }
+            } else null
+        } catch (error: ContinuousTrackFormatException) {
+            if (ending || closing) {
+                pendingTrackFormat = null; cutCallback = null
+                trackFormatState.discardAtEnd()
+                observeFormat(cutPending = false)
+                return
+            }
+            observeFormat(cutPending = cutCallback != null)
+            throw error
+        }
         val epoch = System.currentTimeMillis()
         val elapsedNs = SystemClock.elapsedRealtimeNanos()
         val stamp = clock.observe(info.presentationTimeUs, elapsedNs, epoch)
         if (placement.cutBefore) {
             val done = requireNotNull(cutCallback); cutCallback = null
-            check(queue.offer(0) { Item.Boundary(done, stamp) }) { "ENCODER_QUEUE_FULL" }
+            check(queue.offer(0) { Item.Boundary(done, stamp, rollover) }) { "ENCODER_QUEUE_FULL" }
         }
         check(queue.offer(info.size) {
             val source = requireNotNull(active.getOutputBuffer(index)).duplicate()
@@ -226,9 +294,23 @@ internal class ContinuousVideoRecorder(
                     when (val item = ticket.value) {
                         is Item.Frame -> if (!abandoned && firstFailure.get() == null) target?.write(item)
                         is Item.Boundary -> {
-                            val summary = finishTarget(item.nextKeyframe.epochMs, item.nextKeyframe.elapsedNs / 1_000_000L,
-                                closeOutput = true, nextKeyframePtsUs = item.nextKeyframe.ptsUs)
-                            if (!ending && !closing && firstFailure.get() == null && summary != null) item.done(summary)
+                            val continued = finishContinuousTrackBoundary(
+                                finish = { finishTarget(item.nextKeyframe.epochMs, item.nextKeyframe.elapsedNs / 1_000_000L,
+                                    closeOutput = true, nextKeyframePtsUs = item.nextKeyframe.ptsUs) },
+                                canContinue = { !ending && !closing && !abandoned && firstFailure.get() == null &&
+                                    (item.rollover == null || !eosSeen) },
+                                newFormat = item.rollover,
+                                applyFormat = { transition ->
+                                    writerFormat = transition.snapshot.format
+                                    nextTargetFormatObservation = transition.observation
+                                },
+                                done = item.done,
+                            )
+                            if (!continued) item.rollover?.observation?.let { observation ->
+                                nextTargetFormatObservation = null
+                                lastCancelledFormatNotification = maxOf(lastCancelledFormatNotification, observation.notificationCount)
+                                runCatching { failureCapture?.observeFormat(observation.copy(decision = "ROLLOVER_CANCELLED"), cutPending = false) }
+                            }
                         }
                     }
                 } finally { queue.release(ticket) }
@@ -265,7 +347,10 @@ internal class ContinuousVideoRecorder(
     override fun stop() {
         ending = true
         if (started) {
-            call(codecHandler) { if (!eosSeen) codec!!.signalEndOfInputStream() }
+            call(codecHandler) {
+                cancelPendingFormatForEnd()
+                if (!eosSeen) codec!!.signalEndOfInputStream()
+            }
             check(eos.await(3, TimeUnit.SECONDS)) { "ENCODER_EOS_TIMEOUT" }
         } else { eosSeen = true; eos.countDown() }
         schedulePump()
@@ -279,6 +364,7 @@ internal class ContinuousVideoRecorder(
         // Always called behind RecorderSession's existing camera-producer fence, also on startup failure.
         closing = true; ending = true
         call(codecHandler) {
+            cancelPendingFormatForEnd()
             codecHandler.removeCallbacks(drain)
             val active = codec
             if (active != null) {
@@ -312,6 +398,18 @@ internal class ContinuousVideoRecorder(
             encodedFrames, encodedBytes, completedFiles, sourceAgeMs = null)
     }
 
+    private fun observeFormat(cutPending: Boolean) {
+        runCatching { failureCapture?.observeFormat(trackFormatState.snapshot(), cutPending) }
+    }
+
+    /** No new track at terminal EOS: retain only samples already written under the old contract. */
+    private fun cancelPendingFormatForEnd() {
+        if (pendingTrackFormat == null) return
+        pendingTrackFormat = null; cutCallback = null
+        trackFormatState.cancelPending()
+        observeFormat(cutPending = false)
+    }
+
     private fun captureFailure(error: Throwable, stage: ContinuousFailureStage) {
         runCatching { failureCapture?.capture(error, stage, cachedFailureSample) }
     }
@@ -342,7 +440,8 @@ internal class ContinuousVideoRecorder(
         return requireNotNull(result.get()).getOrThrow()
     }
 
-    private inner class Target(val output: RecordingOutputHandle) {
+    private inner class Target(val output: RecordingOutputHandle,
+                               private var formatObservation: ContinuousFormatObservation? = null) {
         private var muxer: MediaMuxer? = output.createMuxer()
         private var track = -1
         private var started = false
@@ -361,6 +460,11 @@ internal class ContinuousVideoRecorder(
             muxer!!.writeSampleData(track, ByteBuffer.wrap(frame.bytes), info)
             fileClock.written(frame.stamp)
             writtenFrames++; lastWriteElapsedMs = SystemClock.elapsedRealtime()
+            formatObservation?.let { observation ->
+                formatObservation = null // Exactly once, and only after this track accepted a real frame.
+                lastAppliedFormatNotification = maxOf(lastAppliedFormatNotification, observation.notificationCount)
+                runCatching { failureCapture?.observeFormat(observation.copy(decision = "ROLLOVER_APPLIED"), cutPending = false) }
+            }
         }
         fun finish(abandoned: Boolean, nextKeyframePtsUs: Long?) {
             val active = muxer ?: return

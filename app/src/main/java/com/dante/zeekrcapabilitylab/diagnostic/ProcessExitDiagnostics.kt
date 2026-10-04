@@ -63,6 +63,7 @@ internal object ProcessExitDiagnostics {
             put("lastJavaCrash", crash ?: JsonNull)
             put("persistedEvents", ProcessExitReport.events(history.events + EventLogger.events.value))
             put("continuousFailures", ProcessExitReport.continuousFailures(history.events + EventLogger.events.value))
+            put("codecFormats", CodecFormatReport.report((history.events + EventLogger.events.value).map(CodecFormatReport::row)))
             put("historyBytesRead", history.bytes)
             put("historyReadErrors", history.errors)
             put("historyByteLimit", HISTORY_BYTES)

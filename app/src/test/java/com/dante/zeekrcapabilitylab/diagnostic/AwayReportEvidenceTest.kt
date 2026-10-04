@@ -5,6 +5,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AwayReportEvidenceTest {
+    @Test fun eachChannelsFormatEvidenceSurvivesStopAndPrimaryWatchdogInOneCopy() {
+        val id = "34695741-c1ed-4e36-bccf-a85e4015a775"
+        fun event(name: String, at: Long, channel: String, facts: Map<String, String>) =
+            AwayRow(name, at, at, at, "process-a", mapOf("recordingSessionId" to id, "channelId" to channel) + facts)
+        val events = listOf(event("RECORDER_START", 1, "SURROUND", emptyMap()),
+            event("RECORDER_CODEC_FORMAT", 2, "FRONT_CABIN", mapOf("formatDecision" to "INSTALL", "formatNotifications" to "1")),
+            event("RECORDER_CODEC_FORMAT", 60_002, "FRONT_CABIN", mapOf("formatDecision" to "INCOMPATIBLE",
+                "formatNotifications" to "2", "formatCutPending" to "true", "formatField_CSD_0" to "CHANGED|true|true|18|20")),
+            event("RECORDER_CONTINUOUS_FAILED", 75_003, "SURROUND", mapOf("errorCode" to "PRODUCT_SOURCE_WAIT_TIMEOUT")),
+            event("RECORDER_STOP", 75_004, "SURROUND", emptyMap())) +
+            (1..100).map { event("POWER_PASSIVE_SNAPSHOT", 76_000L + it, "SURROUND", mapOf("detail" to "x".repeat(700))) }
+        val report = AwayReportEvidence.bounded(buildJsonObject { put("recordingEvidence", AwayReportEvidence.recording(events)) }, events)
+        val formats = report["recordingEvidence"]!!.jsonObject["codecFormats"]
+        assertNotNull("Per-channel format evidence must survive independently of the later primary fault", formats)
+        val group = formats!!.jsonObject["groups"]!!.jsonArray.single().jsonObject
+        assertEquals("FRONT_CABIN", group["channelId"]!!.jsonPrimitive.content)
+        assertEquals("INSTALL", group["firstAvailable"]!!.jsonObject["format"]!!.jsonObject["decision"]!!.jsonPrimitive.content)
+        val latest = group["latestAvailable"]!!.jsonObject["format"]!!.jsonObject
+        assertEquals("INCOMPATIBLE", latest["decision"]!!.jsonPrimitive.content)
+        assertEquals("CHANGED", latest["fields"]!!.jsonObject["CSD_0"]!!.jsonObject["kind"]!!.jsonPrimitive.content)
+        assertTrue(report.toString().toByteArray().size <= AwayReportEvidence.MAX_BYTES)
+        assertFalse(report["timeline"]!!.toString().contains("RECORDER_CODEC_FORMAT"))
+    }
+
     private val rows = listOf(
         AwayRow("VEHICLE_AWAY_TEST_MARKER", 10_000, 100, 100, "process-a"),
         AwayRow("RECORDER_START", 10_100, 200, 200, "process-a"),

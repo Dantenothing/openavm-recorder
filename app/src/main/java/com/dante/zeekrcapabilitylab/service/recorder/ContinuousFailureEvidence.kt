@@ -29,6 +29,7 @@ internal data class ContinuousFailureEvidence(
     val exceptionType: String, val causeType: String,
     val atEpochMs: Long, val atElapsedMs: Long, val numbers: ContinuousFailureNumbers,
     val sample: ContinuousFailureSample?, val captureOrder: Long,
+    val formatFacts: Map<String, String> = emptyMap(),
 ) {
     fun facts(): Map<String, String> = linkedMapOf(
         "failureSchema" to "1", "failureCategory" to "CONTINUOUS_PIPELINE_FAILURE",
@@ -45,7 +46,7 @@ internal data class ContinuousFailureEvidence(
         "faultQueueBytes" to known(sample?.queueBytes), "faultQueueItems" to known(sample?.queueItems),
         "faultEncodedFrames" to known(sample?.encodedFrames), "faultEncodedBytes" to known(sample?.encodedBytes),
         "faultCompletedFiles" to known(sample?.completedFiles), "faultSourceAgeAtSampleMs" to known(sample?.sourceAgeMs),
-    )
+    ) + ContinuousFormatFacts.sanitize(formatFacts)
 
     companion object {
         private fun known(value: Any?): String = value?.toString() ?: "UNKNOWN"
@@ -56,7 +57,7 @@ internal data class ContinuousFailureEvidence(
             "faultEpochMs", "faultElapsedMs", "faultCaptureOrder", "codecErrorCode", "errno", "codecRecoverable", "codecTransient",
             "numericSourceType", "numericCauseDepth", "snapshotKind", "snapshotSampledAtElapsedMs", "snapshotAgeMs",
             "faultQueueBytes", "faultQueueItems", "faultEncodedFrames", "faultEncodedBytes", "faultCompletedFiles",
-            "faultSourceAgeAtSampleMs")
+            "faultSourceAgeAtSampleMs") + ContinuousFormatFacts.keys
     }
 }
 
@@ -67,10 +68,51 @@ internal class ContinuousFailureCapture(
     private val wall: () -> Long,
     private val numeric: (Throwable) -> ContinuousFailureNumbers = { ContinuousFailureNumbers() },
     private val onCaptured: (ContinuousFailureEvidence) -> Unit = {},
+    private val onFormatObserved: (Map<String, String>) -> Unit = {},
 ) {
     private val first = AtomicReference<ContinuousFailureEvidence?>()
     private val sequence = AtomicLong()
+    private val latestFormat = AtomicReference<Map<String, String>>(emptyMap())
     val value get() = first.get()
+
+    /** Called only for codec-format notifications / decisions, never per frame or from an export. */
+    fun observeFormat(observation: ContinuousFormatObservation, cutPending: Boolean? = null) {
+        val signature = ContinuousFormatFacts.observation(observation, cutPending, 0) - "formatObservedElapsedMs"
+        if ("formatDecision" !in signature) return
+        while (true) {
+            val previous = latestFormat.get()
+            if (previous - "formatObservedElapsedMs" == signature) return
+            val next = signature + ("formatObservedElapsedMs" to elapsed().toString())
+            if (latestFormat.compareAndSet(previous, next)) {
+                runCatching { onFormatObserved(next + ("recordingSessionId" to sessionId)) }
+                return
+            }
+        }
+    }
+
+    private fun typedFormat(error: Throwable?): ContinuousTrackFormatException? {
+        var current = error
+        repeat(4) {
+            if (current is ContinuousTrackFormatException) return current as ContinuousTrackFormatException
+            current = runCatching { current?.cause }.getOrNull()
+        }
+        return null
+    }
+
+    private fun formatAtFailure(error: ContinuousTrackFormatException?): Map<String, String> {
+        val latest = latestFormat.get()
+        if (error == null) return latest
+        val decision = when (error.errorCode) {
+            ContinuousTrackFormatSpec.INCOMPATIBLE -> "INCOMPATIBLE"
+            ContinuousTrackFormatSpec.INCOMPLETE -> "INCOMPLETE"
+            else -> return emptyMap()
+        }
+        val fields = ContinuousFormatFacts.differences(error.fields)
+        val matching = latest["formatDecision"] == decision &&
+            latest.filterKeys { it.startsWith("formatField_") } == fields.filterKeys { it.startsWith("formatField_") }
+        // Counts / cut state only belong to this failure when its exact observed field set matches.
+        return (if (matching) latest else emptyMap()) + fields + ("formatDecision" to decision)
+    }
 
     /** Only clocks, typed exception fields, and an ALREADY cached immutable sample. No I/O or native probes. */
     fun capture(error: Throwable?, stage: ContinuousFailureStage, sample: ContinuousFailureSample? = null,
@@ -78,13 +120,16 @@ internal class ContinuousFailureCapture(
         first.get()?.let { return it }
         val order = sequence.incrementAndGet()
         val at = elapsed(); val epoch = wall()
-        val code = knownCode(signal) ?: knownCode(runCatching { error?.message }.getOrNull())
+        val formatError = typedFormat(error)
+        val format = formatAtFailure(formatError)
+        val code = formatError?.errorCode?.takeIf { it in setOf(ContinuousTrackFormatSpec.INCOMPLETE, ContinuousTrackFormatSpec.INCOMPATIBLE) }
+            ?: knownCode(signal) ?: knownCode(runCatching { error?.message }.getOrNull())
             ?: if (error == null) "UNCLASSIFIED_SIGNAL" else "UNCLASSIFIED_THROWABLE"
         val candidate = ContinuousFailureEvidence(sessionId, stage, code,
             ContinuousFailureEvidence.safeType(error?.javaClass?.name),
             ContinuousFailureEvidence.safeType(runCatching { error?.cause?.javaClass?.name }.getOrNull()), epoch, at,
             error?.let { runCatching { numeric(it) }.getOrNull() } ?: ContinuousFailureNumbers(),
-            sample?.takeIf { it.sampledAtElapsedMs in 0..at }, order)
+            sample?.takeIf { it.sampledAtElapsedMs in 0..at }, order, format)
         while (true) {
             val existing = first.get()
             if (existing != null && existing.captureOrder < order) return existing
