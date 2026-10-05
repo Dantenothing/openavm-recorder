@@ -72,8 +72,9 @@ val generatePreflightEvidence by tasks.registering {
             "returnFeatureAcceptance" to mapOf("version" to "5.0.0-sleep4", "versionCode" to 101,
                 "reportedOn" to "2026-09-25", "evidenceType" to "OWNER_CONFIRMATION",
                 "scope" to "Latest delivered sleep4 reported working; no independent final-binary vehicle recording claimed"),
-            "drivePreview" to mapOf("version" to "5.1.0-drive8", "versionCode" to 113,
-                "scope" to "Drive8 adds a guarded format rollover for direct-codec file cuts and bounded per-channel codec-format evidence. Existing source-loss timeout, cleanup ownership gates, presentation and installation/update setup choices remain. New binary awaits vehicle verification; startup preview recovery and long-duration multi-camera recording are not established.",
+            "drivePreview" to mapOf("version" to "5.1.0-drive9", "versionCode" to 114,
+                "scope" to "Drive9 adds one bounded first-frame request retry and one clean preview reopen after source loss, while preserving native release gates and recording stop authority. Playback starts on opening, map zoom controls remain visible and cabin recording uses declared sizes up to 720p. Source-driver cause, higher-resolution concurrent recording and final-binary vehicle behaviour remain unverified.",
+                "drive8OwnerEvidence" to "Owner reports successful continuous recording and playback after manually restarting, but black home/floating preview on entry and after stopping. The supplied JSON documents an earlier zero-frame surround run, a 15-second source watchdog and acknowledged cleanup; incomplete CSD follows camera close. It does not document the later successful run or identify the vendor source-loss cause.",
                 "drive7OwnerEvidence" to "A cabin format incompatibility occurs 60.022 seconds after its segment start; surround then loses source frames and its 15-second watchdog fires. A separate zero-frame surround run reports incomplete format only after manual stop. Supplied reports do not contain the actual changed fields. These are separate failure paths, not evidence of a single camera hardware defect.",
                 "drive6OwnerEvidence" to "Four complete supplied failure events report ENCODER_FORMAT_CHANGED_MID_RUN about 60 seconds after cabin segment start. This identifies the unconditional second-format guard, but old reports do not retain the two formats. Later surround source loss correlates with cabin cleanup without proving a HAL cause. Initial black preview and hardware compatibility remain unverified in drive7.",
                 "drive4OwnerEvidence" to "Owner supplied about 45 seconds of three finalized camera files, 44 GPS and 178 vehicle samples, and successful local map rendering. Surround runtime reported CAMERA_UNAVAILABLE with cleanup confirmed. Owner reported home preview black after stop, playback proportions/library cover regressions, and an unconfirmed head-unit reboot when returning and unlocking the car. This does not verify the fixes or online road tiles in this binary.",
@@ -102,8 +103,8 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 113
-        versionName = "5.1.0-drive8"
+        versionCode = 114
+        versionName = "5.1.0-drive9"
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("boolean", "CAMERA_CONCURRENCY_PROBE_ENABLED", cameraConcurrencyProbe.toString())

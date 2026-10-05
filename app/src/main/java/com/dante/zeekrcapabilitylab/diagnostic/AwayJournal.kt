@@ -50,7 +50,7 @@ internal object AwayJournal {
         com.dante.zeekrcapabilitylab.service.recorder.ContinuousFailureEvidence.FACT_KEYS + setOf(
             "controlsSession", "sleepCycle", "windowSession", "sleepPhase", "pid", "overlayAttached", "overlayShown",
             "screenUsable", "captureReleased", "recorderRunning", "previewRunning", "auxiliaryActive", "nativeIdle", "glIdle", "previewOwner", "returnMode",
-            "profileAttempt", "profileWaitMs", "profileStatus", "requestedRole")
+            "profileAttempt", "profileWaitMs", "profileStatus", "requestedRole") + PreviewStartupEvidence.KEYS
     fun init(context:Context) {
         if(file!=null)return
         file=AtomicFile(File(context.filesDir,"diagnostics/away-timeline.json"))
@@ -63,7 +63,7 @@ internal object AwayJournal {
     }
     fun observe(e:ProbeEvent) {
         if(file==null || (e.eventName !in names && !e.eventName.startsWith("RECORDER_VEHICLE_AWAY_") && !e.eventName.startsWith("RECORDER_CAMERA_RECOVERY_") &&
-            !e.eventName.startsWith("MIRROR_SLEEP_") && !e.eventName.startsWith("MIRROR_PREVIEW_")))return
+            !e.eventName.startsWith("MIRROR_SLEEP_") && !e.eventName.startsWith("MIRROR_PREVIEW_") && !PreviewStartupEvidence.accepts(e.eventName)))return
         val facts=AwayReportEvidence.sanitizeFormatFacts(e.payload.filterKeys { it in safeKeys })
             .mapValues { it.value.take(160) }.toMutableMap()
         facts["errorCode"]?.let { value ->
@@ -125,6 +125,7 @@ internal object AwayJournal {
             "recordingEvidence" to AwayReportEvidence.recording(scoped),
             "lifecycleEvidence" to AwayReportEvidence.lifecycle(scoped),
             "mirrorSleep" to MirrorSleepEvidence.report(all),
+            "previewStartup" to PreviewStartupEvidence.report(all),
             "recorderFaultInTestWindow" to AwayReportEvidence.faultInWindow(scoped,recorderFault,BuildConfig.VERSION_CODE),
             "videoIncluded" to false)
         AwayReportEvidence.bounded(base,scoped)
@@ -135,4 +136,8 @@ internal object AwayJournal {
             "runId" to UUID.randomUUID().toString(),"version" to BuildConfig.VERSION_NAME,"versionCode" to BuildConfig.VERSION_CODE,
             "startEpochMs" to System.currentTimeMillis(),"phase" to "NATURAL_AWAY_OBSERVATION","tests" to emptyList<String>(),"away" to data)
     }
+    /** Called on IO by the short-report exporter; no new camera request or probe. */
+    fun previewReport(): JsonObject = io.submit<JsonObject> {
+        drainAndSave(); PreviewStartupEvidence.report(rows.toList())
+    }.get(5, TimeUnit.SECONDS)
 }

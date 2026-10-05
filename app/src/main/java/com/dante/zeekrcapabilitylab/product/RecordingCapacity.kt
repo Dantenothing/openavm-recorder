@@ -37,7 +37,7 @@ object RecordingCapacityMath {
         if (primaryStorage == null || destination == null || cabinChannels !in 0..2) return null
         val primary = if (primaryStorage == destination) primaryBitrateBps?.takeIf { it > 0 } ?: return null else 0L
         val cabin = if (destination == RecordingStorageKind.INTERNAL)
-            cabinChannels.toLong() * com.dante.zeekrcapabilitylab.service.recorder.RecordingChannelPolicy.BITRATE else 0L
+            cabinChannels.toLong() * com.dante.zeekrcapabilitylab.service.recorder.CabinRecordingProfile.MAX_BITRATE else 0L
         if (primary > Long.MAX_VALUE - cabin) return null
         return (primary + cabin).takeIf { it > 0 }
     }

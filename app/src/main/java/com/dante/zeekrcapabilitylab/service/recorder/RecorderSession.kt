@@ -2563,6 +2563,7 @@ class RecorderSession(
                 cfg.effectiveSegmentSeconds()
             }
         com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.recordRun(context, state)
+        if (recorder is ProductContinuousRecorder && cfg.recordingMode == RecordingMode.NORMAL) armFirstFrameRecovery(recorder, generation)
         if (recorder is NativeFileRecordingEncoder) {
             val nativeOutput = output as UsbMediaStoreRecordingOutputHandle
             nativeSidecars[nativeOutput]?.let { seed ->
@@ -2579,6 +2580,36 @@ class RecorderSession(
         if (output is UsbMediaStoreRecordingOutputHandle) {
             scheduleUsbPresenceWatchdog(generation, output)
         }
+    }
+
+    /** Retry the existing request once. Never reopen a camera, restart a file or extend its watchdog. */
+    private fun armFirstFrameRecovery(recorder: ProductContinuousRecorder, generation: Long) {
+        val device = cameraDevice ?: return
+        val capture = captureSession ?: return
+        val encoder = activeEncoderSurface ?: return
+        val run = state.recordingSessionId ?: return
+        val manualGeneration = manualSessionGeneration
+        val recovery = FirstFrameRecovery(SystemClock.elapsedRealtime())
+        fun ownsRequest(): Boolean = recordingEncoder === recorder && cameraDevice === device && captureSession === capture &&
+            activeEncoderSurface === encoder && segmentGeneration == generation && manualSessionGeneration == manualGeneration &&
+            state.recordingSessionId == run && recording && !stopping && !releasing && !releaseRequested &&
+            !cleanupUnconfirmed && closeTransaction == null && statePublication.allowsOpen(run) &&
+            com.dante.zeekrcapabilitylab.mirror.MirrorDisplayState.usable(context)
+        fun evidence(stage: String) = EventLogger.logEvent(Categories.SYSTEM, "RECORDER_SOURCE_STARTUP_$stage", payload = mapOf(
+            "recordingSessionId" to run, "channelId" to (channelIdentity?.channelId ?: "SURROUND"),
+            "generation" to generation.toString(), "sourceObserved" to recorder.sourceFrameObserved.toString(),
+            "captureFrames" to frameStats.count.toString()))
+        cameraHandler?.postDelayed({
+            if (!recovery.request(SystemClock.elapsedRealtime(), if (recorder.sourceFrameObserved) 1 else 0, ownsRequest())) return@postDelayed
+            evidence("REQUEST_REISSUED")
+            try {
+                applyActiveCaptureFlow(capture, device, encoder, null, generation)
+                cameraHandler?.postDelayed({ if (ownsRequest()) evidence("RESULT") }, 2_000)
+            } catch (error: Throwable) {
+                evidence("REQUEST_FAILED")
+                failContinuousRun("SOURCE_STARTUP_REQUEST_FAILED", outputLost = false, originalError = error)
+            }
+        }, FirstFrameRecovery.WAIT_MS)
     }
 
     private fun fallbackToRecorderOnly(

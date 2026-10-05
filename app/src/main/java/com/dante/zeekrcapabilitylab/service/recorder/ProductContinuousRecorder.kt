@@ -52,6 +52,7 @@ internal class ProductContinuousRecorder(
     private var codec: MediaCodec? = null
     private var codecInput: Surface? = null
     @Volatile private var gl: ContinuousCameraInput? = null
+    val sourceFrameObserved: Boolean get() = gl?.firstFrameElapsedMs != null
     private var codecLaunched = false
     private var writerLaunched = false
     private val ready = CountDownLatch(1)

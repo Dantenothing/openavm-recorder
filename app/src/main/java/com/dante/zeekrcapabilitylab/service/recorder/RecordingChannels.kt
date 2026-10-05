@@ -6,7 +6,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.AtomicFile
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
-import com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile
+import com.dante.zeekrcapabilitylab.product.CameraRuntime
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -120,8 +120,10 @@ object RecordingChannels {
             val resolved = roles.associateWith { role -> runCatching {
                 val source = requireNotNull(ProductRecorderConfigFactory.resolveSource(context, role)) { "SOURCE_UNAVAILABLE" }
                 require(source.cameraId != config.cameraId) { "CAMERA_ALREADY_PRIMARY" }
-                config.copy(source = source.copy(profile = CameraFormatProfile(ProfileSize(RecordingChannelPolicy.WIDTH,
-                    RecordingChannelPolicy.HEIGHT), RecordingChannelPolicy.BITRATE), layoutKind = RecordingLayoutKind.SINGLE_V1, laneLayout = null),
+                val profile = requireNotNull(CabinRecordingProfile.choose(
+                    CameraRuntime.videoSizeCandidates(context, source.cameraId).map { ProfileSize(it.width, it.height) }
+                )) { "CABIN_SIZE_UNAVAILABLE" }
+                config.copy(source = source.copy(profile = profile, layoutKind = RecordingLayoutKind.SINGLE_V1, laneLayout = null),
                     requestedFrameRate = RecordingChannelPolicy.FPS, strictFrameRate = false,
                     sharedInputRecordingEnabled = false, mirrorPreviewEnabled = false, auxiliaryChannels = emptyList(),
                     storagePreference = RecordingStoragePreference.INTERNAL_ONLY)

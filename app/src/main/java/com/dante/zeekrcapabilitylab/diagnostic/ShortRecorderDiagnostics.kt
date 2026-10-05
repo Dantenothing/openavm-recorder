@@ -123,6 +123,7 @@ object ShortRecorderDiagnostics {
             put("processExit", RecentRuntimeEvidence.processExits(exits))
             put("continuousFailures", exits["continuousFailures"] ?: JsonNull)
             put("codecFormats", exits["codecFormats"] ?: JsonNull)
+            put("previewStartup", runCatching { AwayJournal.previewReport() }.getOrNull() ?: JsonNull)
         }
     }
 
@@ -146,6 +147,7 @@ object ShortRecorderDiagnostics {
             })
         }
         return ShortRecorderReport.report(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, Build.VERSION.SDK_INT,
-            current, fault, run, ProcessExitDiagnostics.collect(context), BootTransferDiagnostics.collect())
+            current, fault, run, ProcessExitDiagnostics.collect(context), BootTransferDiagnostics.collect(),
+            runCatching { AwayJournal.previewReport() }.getOrNull())
     }
 }

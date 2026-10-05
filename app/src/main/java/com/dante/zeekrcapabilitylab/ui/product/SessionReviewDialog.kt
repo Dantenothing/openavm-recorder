@@ -103,7 +103,7 @@ private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
     var channel by remember { mutableStateOf(initial?.segment?.channelId ?: timeline.channelIds.first()) }
     var position by remember { mutableLongStateOf(initial?.segment?.let { timeline.mediaToSession(it.id, 0) } ?: 0L) }
     var seekSerial by remember { mutableIntStateOf(0) }
-    var wantsPlay by remember { mutableStateOf(false) }
+    var wantsPlay by remember { mutableStateOf(true) }
     var overview by remember { mutableStateOf(false) }
     // This is an opening preference; the player's temporary toggle does not change it.
     var showDetails by remember { mutableStateOf(settings.playbackMapDefaultOpen) }
@@ -340,8 +340,12 @@ private fun SessionReviewDetails(data: SessionReviewData, channel: String, posit
         if (data.skipped > 0) Text(Utils.t("${data.skipped} files unavailable or missing valid timing/layout.", "${data.skipped} 个文件不可用或缺少有效时间/布局。"), style = MaterialTheme.typography.bodySmall)
         data.timeline.channelIds.forEach { id ->
             val segments = data.entries.values.filter { it.segment.channelId == id }
+            val recordedSizes = segments.mapNotNull { entry -> entry.sidecar.actualTrack?.let { track ->
+                if ((track.width ?: 0) > 0 && (track.height ?: 0) > 0) "${track.width}×${track.height}" else null
+            } }.distinct().joinToString(" / ")
             Text(sessionChannelLabel(id) + " · " + Utils.t("${segments.size} saved files", "${segments.size} 个已保存文件") + " · " +
-                Utils.t("${segments.sumOf { it.sidecar.frameStats?.count ?: 0 }} capture callbacks", "${segments.sumOf { it.sidecar.frameStats?.count ?: 0 }} 次采集回调"),
+                Utils.t("${segments.sumOf { it.sidecar.frameStats?.count ?: 0 }} capture callbacks", "${segments.sumOf { it.sidecar.frameStats?.count ?: 0 }} 次采集回调") +
+                if (recordedSizes.isNotEmpty()) " · $recordedSizes" else "",
                 style = MaterialTheme.typography.bodySmall)
         }
         OutlinedButton(enabled = !reportBusy, onClick = {

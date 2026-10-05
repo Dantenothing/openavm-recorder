@@ -36,8 +36,8 @@ fun RecordingChannelSettings() {
                 Switch(rear, { rear = it; settings.setRecordRearCabin(it) }, enabled = !busy,
                     modifier = Modifier.testTag("record-rear-cabin"))
             }
-            Text(Utils.t("Cabin streams request 640×480, 15 fps and 2 Mb/s each, saved to internal storage under the existing quota. Surround keeps your storage choice. Unsupported channels stop independently. Time-lapse uses only its selected camera.",
-                "车内每路请求 640×480、15 帧及 2 Mb/s，保存到内部存储并遵守原有容量上限；环视仍沿用所选存储。不可用通道独立停止。延时录像仅录制所选相机。"), style = MaterialTheme.typography.bodySmall)
+            Text(Utils.t("Cabin streams use a camera-declared size up to 720p, requesting 15 fps and 2–4 Mb/s each. Saved internally under your quota; surround keeps your storage choice. Older recordings keep their original quality. Unsupported channels stop independently. Time-lapse uses only its selected camera.",
+                "车内每路使用相机支持的分辨率，最高 720p，请求 15 帧及 2–4 Mb/s，保存到内部存储并遵守容量上限；环视沿用所选存储。旧录像保持原有画质。不可用通道独立停止。延时录像仅录制所选相机。"), style = MaterialTheme.typography.bodySmall)
             if (busy) Text(Utils.t("Stop recording before changing channels.", "停止录像后可修改通道。"), style = MaterialTheme.typography.bodySmall)
             RecordingChannelStatus()
         }

@@ -1,6 +1,7 @@
 package io.github.dantenothing.drivemap
 
 import android.widget.FrameLayout
+import android.view.MotionEvent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -86,13 +87,10 @@ fun RecordedRoadMap(
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(roads, onClick = { roads = !roads }, label = { Text(label("Street map", "街道地图")) })
                 Spacer(Modifier.width(6.dp))
-                TextButton(onClick = { roads = false }) { Text(label("Local trace", "本地轨迹")) }
                 TextButton(onClick = { following = true; recenterRequest++; native?.recenter() }, enabled = marker != null) {
                     Text(if (following) label("Following", "跟随中") else label("Recenter", "跟随位置"))
                 }
                 TextButton(onClick = { following = false; fitRequest++; native?.fit() }) { Text(label("Fit route", "全程")) }
-                TextButton(onClick = { zoomRequest--; native?.zoom(false) }, modifier = Modifier.width(44.dp)) { Text("−") }
-                TextButton(onClick = { zoomRequest++; native?.zoom(true) }, modifier = Modifier.width(44.dp)) { Text("+") }
             }
             Box(Modifier.fillMaxWidth().then(if (bounded && !smallPanel) Modifier.weight(1f) else Modifier.height(if (smallPanel) 180.dp else 260.dp))) {
                 LocalRecordedTrace(geometry, marker, following, fitRequest, zoomRequest, recenterRequest,
@@ -107,6 +105,19 @@ fun RecordedRoadMap(
                     }
                 }
                 if (geometry.points.isEmpty()) Text(label("No recorded GPS points", "没有已记录的 GPS 点"), Modifier.align(Alignment.Center))
+                Surface(Modifier.align(Alignment.CenterEnd).padding(6.dp), shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
+                    Column {
+                        IconButton(onClick = { zoomRequest++; native?.zoom(true) }, enabled = geometry.points.isNotEmpty(),
+                            modifier = Modifier.size(48.dp).semantics { contentDescription = label("Zoom in", "放大地图") }) {
+                            Text("+", style = MaterialTheme.typography.titleLarge)
+                        }
+                        IconButton(onClick = { zoomRequest--; native?.zoom(false) }, enabled = geometry.points.isNotEmpty(),
+                            modifier = Modifier.size(48.dp).semantics { contentDescription = label("Zoom out", "缩小地图") }) {
+                            Text("−", style = MaterialTheme.typography.titleLarge)
+                        }
+                    }
+                }
             }
             if (roads) MapCredits(chinese)
             else Text(label("Offline · tap a recorded point to jump in the video", "离线轨迹 · 点选已记录的位置可跳转视频"), style = MaterialTheme.typography.labelSmall)
@@ -146,7 +157,16 @@ private fun NativeRoadSurface(
         if (!ready && error == null) { error = "TIMEOUT"; readyChanged(false); RoadMapDiagnostics.failed("TIMEOUT") }
     }
     if (error == null) {
-        AndroidView(factory = { FrameLayout(it).also(controller::attach) },
+        AndroidView(factory = { context -> object : FrameLayout(context) {
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                // Keep map pan/pinch gestures inside the map instead of the surrounding details scroller.
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) parent?.requestDisallowInterceptTouchEvent(true)
+                val consumed = super.dispatchTouchEvent(event)
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL)
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                return consumed
+            }
+        }.also(controller::attach) },
             // Keep the measured trace visible while tiles load. Alpha preserves the native
             // surface/layout so its first fully rendered frame can still signal readiness.
             modifier = modifier.alpha(if (ready) 1f else 0f),

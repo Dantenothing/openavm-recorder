@@ -92,7 +92,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
     private val preferences = MirrorPresentation(context)
     private val freshness = MirrorFrameFreshness()
     private val displayRecovery = MirrorDisplayRecoveryBudget()
-    private var glPreview: MirrorGlPreview? = null
+    @Volatile private var glPreview: MirrorGlPreview? = null
     private var closed = false
     private var failed = false
     private var dismissed = MirrorPreviewRuntime.wasDismissed(runId)
@@ -175,6 +175,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
     }
 
     fun refreshSoon() { if (!closed) { handler.removeCallbacks(tick); handler.post(tick) } }
+    internal fun sourceFrameCount(): Long = glPreview?.evidence(SystemClock.elapsedRealtime())?.inputFrames ?: 0L
     fun restore() { if (!closed && !failed) { dismissed = false; preferences.dock = 0; rebuildOverlay(); refreshSoon() } }
     fun dismiss() { dismissed = true; MirrorPreviewRuntime.dismiss(runId); refreshSoon() }
 
@@ -229,6 +230,9 @@ class MirrorPreviewController(private val context: Context, private val config: 
             freshness.presentationChanged(now)
         }
         val inputEvidence = glPreview?.evidence(now)
+        if (source.previewOnly && !failed && submitted && expected && recording && visible &&
+            (inputEvidence?.inputFrames ?: 0L) > 0 && (inputEvidence?.inputFrameAgeMs ?: 0L) > 8_000 &&
+            freshness.outputTimedOut(now)) fail("PREVIEW_SOURCE_STALLED")
         if (!failed && submitted && expected && recording) {
             when (displayRecovery.evaluate(inputEvidence?.inputHeartbeatAgeMs, inputEvidence?.inputFrameAgeMs,
                 sameRun && visible && freshness.outputTimedOut(now))) {
@@ -604,7 +608,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
         lease?.retire()
         if (lease == null) glPreview?.closeAfterProducer()
         MirrorPreviewRuntime.evidence = MirrorPreviewRuntime.evidence.copy(destination = "NONE", reason = reason)
-        if (source.previewOnly) { FloatingMirrorService.previewFailed(reason); source.stop() }
+        if (source.previewOnly) { StandaloneMirrorService.previewFailed(runId, reason); source.stop() }
     }
 
     fun close() {
@@ -635,6 +639,9 @@ class MirrorPreviewController(private val context: Context, private val config: 
     }
     private fun log(event: String, reason: String) = EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MIRROR_$event",
         payload = mapOf("reason" to reason, "frames" to freshness.frames.toString(),
+            "recordingSessionId" to runId,
+            "inputFrames" to sourceFrameCount().toString(),
+            "inputFrameAgeMs" to (glPreview?.evidence(SystemClock.elapsedRealtime())?.inputFrameAgeMs?.toString() ?: "unknown"),
             "segmentNumber" to source.state.segmentNumber.toString(),
             "status" to source.state.status,
             "previewActive" to source.state.previewActive.toString(),

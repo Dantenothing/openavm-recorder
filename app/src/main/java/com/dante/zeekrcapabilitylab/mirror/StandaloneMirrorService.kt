@@ -27,7 +27,7 @@ class StandaloneMirrorService : Service() {
     private var owner: String? = null
     private var handoffToken: String? = null
     private var producer: PreviewProducer? = null
-    private var mirror: MirrorPreviewController? = null
+    @Volatile private var mirror: MirrorPreviewController? = null
     @Volatile private var stopping = false
     private val screen = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -127,6 +127,8 @@ class StandaloneMirrorService : Service() {
             private set
         private var closed = false
         private var enabled = true
+        private var firstFrameRecovery: FirstFrameRecovery? = null
+        private var captureFrames = 0L
         private var transaction: CaptureCloseTransaction? = null
         fun open() {
             if (stopping || closing) { finish(); return }
@@ -188,6 +190,7 @@ class StandaloneMirrorService : Service() {
                             if (closing || stopping) { value.close(); return }
                             session = value
                             runCatching { if (enabled) repeat(value) }.onFailure { error("PREVIEW_REQUEST_FAILED") }
+                            armFirstFrameRecovery(value)
                         }
                         override fun onConfigureFailed(value: CameraCaptureSession) { value.close(); error("PREVIEW_CONFIG_FAILED") }
                         override fun onClosed(value: CameraCaptureSession) { transaction?.sessionClosed() }
@@ -199,8 +202,30 @@ class StandaloneMirrorService : Service() {
             val request = requireNotNull(device).createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(requireNotNull(surface)); set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
             }.build()
-            value.setRepeatingRequest(request, null, handler)
+            value.setRepeatingRequest(request, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                    if (session !== this@PreviewProducer.session || closing || closed || stopping) return
+                    captureFrames++
+                    if (captureFrames == 1L) sleepCloseEvidence("FIRST_CAPTURE_CALLBACK", mapOf("captureFrames" to "1"))
+                }
+            }, handler)
             CameraWorkCoordinator.publish(id, Utils.t("Preview only", "仅预览"))
+        }
+        private fun armFirstFrameRecovery(value: CameraCaptureSession) {
+            val recovery = FirstFrameRecovery(SystemClock.elapsedRealtime())
+            firstFrameRecovery?.cancel(); firstFrameRecovery = recovery
+            handler.postDelayed({
+                val frames = mirror?.sourceFrameCount() ?: 0L
+                val allowed = firstFrameRecovery === recovery && session === value && enabled && !stopping && !closing && !closed &&
+                    MirrorDisplayState.usable(this@StandaloneMirrorService)
+                if (!recovery.request(SystemClock.elapsedRealtime(), frames, allowed)) return@postDelayed
+                sleepCloseEvidence("REQUEST_REISSUED", mapOf("sourceFrames" to frames.toString(), "captureFrames" to captureFrames.toString()))
+                runCatching { repeat(value) }.onFailure { error("PREVIEW_REQUEST_FAILED") }
+                handler.postDelayed({
+                    if (session === value && !closing && !closed && !stopping) sleepCloseEvidence("REQUEST_RESULT", mapOf(
+                        "sourceFrames" to (mirror?.sourceFrameCount() ?: 0L).toString(), "captureFrames" to captureFrames.toString()))
+                }, 2_000)
+            }, FirstFrameRecovery.WAIT_MS)
         }
         private fun error(reason: String) {
             FloatingMirrorService.previewFailed(reason, handoffToken)
@@ -212,6 +237,7 @@ class StandaloneMirrorService : Service() {
         }
         fun close() {
             closing = true
+            firstFrameRecovery?.cancel()
             if (transaction != null || closed) return
             if (opening) return // A timeout never proves a native open has returned.
             val camera = device; val capture = session; val output = surface
@@ -269,6 +295,10 @@ class StandaloneMirrorService : Service() {
                 .getOrElse { CameraWorkCoordinator.finish(id); false }
         }
         fun isRunning() = instance != null
+        internal fun previewFailed(owner: String, reason: String) {
+            val service = instance?.takeIf { it.owner == owner } ?: return
+            FloatingMirrorService.previewFailed(reason, service.handoffToken)
+        }
         fun isPreviewing() = instance?.let { service ->
             val producer = service.producer
             !service.stopping && MirrorDisplayState.usable(service) && producer?.state?.status == RecorderStatus.PREVIEWING &&
