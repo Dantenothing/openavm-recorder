@@ -38,3 +38,11 @@ Source includes protocol implementation and an empty template. It does not suppl
 ## Limits retained in the release notes
 
 These tests do not certify proprietary full-resolution camera encoding, physical USB behavior, GPS/vehicle-signal availability, every leave/return cycle or hardware frame synchronisation. The transient initial preview stall and earlier non-increasing encoder timestamp fault have not each been independently established as eliminated. The positive owner feedback does not erase those limits. USB discovery issue #28 remains open. No real cloud commands, private remote vehicle tests or physical-phone installation were performed during release preparation.
+
+## Final signed artifacts
+
+Built from source commit `141b58758eb0b518405c0a30f6402619d5ae122b`. The release tag adds verification documentation only after this build. Both APKs passed package/version/signature checks, ZIP integrity and the public artifact guard. Exact comparisons of all uncompressed APK entries with the six local reference values found no matches. No bundled connection JSON, signing-key files or video fixtures were present. Both retain the established certificate and are non-debuggable.
+
+Recorder is ARM64 only and omits private remote support components and installation permissions. The tested retained-camera flag remains enabled. Compared with support4.133, production source changes are limited to release metadata/flag separation, the retained-connection flag reference, and the private updater's API guards.
+
+The exact signed APKs were installed in place on the emulator and cold-launched: Recorder 134 and Phone 56, with no entries in the crash buffer. Phone retained its single launcher alias. The phone smoke check was offline; no real cloud command or vehicle was involved. SHA-256, byte sizes and measured launch times are in the linked JSON. This does not replace a final-binary physical-vehicle test.

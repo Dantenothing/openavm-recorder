@@ -1,79 +1,90 @@
 {
-  "release": "v4.0.0",
-  "apks": {
-    "car": {
-      "file": "OpenAVM-Recorder-V4-arm64-v8a.apk",
-      "applicationId": "io.github.dantenothing.openavmrecorder",
-      "versionName": "4.0.0",
-      "versionCode": 57,
-      "bytes": 2244512,
-      "sha256": "b346610f5662bfe9997baed58c9b739a097fbdd3c85d131d0d547c705d87a9e6",
-      "certificateSha256": "529951606101aba4d45f94f7c68260c8268073bf3769b9f939161f0533d5994e"
+  "release": "v5.1.0",
+  "builtSourceCommit": "141b58758eb0b518405c0a30f6402619d5ae122b",
+  "date": "2026-10-14",
+  "artifacts": {
+    "recorder": {
+      "file": "OpenAVM-Recorder-5.1.0-arm64-v8a.apk",
+      "package": "io.github.dantenothing.openavmrecorder",
+      "versionName": "5.1.0",
+      "versionCode": 134,
+      "sha256": "73e8b559c3dc73a043770ff9c86d2badf0fe4045f2af83fa549dadd459d92787",
+      "bytes": 16903396,
+      "signerCertificateSha256": "529951606101aba4d45f94f7c68260c8268073bf3769b9f939161f0533d5994e",
+      "debuggable": false,
+      "nativeAbis": [
+        "arm64-v8a"
+      ],
+      "privateReferenceFieldsCompared": 6,
+      "privateReferenceFindings": []
     },
     "phone": {
-      "file": "OpenAVM-Companion-V4.apk",
-      "applicationId": "com.dante.zeekrbridge",
-      "versionName": "4.0.0",
-      "versionCode": 29,
-      "bytes": 3148334,
-      "sha256": "fcbe60eae50a229c3d9541f1fbfd482b89f3d6060efaa44b7e666c392c049937",
-      "certificateSha256": "529951606101aba4d45f94f7c68260c8268073bf3769b9f939161f0533d5994e"
+      "file": "OpenAVM-Phone-5.1.0.apk",
+      "package": "com.dante.zeekrbridge",
+      "versionName": "5.1.0",
+      "versionCode": 56,
+      "sha256": "e58150c9295363a7d8c8b59ac3f0c7be1259b6a292ffb9e58e27c6dcc2dd714a",
+      "bytes": 65673316,
+      "signerCertificateSha256": "529951606101aba4d45f94f7c68260c8268073bf3769b9f939161f0533d5994e",
+      "debuggable": false,
+      "nativeAbis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86",
+        "x86_64"
+      ],
+      "privateReferenceFieldsCompared": 6,
+      "privateReferenceFindings": []
     }
   },
-  "publicSourceReleaseTests": {
-    "app": {
-      "tests": 499,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0
-    },
-    "ZeekrBridgeCompanion/app": {
-      "tests": 197,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0
-    },
-    "sound-core": {
-      "tests": 44,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0
-    },
-    "localization": {
-      "tests": 8,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0
-    },
-    "transfer-protocol": {
-      "tests": 3,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0
-    }
+  "unitTests": 2375,
+  "androidCases": {
+    "recorder": 10,
+    "phone": 20,
+    "skipped": 0
   },
-  "totalTests": 751,
-  "publicSourceReleaseLint": {
-    "car": {
-      "Warning": 118,
-      "Hint": 15
+  "lint": {
+    "recorder": {
+      "errors": 0,
+      "warnings": 210,
+      "hints": 21
     },
     "phone": {
-      "Warning": 61,
-      "Hint": 5
+      "errors": 0,
+      "warnings": 95
     }
   },
-  "releaseBuilds": {
-    "car": "passed",
-    "phone": "passed"
+  "hardwareScope": "Owner reports normal use of latest delivered predecessor; final artifacts checked locally. No all-firmware guarantee.",
+  "verificationDetails": "docs/v5/RELEASE_5_1_0_VERIFICATION.md",
+  "recorderProductionChangesFrom133": [
+    "app/build.gradle.kts",
+    "app/src/main/java/com/dante/zeekrcapabilitylab/preflight/remote/SupportUpdater.kt",
+    "app/src/main/java/com/dante/zeekrcapabilitylab/service/recorder/RetainedCameraConnection.kt"
+  ],
+  "recorderBuildId": "preflight-dafe3e006381e10e0a27",
+  "finalSignedApkSmoke": {
+    "car": {
+      "installedInPlaceOnEmulator": true,
+      "coldStartMs": 3807,
+      "crashBufferEmpty": true
+    },
+    "phone": {
+      "installedInPlaceOnEmulator": true,
+      "coldStartMs": 2702,
+      "crashBufferEmpty": true
+    },
+    "vehicleHardwareTested": false
   },
-  "publicationAudit": {
-    "sourceFiles": 510,
-    "unchangedFrozenFilesCompared": 461,
-    "localMarkdownLinks": "passed",
-    "releaseAssetChecksums": "passed",
-    "privateCaptureAndKeyExclusion": "passed"
+  "sourceAudit": {
+    "stagedFiles": 168,
+    "historyBlobs": 391,
+    "referenceFields": 6,
+    "findings": [],
+    "postAuditPathsRechecked": [
+      "app/src/main/java/com/dante/zeekrcapabilitylab/preflight/remote/SupportUpdater.kt",
+      "docs/v5/GETTING_STARTED.md",
+      "SECURITY.md"
+    ]
   },
-  "provenance": "Published APKs are the frozen V4 deliverables. Public source was rebuilt separately; the frozen vehicle APK diagnostic Git marker is d01d90f, predating the publication commit.",
-  "deviceAcceptance": "Owner accepted RC2 departure extra-file fix with no recurrence and accepted the phone UI. Final cosmetic changes received local verification; all-vehicle compatibility is not established."
+  "recorderR8MappingSha256": "f7ba97d436e19185773704281993a2babf6d316d6bab817243178c7d287e8c23"
 }
