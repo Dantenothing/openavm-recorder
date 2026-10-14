@@ -22,8 +22,11 @@ data class RecordingModeSwitchReadiness(
     val displayOn: Boolean,
     val storageMatches: Boolean,
     val ownerCurrent: Boolean,
+    val nativeIdle: Boolean,
+    val glIdle: Boolean,
 ) {
-    val ready: Boolean get() = released && saved && interactive && displayOn && storageMatches && ownerCurrent
+    val continuationAllowed: Boolean get() = released && saved && interactive && displayOn && storageMatches && ownerCurrent
+    val ready: Boolean get() = continuationAllowed && nativeIdle && glIdle
 }
 
 /** One explicit gesture grants one bounded continuation, never a persistent auto-start preference. */
@@ -40,6 +43,9 @@ class RecordingModeSwitchGate(private val timeoutMs: Long = 20_000) {
 
     fun take(token: Long, nowMs: Long, readiness: RecordingModeSwitchReadiness): Request? {
         val request = pending?.takeIf { it.token == token } ?: return null
+        // Primary disposal is not proof that an auxiliary camera or preview GL
+        // producer has released. Keep this one bounded gesture pending until both do.
+        if (nowMs < request.deadlineMs && readiness.continuationAllowed && !readiness.ready) return null
         pending = null
         return request.takeIf { nowMs < it.deadlineMs && readiness.ready }
     }

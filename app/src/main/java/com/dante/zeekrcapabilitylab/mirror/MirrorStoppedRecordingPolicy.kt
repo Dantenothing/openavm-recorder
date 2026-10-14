@@ -7,6 +7,11 @@ import com.dante.zeekrcapabilitylab.service.recorder.RecorderStatus
  * The callback acknowledges Stop; MirrorHandoffGate separately proves every resource is free.
  */
 internal object MirrorStoppedRecordingPolicy {
+    /** A recorder ending does not revoke an existing visible-preview preference. */
+    fun restoreRequestedPreview(current: RecorderState, resident: Boolean, videoRequested: Boolean, usable: Boolean): Boolean =
+        resident && videoRequested && usable &&
+            current.status in setOf(RecorderStatus.STOPPED, RecorderStatus.ERROR, RecorderStatus.CAMERA_UNAVAILABLE)
+
     fun stopCallbackAcknowledged(request: MirrorHandoffGate.Request, current: RecorderState): Boolean {
         if (request.stoppedSession == null || current.recordingSessionId != request.stoppedSession) return false
         return if (request.target == MirrorHandoffGate.Target.RECORD)

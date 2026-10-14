@@ -30,6 +30,8 @@ internal data class ContinuousFailureEvidence(
     val atEpochMs: Long, val atElapsedMs: Long, val numbers: ContinuousFailureNumbers,
     val sample: ContinuousFailureSample?, val captureOrder: Long,
     val formatFacts: Map<String, String> = emptyMap(),
+    val cut: DirectCutProgress.Snapshot? = null,
+    val timestamp: EncodedTimestampException? = null,
 ) {
     fun facts(): Map<String, String> = linkedMapOf(
         "failureSchema" to "1", "failureCategory" to "CONTINUOUS_PIPELINE_FAILURE",
@@ -46,7 +48,7 @@ internal data class ContinuousFailureEvidence(
         "faultQueueBytes" to known(sample?.queueBytes), "faultQueueItems" to known(sample?.queueItems),
         "faultEncodedFrames" to known(sample?.encodedFrames), "faultEncodedBytes" to known(sample?.encodedBytes),
         "faultCompletedFiles" to known(sample?.completedFiles), "faultSourceAgeAtSampleMs" to known(sample?.sourceAgeMs),
-    ) + ContinuousFormatFacts.sanitize(formatFacts)
+    ) + ContinuousFormatFacts.sanitize(formatFacts) + cut?.facts().orEmpty() + timestamp?.facts().orEmpty()
 
     companion object {
         private fun known(value: Any?): String = value?.toString() ?: "UNKNOWN"
@@ -57,7 +59,7 @@ internal data class ContinuousFailureEvidence(
             "faultEpochMs", "faultElapsedMs", "faultCaptureOrder", "codecErrorCode", "errno", "codecRecoverable", "codecTransient",
             "numericSourceType", "numericCauseDepth", "snapshotKind", "snapshotSampledAtElapsedMs", "snapshotAgeMs",
             "faultQueueBytes", "faultQueueItems", "faultEncodedFrames", "faultEncodedBytes", "faultCompletedFiles",
-            "faultSourceAgeAtSampleMs") + ContinuousFormatFacts.keys
+            "faultSourceAgeAtSampleMs") + ContinuousFormatFacts.keys + DirectCutProgress.FACT_KEYS + EncodedTimestampException.FACT_KEYS
     }
 }
 
@@ -116,20 +118,21 @@ internal class ContinuousFailureCapture(
 
     /** Only clocks, typed exception fields, and an ALREADY cached immutable sample. No I/O or native probes. */
     fun capture(error: Throwable?, stage: ContinuousFailureStage, sample: ContinuousFailureSample? = null,
-                signal: String? = null): ContinuousFailureEvidence {
+                signal: String? = null, cut: DirectCutProgress.Snapshot? = null): ContinuousFailureEvidence {
         first.get()?.let { return it }
         val order = sequence.incrementAndGet()
         val at = elapsed(); val epoch = wall()
         val formatError = typedFormat(error)
+        val timestampError = EncodedTimestampException.from(error)
         val format = formatAtFailure(formatError)
         val code = formatError?.errorCode?.takeIf { it in setOf(ContinuousTrackFormatSpec.INCOMPLETE, ContinuousTrackFormatSpec.INCOMPATIBLE) }
-            ?: knownCode(signal) ?: knownCode(runCatching { error?.message }.getOrNull())
+            ?: timestampError?.message ?: knownCode(signal) ?: knownCode(runCatching { error?.message }.getOrNull())
             ?: if (error == null) "UNCLASSIFIED_SIGNAL" else "UNCLASSIFIED_THROWABLE"
         val candidate = ContinuousFailureEvidence(sessionId, stage, code,
             ContinuousFailureEvidence.safeType(error?.javaClass?.name),
             ContinuousFailureEvidence.safeType(runCatching { error?.cause?.javaClass?.name }.getOrNull()), epoch, at,
             error?.let { runCatching { numeric(it) }.getOrNull() } ?: ContinuousFailureNumbers(),
-            sample?.takeIf { it.sampledAtElapsedMs in 0..at }, order, format)
+            sample?.takeIf { it.sampledAtElapsedMs in 0..at }, order, format, cut, timestampError)
         while (true) {
             val existing = first.get()
             if (existing != null && existing.captureOrder < order) return existing
@@ -164,7 +167,11 @@ internal class ContinuousFailureCapture(
             "PRODUCT_CUT_AUTHORITY_ENDED", "PRODUCT_CUT_FILE_REUSED", "PRODUCT_KEYFRAME_CUT_TIMEOUT",
             "PRODUCT_WRITER_CUT_TIMEOUT", "PRODUCT_SAMPLE_TIME_REGRESSED", "PRODUCT_SOURCE_TIMESTAMP_REGRESSED",
             "CONTINUOUS_START_FAILED", "CONTINUOUS_OUTPUT_OPEN_FAILED", "CONTINUOUS_CUT_TIMEOUT",
+            "CONTINUOUS_OUTPUT_PREPARATION_TIMEOUT", "CONTINUOUS_MUXER_PREPARATION_TIMEOUT",
+            "CONTINUOUS_KEYFRAME_CUT_TIMEOUT", "CONTINUOUS_WRITER_CUT_TIMEOUT",
+            "CONTINUOUS_FORMAT_BOUNDARY_TIMEOUT",
             "CONTINUOUS_CAPTURE_SESSION_MISSING", "CONTINUOUS_ENCODER_FAILED",
+            "CONTINUOUS_TAIL_OUTPUT_MISSING",
             "CONTINUOUS_OUTPUT_STILL_OWNED", "ENCODER_FORMAT_CHANGED_MID_RUN", "ENCODER_QUEUE_FULL",
             "ENCODER_TRACK_FORMAT_INCOMPLETE", "ENCODER_TRACK_FORMAT_INCOMPATIBLE",
             "WRITER_QUEUE_REJECTED", "ENCODER_EOS_TIMEOUT", "ENCODER_WRITER_STOP_TIMEOUT",

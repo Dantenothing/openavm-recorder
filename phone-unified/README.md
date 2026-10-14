@@ -1,10 +1,10 @@
-# OpenAVM Phone V5
+# OpenAVM Phone V5.1
 
-> **Phone 5.0.1 is the current release, paired with the unchanged Recorder 5.0.0.** Local Recorder pairing, recording transfer and playback work without cloud configuration. Optional cloud controls require a user-supplied configuration and authorised login. [Download](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1).
+> **Phone 5.1.0 pairs with Recorder 5.1.0** for recorded driving data, HUD and map playback. Local recording features require no cloud configuration. [Download](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.1.0).
 
 This is the current Android phone application: vehicle status and controls, preconditioning, factory Sentry rules, home-screen widgets, and the OpenAVM recording library.
 
-Current phone version: **5.0.1 / 52**. The normal `openavm` variant uses `com.dante.zeekrbridge`, preserving the original OpenAVM phone upgrade identity. The separate `assistantUpgrade` variant is only for the early standalone assistant and is not a normal public download.
+Current phone version: **5.1.0 / 56**. The normal `openavm` variant uses `com.dante.zeekrbridge`, preserving the original OpenAVM phone upgrade identity. The separate `assistantUpgrade` variant is only for the early standalone assistant and is not a normal public download.
 
 [Optional cloud setup](../docs/v5/CLOUD_SETUP.md) · [User setup](../docs/v5/GETTING_STARTED.md) · [Build notes](../docs/v5/BUILD.md)
 

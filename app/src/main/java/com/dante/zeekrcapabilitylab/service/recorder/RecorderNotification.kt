@@ -62,7 +62,8 @@ object RecorderNotification {
             append(state.segmentNumber)
         }
         val text = buildString {
-            append(statusLabel(state.status))
+            append(if (state.status == RecorderStatus.RECORDING && !state.videoFlowConfirmed)
+                Utils.t("Waiting for camera frames…", "正在等待相机画面…") else statusLabel(state.status))
             append(
                 if (state.wakeLockHeld) {
                     Utils.t(" | background active", " | 后台保持中")

@@ -128,6 +128,13 @@ internal object ProcessExitReport {
         put("exceptionType", symbol(event.payload["exceptionType"], 160) ?: "UNKNOWN")
         put("causeType", symbol(event.payload["causeType"], 160) ?: "UNKNOWN")
         CodecFormatReport.format(event.payload)?.let { put("format", it) }
+        com.dante.zeekrcapabilitylab.service.recorder.EncodedTimestampException.NUMERIC_KEYS.forEach { key ->
+            // Signed: a negative timestamp is itself evidence, not an unavailable value.
+            event.payload[key]?.toLongOrNull()?.let { put(key, it) }
+        }
+        com.dante.zeekrcapabilitylab.service.recorder.EncodedTimestampException.BOOLEAN_KEYS.forEach { key ->
+            event.payload[key]?.toBooleanStrictOrNull()?.let { put(key, it) }
+        }
         listOf("codecErrorCode", "errno").forEach { key ->
             put(key, event.payload[key]?.toIntOrNull())
         }

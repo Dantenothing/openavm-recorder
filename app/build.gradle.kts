@@ -11,6 +11,11 @@ plugins {
 
 // V5 includes the owner-tested return behaviour. Recording still requires an explicit user choice.
 val publicUiCheck = providers.gradleProperty("publicUiCheck").orNull == "true"
+val recorderSupport = providers.gradleProperty("recorderSupport").orNull == "true"
+val supportEmulator = providers.gradleProperty("supportEmulator").orNull == "true"
+require(!supportEmulator || recorderSupport) { "Emulator packaging is private support only" }
+val supportVersion = providers.gradleProperty("supportVersionCode").orNull?.toInt() ?: 121
+require(supportVersion in 121..199) { "Private support version must be in 121..199" }
 val cameraConcurrencyProbe = providers.gradleProperty("cameraConcurrencyProbe").orNull == "true"
 val vehicleFieldTest = providers.gradleProperty("vehicleFieldTest").orNull == "true"
 val preflightAssets = layout.buildDirectory.dir("generated/preflightAssets")
@@ -56,30 +61,26 @@ val generatePreflightEvidence by tasks.registering {
                 "OPTIONAL_PARALLEL_CABIN_RECORDING" to true,
                 "SESSION_CLOCK_PLAYBACK" to true,
                 "LIVE_AND_RECORDED_HUD" to true,
-                "DIAGNOSTIC_CLOUD_UPLOAD" to false,"DIAGNOSTIC_REMOTE_COMMANDS" to false,
-                "DIAGNOSTIC_REMOTE_RECIPES_V1" to false,"DIAGNOSTIC_EXACT_EVIDENCE_REVIEW" to true,
+                "DIAGNOSTIC_CLOUD_UPLOAD" to recorderSupport,"DIAGNOSTIC_REMOTE_COMMANDS" to recorderSupport,
+                "DIAGNOSTIC_REMOTE_RECIPES_V1" to recorderSupport,"DIAGNOSTIC_EXACT_EVIDENCE_REVIEW" to true,
+                "RECORDER_SUPPORT_ENABLED" to recorderSupport,
                 "AWAY_SINGLE_EXPORT_RECORDER_FAULT" to true,"RECORDER_TERMINAL_STATE_FENCE" to true,
                 "AWAY_FIRST_CAUSE_AND_CLOSE_EVIDENCE" to true,"AWAY_STRUCTURED_CONTINUOUS_FIRST_FAILURE" to true,
                 "C0_PARKING_EXPERIMENT_ENABLED" to false,
-                "DIAGNOSTIC_RATE_CONTROL_TRIAL_V1" to true,"DIAGNOSTIC_RUNNER_VERSION" to 3,
+                "DIAGNOSTIC_RATE_CONTROL_TRIAL_V1" to true,"DIAGNOSTIC_RUNNER_VERSION" to 7,
+                "PRIVATE_SESSION_SELF_UPDATE" to recorderSupport,
+                "PRIVATE_EMULATOR_BUILD" to supportEmulator,
+                "PRIVATE_PREVIEW_INITIALIZATION_COMPARISON" to recorderSupport,
+                "PRIVATE_TERMINAL_CLOSE_COMPARISON" to recorderSupport,
+                "RETAINED_CAMERA_HANDOFF_ENABLED" to true,
                 "P2_REAL_CAMERA_SHARED_INPUT" to true,"P2_REAL_PAGE_OVERLAY_WINDOWS" to true,
                 "P2_BOUNDED_FILE_FINALIZER" to true,"P2_FULL_PTS_LEDGER" to true),
             "implementedTestCases" to listOf("public_capabilities", "egl_small", "usb_fd", "closed_file", "baseline", "p1_basic", "p1_input", "oes_input", "shared_pool_pressure", "encoded_load", "p2_camera"),
-            "coverageNotes" to "5.0.0 / 102 promotes the owner-tested sleep4 return feature into the default public build: retained Logo, preview or explicit opt-in recording, fresh installation confirmation, bounded metadata preparation and preview recovery. It retains the recorder, segmentation, USB fallback, camera cleanup interlocks and structured first-failure evidence. Public UI excludes laboratory entry points; internal debug builds may enable them. The owner accepted the latest sleep4 on 2026-09-25, separately from the earlier RC6 short checks. This is owner-reported predecessor acceptance, not an on-vehicle run of this final binary. The earlier FILE_WRITER exception, general departure-stop coverage and whole-vehicle power remain unverified. No GPS, fog map, remote parking, process resurrection or cold-wake is claimed.",
-            "vehicleAcceptanceBaseline" to mapOf("version" to "4.1.0-rc6", "versionCode" to 99,
-                "reportedOn" to "2026-09-25", "evidenceType" to "OWNER_CONFIRMATION",
-                "checks" to listOf("LAST_USB_SEGMENT_PLAYBACK", "MANUAL_RECORDING_AND_PLAYBACK", "NATIVE_CABIN_RECOVERY_AND_PLAYBACK")),
-            "returnFeatureAcceptance" to mapOf("version" to "5.0.0-sleep4", "versionCode" to 101,
-                "reportedOn" to "2026-09-25", "evidenceType" to "OWNER_CONFIRMATION",
-                "scope" to "Latest delivered sleep4 reported working; no independent final-binary vehicle recording claimed"),
-            "drivePreview" to mapOf("version" to "5.1.0-drive9", "versionCode" to 114,
-                "scope" to "Drive9 adds one bounded first-frame request retry and one clean preview reopen after source loss, while preserving native release gates and recording stop authority. Playback starts on opening, map zoom controls remain visible and cabin recording uses declared sizes up to 720p. Source-driver cause, higher-resolution concurrent recording and final-binary vehicle behaviour remain unverified.",
-                "drive8OwnerEvidence" to "Owner reports successful continuous recording and playback after manually restarting, but black home/floating preview on entry and after stopping. The supplied JSON documents an earlier zero-frame surround run, a 15-second source watchdog and acknowledged cleanup; incomplete CSD follows camera close. It does not document the later successful run or identify the vendor source-loss cause.",
-                "drive7OwnerEvidence" to "A cabin format incompatibility occurs 60.022 seconds after its segment start; surround then loses source frames and its 15-second watchdog fires. A separate zero-frame surround run reports incomplete format only after manual stop. Supplied reports do not contain the actual changed fields. These are separate failure paths, not evidence of a single camera hardware defect.",
-                "drive6OwnerEvidence" to "Four complete supplied failure events report ENCODER_FORMAT_CHANGED_MID_RUN about 60 seconds after cabin segment start. This identifies the unconditional second-format guard, but old reports do not retain the two formats. Later surround source loss correlates with cabin cleanup without proving a HAL cause. Initial black preview and hardware compatibility remain unverified in drive7.",
-                "drive4OwnerEvidence" to "Owner supplied about 45 seconds of three finalized camera files, 44 GPS and 178 vehicle samples, and successful local map rendering. Surround runtime reported CAMERA_UNAVAILABLE with cleanup confirmed. Owner reported home preview black after stop, playback proportions/library cover regressions, and an unconfirmed head-unit reboot when returning and unlocking the car. This does not verify the fixes or online road tiles in this binary.",
-                "predecessorFieldEvidence" to "Owner report from 5.1.0-field1: vehicle speed 0-3 km/h, gear/indicator/brake changes, 120 fresh GPS fixes, three simultaneous camera previews for about 20 seconds. Recorder was idle during the vehicle/GPS check. Does not establish concurrent telemetry recording, multi-camera encoding or this binary's vehicle acceptance."),
-            "notImplemented" to listOf("final_binary_vehicle_run", "broader_camera_contention_acceptance", "phone_android_raster_acceptance", "real_source_overload"),
+            "coverageNotes" to "5.1.0 promotes the support4.133 recorder and playback behavior, including retained camera handoffs, to the regular release. Private remote support and update components are excluded. External release verification records exact APK hashes, local tests and their limits. No all-firmware, whole-vehicle sleep or cold-boot restoration guarantee is made.",
+            "ownerFeedback" to mapOf("reportedOn" to "2026-10-14", "predecessor" to "5.1.0-support4.133",
+                "evidenceType" to "OWNER_REPORTED_NORMAL_USE", "summary" to "Owner reports today's use was satisfactory and requests a regular release; exact duration and every feature were not separately recorded."),
+            "privateSupport" to mapOf("enabled" to recorderSupport),
+            "knownLimits" to listOf("hardware_camera_and_usb_behavior_vary", "unexpected_encoder_timestamp_can_stop_recording", "return_preview_can_wait_for_native_camera_release", "cold_boot_requires_reopening_app"),
             "localTestResults" to null, "localTestResultsReason" to "See separately hashed delivery validation; this asset does not self-certify tests.",
             "r8MappingSha256" to null, "r8MappingReason" to "Generated after this asset; linked in external delivery manifest to avoid circular hashes.")
         directory.resolve("build-evidence.json").writeText(JsonOutput.toJson(evidence),Charsets.UTF_8)
@@ -103,8 +104,11 @@ android {
         applicationId = "io.github.dantenothing.openavmrecorder"
         minSdk = 26
         targetSdk = 36
-        versionCode = 114
-        versionName = "5.1.0-drive9"
+        versionCode = if (recorderSupport) supportVersion else 134
+        versionName = if (recorderSupport) "5.1.0-support4.$supportVersion" else "5.1.0"
+        buildConfigField("boolean", "RECORDER_SUPPORT_ENABLED", recorderSupport.toString())
+        // Promote the owner-tested handoff independently of private diagnostic access.
+        buildConfigField("boolean", "RETAINED_CAMERA_HANDOFF_ENABLED", "true")
         buildConfigField("boolean", "MIRROR_RETURN_ENABLED", "true")
         buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", "false")
         buildConfigField("boolean", "CAMERA_CONCURRENCY_PROBE_ENABLED", cameraConcurrencyProbe.toString())
@@ -131,7 +135,7 @@ android {
             buildConfigField("boolean", "EXPERIMENTAL_TOOLS_ENABLED", (!publicUiCheck).toString())
         }
         release {
-            ndk { abiFilters += "arm64-v8a" }
+            ndk { abiFilters += if(supportEmulator) "x86_64" else "arm64-v8a" }
             // The product entry points no longer reach the retired capability
             // lab and phone-transfer experiments. R8 keeps those classes out
             // of the public release APK while the private research work stays
@@ -154,6 +158,7 @@ android {
         buildConfig = true
     }
     testBuildType = "debug"
+    if (recorderSupport) sourceSets.getByName("release").manifest.srcFile("src/support/AndroidManifest.xml")
 }
 
 dependencies {

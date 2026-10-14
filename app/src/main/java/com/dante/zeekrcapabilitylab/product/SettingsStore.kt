@@ -150,8 +150,8 @@ class SettingsStore private constructor(private val prefs: SharedPreferences) {
 
     /** Opens the route panel only; online map consent remains separate. */
     val playbackMapDefaultOpen: Boolean get() = runCatching {
-        prefs.getBoolean(KEY_PLAYBACK_MAP_DEFAULT_OPEN, false)
-    }.getOrDefault(false)
+        prefs.getBoolean(KEY_PLAYBACK_MAP_DEFAULT_OPEN, true)
+    }.getOrDefault(true)
     fun setPlaybackMapDefaultOpen(value: Boolean) {
         prefs.edit().putBoolean(KEY_PLAYBACK_MAP_DEFAULT_OPEN, value).apply()
     }

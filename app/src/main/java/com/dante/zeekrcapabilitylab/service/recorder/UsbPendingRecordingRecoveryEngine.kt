@@ -26,7 +26,8 @@ internal object UsbPendingRecordingRecoveryEngine {
     private const val MAX_MANIFEST_BYTES = 2 * 1024 * 1024
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun recoverMounted(context: Context, onlyOperationId: String? = null) {
+    fun recoverMounted(context: Context, onlyOperationId: String? = null, closedUnusedOutput: String? = null) {
+        require(closedUnusedOutput == null || onlyOperationId != null)
         val appContext = context.applicationContext
         val journal = UsbRecordingRecoveryJournal(appContext)
         val backend = UsbMediaStoreBackend(appContext)
@@ -37,7 +38,7 @@ internal object UsbPendingRecordingRecoveryEngine {
                     it.volumeName.equals(entry.volumeName, ignoreCase = true)
             } ?: return@forEach
             UsbMutationCoordinator.withTarget(target.storageUuid) {
-                recoverEntry(appContext, journal, backend, target, entry)
+                recoverEntry(appContext, journal, backend, target, entry, closedUnusedOutput)
             }
         }
     }
@@ -48,6 +49,7 @@ internal object UsbPendingRecordingRecoveryEngine {
         backend: UsbMediaStoreBackend,
         target: UsbExportTarget,
         entry: UsbPendingRecordingOutput,
+        closedUnusedOutput: String?,
     ) {
         // A gallery refresh/recovery pass must never inspect or clean files owned by this live process.
         if (entry.nativeCheckpoint?.processStartId == com.dante.zeekrcapabilitylab.ZeekrApp.processStartId) return
@@ -74,7 +76,18 @@ internal object UsbPendingRecordingRecoveryEngine {
 
         val observations = try {
             recordedAssets.map { recorded ->
-                ObservedAsset(recorded, backend.metadata(Uri.parse(recorded.itemUri)))
+                var observation = ObservedAsset(recorded, backend.metadata(Uri.parse(recorded.itemUri)))
+                val metadata = observation.metadata
+                if (closedUnusedOutput == entry.itemUri && entry.nativeCheckpoint == null &&
+                    recordedAssets.size == 1 && recorded.kind == UsbExportAssetKind.VIDEO && metadata?.pending == 1 &&
+                    metadata.sizeBytes == null && identityFailures(context, target, observation) == listOf("VIDEO:SIZE")) {
+                    // Some providers have not indexed an empty pending file. Only the exact
+                    // closed, explicitly unused output may supply size from fstat; all URI,
+                    // volume, name, path, MIME and owner checks must already match.
+                    val size = backend.closedFileLength(metadata.uri)?.takeIf { it >= 0 }
+                    if (size != null) observation = observation.copy(metadata = metadata.copy(sizeBytes = size))
+                }
+                observation
             }
         } catch (failure: Throwable) {
             report(

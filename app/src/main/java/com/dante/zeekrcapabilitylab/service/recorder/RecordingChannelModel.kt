@@ -49,6 +49,15 @@ object RecordingChannelPolicy {
     const val START_TIMEOUT_MS = 20_000L
     const val STALE_FRAME_MS = 5_000L
 
+    fun configuration(primary: RecorderConfig, source: SessionSourceSnapshot,
+                      profile: com.dante.zeekrcapabilitylab.probe.camera.CameraFormatProfile,
+                      primaryStorage: RecordingStorageKind): RecorderConfig =
+        primary.copy(source = source.copy(profile = profile, layoutKind = RecordingLayoutKind.SINGLE_V1, laneLayout = null),
+            requestedFrameRate = FPS, strictFrameRate = false,
+            sharedInputRecordingEnabled = false, mirrorPreviewEnabled = false, auxiliaryChannels = emptyList(),
+            storagePreference = if (primaryStorage == RecordingStorageKind.USB_MEDIASTORE)
+                RecordingStoragePreference.USB_PREFERRED else RecordingStoragePreference.INTERNAL_ONLY)
+
     fun roles(config: RecorderConfig): List<RecordingSourceRole> = if (
         config.recordingMode == RecordingMode.NORMAL && config.source.sourceRole == RecordingSourceRole.SURROUND
     ) config.auxiliaryChannels.filter { it != RecordingSourceRole.SURROUND }.distinct().take(2) else emptyList()

@@ -26,6 +26,7 @@ class UsbMediaStoreRecordingOutputSink(
     private val recordingMode: RecordingMode,
     private val tokenDir: File,
     private val journal: UsbRecordingRecoveryJournal,
+    private val channelId: String? = null,
     private val onUnconfirmedDescriptorClose: ((ParcelFileDescriptor) -> Unit)? = null,
 ) : RecordingOutputSink {
     private val appContext = context.applicationContext
@@ -37,7 +38,7 @@ class UsbMediaStoreRecordingOutputSink(
         startedAtEpochMs: Long,
     ): RecordingOutputHandle {
         val operationId = UsbExportPolicy.operationId()
-        val bundleId = UsbExportPolicy.bundleId(recordingSessionId, segmentNumber, startedAtEpochMs)
+        val bundleId = UsbExportPolicy.bundleId(recordingSessionId, segmentNumber, startedAtEpochMs, channelId)
         val prefix = UsbExportPolicy.prefix(startedAtEpochMs, bundleId)
         val displayName = UsbExportPolicy.videoName(prefix, segmentNumber)
         val inserted = backend.insertPending(target, displayName, "video/mp4")
@@ -193,11 +194,17 @@ class UsbMediaStoreRecordingOutputHandle internal constructor(
         if (syncFailure != null) throw OutputFlushException(syncFailure)
     }
 
-    override fun abort() {
+    override fun abort() = abortClosed(unused = false)
+
+    /** Only for a destination returned by the encoder as unused, after all native owners closed. */
+    internal fun discardUnused() = abortClosed(unused = true)
+
+    private fun abortClosed(unused: Boolean) {
         close()
         // A disappearing provider must not escape into a recorder/camera executor and kill
         // the process. The durable journal intentionally remains for the next same-volume mount.
-        runCatching { UsbPendingRecordingRecoveryEngine.recoverMounted(appContext, pendingVideo.operationId) }
+        runCatching { UsbPendingRecordingRecoveryEngine.recoverMounted(appContext, pendingVideo.operationId,
+            closedUnusedOutput = pendingVideo.itemUri.takeIf { unused && nativeReleaseConfirmed }) }
         runCatching {
             if (journal.entries().none { it.operationId == pendingVideo.operationId }) {
                 localWorkingFile.delete()

@@ -12,6 +12,7 @@ object RecorderCommands {
     const val ACTION_SET_PREVIEW_OUTPUT = "$ACTION_PREFIX.SET_PREVIEW_OUTPUT"
     const val EXTRA_CONFIG_JSON = "recorderConfigJson"
     const val EXTRA_PREVIEW_SURFACE = "recorderPreviewSurface"
+    const val EXTRA_PREVIEW_RELEASED = "recorderPreviewReleased"
     const val EXTRA_PREVIEW_ENABLED = "recorderPreviewEnabled"
 
     val json: Json = Json {

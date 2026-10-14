@@ -24,7 +24,7 @@ internal object LabUi {
     val state=mutable.asStateFlow()
     fun update(value:JsonObject) { mutable.value=value }
 }
-/** Only retained for old installer callbacks. Protocol 2 exposes no update command. */
+/** Main-process reservation prevents a local camera start while a verified update is committing. */
 internal object LabUpdateReservation {
     private var owner:String?=null
     fun active()=owner!=null
@@ -48,6 +48,9 @@ internal class LabHarness(private val activity:PreflightActivity) {
     private var recipe:LabRecipeEngine?=null
     private val cancelCommands=ArrayList<String>()
     private var lastStage=""
+    private var productRun:com.dante.zeekrcapabilitylab.diagnostic.ProductDiagnosticRun?=null
+    private var productConfig:com.dante.zeekrcapabilitylab.service.recorder.RecorderConfig?=null
+    private var updateCommand:String?=null
     private val messenger=Messenger(Handler(Looper.getMainLooper()) { msg ->
         val raw=msg.data.getString("json").orEmpty()
         if(msg.sendingUid==activity.applicationInfo.uid && raw.length<=65536) runCatching { Json.parseToJsonElement(raw).jsonObject }.onSuccess { value ->
@@ -72,10 +75,16 @@ internal class LabHarness(private val activity:PreflightActivity) {
     }
     fun start() {
         visible=true
+        if(BuildConfig.RECORDER_SUPPORT_ENABLED) io.execute {
+            val config=runCatching { com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory.create(activity,
+                com.dante.zeekrcapabilitylab.service.recorder.RecordingSourceRole.SURROUND) }.getOrNull()
+            main.post { if(visible)productConfig=config }
+        }
         activity.bindService(Intent(activity,RemoteLabService::class.java),connection,Context.BIND_AUTO_CREATE)
     }
     fun stop() {
         visible=false;cancelJob("HARNESS_HIDDEN")
+        updateCommand=null;LabUpdateReservation.release()
         if(jobId!=null)finishJob("INTERRUPTED",verdict("ACCEPTED","INTERRUPTED","INCONCLUSIVE","UNKNOWN","HARNESS_HIDDEN_NO_REPLAY"))
         send(LabMessages.STATUS,status());main.removeCallbacks(pulse)
         runCatching { activity.unbindService(connection) };remote=null;io.shutdown()
@@ -111,7 +120,12 @@ internal class LabHarness(private val activity:PreflightActivity) {
     } }
     private fun nativeOrUsbBusy()=CameraRecordingService.isRunning() || !CanaryCameraInterlock.normalIdle() ||
         CaptureCleanupRuntime.pendingOwners.value>0 || UsbExportRepository.tasks.value.any {!it.terminal()}
+    private fun productStartReady()=LabPolicy.productStartReady(CameraRecordingService.isRunning(),
+        CaptureCleanupRuntime.pendingOwners.value,CameraWorkCoordinator.state.value.kind,CanaryCameraInterlock.normalIdle(),
+        UsbExportRepository.tasks.value.any {!it.terminal()})
     private fun view():LabRecipeEngine.View {
+        if(BuildConfig.RECORDER_SUPPORT_ENABLED) return productRun?.view() ?: LabRecipeEngine.View("",false,"CONFIRMED","NOT_RUN",
+            emptySet(),obj("productConfigReady" to (productConfig!=null)))
         val state=PreflightRuntime.state.value;val report=PreflightRuntime.report;val progress=PreflightRuntime.remoteProgress
         val run=if(state.active)progress.string("runId") else report?.string("runId").orEmpty()
         val cleanup=if(state.active)"PENDING" else report?.string("cleanup").orEmpty().ifEmpty {"UNKNOWN"}
@@ -159,22 +173,41 @@ internal class LabHarness(private val activity:PreflightActivity) {
             "cameraOwnerKind" to CameraWorkCoordinator.state.value.kind,
             "removableVolumesMounted" to runCatching {activity.getSystemService(StorageManager::class.java).storageVolumes
                 .count {it.isRemovable && it.state==Environment.MEDIA_MOUNTED}}.getOrDefault(-1),
-            "active" to (state.active || jobId!=null),"testActive" to state.active,"blocked" to state.blocked,"phase" to state.phase,
+            "active" to (state.active || jobId!=null || productRun?.active==true),"testActive" to state.active,"blocked" to state.blocked,
+            "phase" to if(BuildConfig.RECORDER_SUPPORT_ENABLED) v.detail.string("phase") else state.phase,
             "elapsedSeconds" to state.elapsedSeconds,"message" to state.message,
             "cameraBusy" to (nativeOrUsbBusy() || CameraWorkCoordinator.state.value.owner!=null),
+            "productStartReady" to (BuildConfig.RECORDER_SUPPORT_ENABLED && productStartReady()),
             "pendingNativeOwners" to CaptureCleanupRuntime.pendingOwners.value,"commandId" to jobId,"recipe" to recipe?.snapshot(),
-            "runId" to v.runId,"cleanup" to v.cleanup,"outcome" to v.outcome,"progress" to LabTransport.trimProgress(PreflightRuntime.remoteProgress),"results" to state.results)
+            "updateReservation" to updateCommand,
+            "runId" to v.runId,"cleanup" to v.cleanup,"outcome" to v.outcome,
+            "progress" to if(BuildConfig.RECORDER_SUPPORT_ENABLED) v.detail else LabTransport.trimProgress(PreflightRuntime.remoteProgress),"results" to state.results)
     }
     private fun cancelJob(reason:String) {
+        productRun?.takeIf { it.active }?.cancel(reason)
         recipe?.cancel(SystemClock.elapsedRealtime(),reason)
         simpleRun?.let {PreflightService.stopExpected(it);if(cancelAt==0L)cancelAt=SystemClock.elapsedRealtime()}
     }
     private fun execute(c:JsonObject) {
         val id=c.string("id");val kind=c.string("kind")
-        if(kind=="SESSION_END") {cancelJob("SESSION_ENDED");return}
+        if(kind=="SESSION_END") {cancelJob("SESSION_ENDED");updateCommand=null;LabUpdateReservation.release();return}
+        if(kind=="RELEASE_UPDATE") {
+            if(c.string("commandId")==updateCommand) {updateCommand=null;LabUpdateReservation.release()};return
+        }
         LabContract.validate(c,buildId)
         check(visible && LabUi.state.value.flag("armed")) {"HARNESS_NOT_VISIBLE_OR_ARMED"}
         check(SystemClock.elapsedRealtime()<c.number("executeBeforeElapsed")) {"COMMAND_HANDOFF_EXPIRED"}
+        if(kind=="INSTALL_UPDATE") {
+            check(BuildConfig.RECORDER_SUPPORT_ENABLED && LabUi.state.value.flag("allowUpdates")) {"UPDATES_NOT_ENABLED"}
+            check(updateCommand==null && jobId==null && productRun?.active!=true && !PreflightRuntime.state.value.active &&
+                !nativeOrUsbBusy() && CameraWorkCoordinator.state.value.owner==null) {"ENGINE_BUSY"}
+            check(LabUpdateReservation.claim()) {"UPDATE_RESERVATION_FAILED"}
+            updateCommand=id
+            send(LabMessages.STATUS,status())
+            reply(id,"RUNNING",verdict("ACCEPTED","RESERVED","PENDING","CONFIRMED","UPDATE_RESERVED"))
+            return
+        }
+        check(updateCommand==null) {"UPDATE_IN_PROGRESS"}
         if(kind=="STOP") {
             require(c.getValue("payload").jsonObject.string("commandId")==jobId) {"CANCEL_TARGET_NOT_ACTIVE"}
             if(id !in cancelCommands)cancelCommands+=id
@@ -182,26 +215,52 @@ internal class LabHarness(private val activity:PreflightActivity) {
             reply(id,"RUNNING",verdict("ACCEPTED","CANCELLING","PENDING","PENDING","TARGET_CANCELLATION_REQUESTED"));return
         }
         if(kind=="REPORT") {
-            io.execute { val result=runCatching { DiagnosticUpload.submit(activity.applicationContext,PreflightStore(activity).latestExport().first) }
+            check(jobId==null && productRun?.active!=true) {"ENGINE_BUSY"}
+            io.execute { val result=runCatching {
+                if(BuildConfig.RECORDER_SUPPORT_ENABLED) com.dante.zeekrcapabilitylab.diagnostic.SupportRound.save(activity.applicationContext)
+                DiagnosticUpload.submit(activity.applicationContext,PreflightStore(activity).latestExport().first) }
                 main.post { result.onSuccess {reply(id,"SUCCEEDED",obj("commandState" to "ACCEPTED","runState" to "FINISHED",
                     "outcome" to "PASS","cleanupState" to "NOT_APPLICABLE","reason" to "REPORT_QUEUED","runId" to it.run,"sha256" to it.hash))}
                     .onFailure {reply(id,"FAILED",verdict("ACCEPTED","FINISHED","INCONCLUSIVE","NOT_APPLICABLE",code(it)))} }
             };return
         }
-        check(jobId==null && !PreflightRuntime.state.value.active && !nativeOrUsbBusy()) {"ENGINE_BUSY"}
+        if(BuildConfig.RECORDER_SUPPORT_ENABLED && kind=="CAPABILITIES") {
+            reply(id,"SUCCEEDED",obj("commandState" to "ACCEPTED","runState" to "FINISHED","outcome" to "PASS",
+                "cleanupState" to "NOT_APPLICABLE","capabilities" to LabContract.capabilities(),
+                "productConfigReady" to (productConfig!=null),"profiles" to LabExperiment.productProfiles.sorted()));return
+        }
+        check(jobId==null && productRun?.active!=true && !PreflightRuntime.state.value.active &&
+            (if(BuildConfig.RECORDER_SUPPORT_ENABLED) productStartReady()
+             else !nativeOrUsbBusy())) {"ENGINE_BUSY"}
         if(kind=="RUN_RECIPE") {
             check(!PreflightRuntime.state.value.blocked) {"CLEANUP_UNCONFIRMED"}
             val plan=LabRecipe.parse(c.getValue("payload").jsonObject)
+            if(BuildConfig.RECORDER_SUPPORT_ENABLED) {
+                check(productConfig!=null) {"PRODUCT_CONFIG_UNAVAILABLE"}
+                check(plan.steps.filter {it.op=="START"}.all {it.experiment?.product==true}) {"PRODUCT_PROFILE_REQUIRED"}
+                check(plan.steps.filter {it.op=="WAIT"}.all {it.event=="RUN_FINISHED"}) {"PRODUCT_WAIT_MUST_JOIN"}
+            }
             check(DiagnosticUpload.reserveWorkflow(id)) {"UPLOAD_BUSY"}
             jobId=id
             recipe=LabRecipeEngine(id,plan,SystemClock.elapsedRealtime(),object:LabRecipeEngine.Host {
-                override fun start(experiment:LabExperiment):String? =
-                    if(visible && !nativeOrUsbBusy() && PreflightService.startExperiment(activity,experiment,plan.hash,id))CameraWorkCoordinator.state.value.owner else null
+                override fun start(experiment:LabExperiment):String? {
+                    if(BuildConfig.RECORDER_SUPPORT_ENABLED) {
+                        if(!visible || !productStartReady() || productRun?.active==true || productConfig==null) return null
+                        com.dante.zeekrcapabilitylab.diagnostic.SupportRound.begin()
+                        return runCatching { com.dante.zeekrcapabilitylab.diagnostic.ProductDiagnosticRun(activity.applicationContext,
+                            requireNotNull(productConfig),experiment.profile,::online).also {productRun=it;it.start()}.id }.getOrNull()
+                    }
+                    return if(visible && !nativeOrUsbBusy() && PreflightService.startExperiment(activity,experiment,plan.hash,id))CameraWorkCoordinator.state.value.owner else null
+                }
                 override fun view()=this@LabHarness.view()
-                override fun cancel(runId:String)=PreflightService.stopExpected(runId)
+                override fun cancel(runId:String) {
+                    if(BuildConfig.RECORDER_SUPPORT_ENABLED)productRun?.takeIf {it.id==runId}?.cancel()
+                    else PreflightService.stopExpected(runId)
+                }
                 override fun event(type:String,data:JsonObject)=this@LabHarness.event(type,data)
             })
         } else {
+            check(!BuildConfig.RECORDER_SUPPORT_ENABLED) {"PRODUCT_COMMAND_NOT_SUPPORTED"}
             val started=when(kind) {
                 "CAPABILITIES"->PreflightService.start(activity,false)
                 "DIAGNOSTICS_LIST","DIAGNOSTICS_RETIRE"->PreflightService.startEvidence(activity,kind=="DIAGNOSTICS_RETIRE",c.getValue("payload").jsonObject)

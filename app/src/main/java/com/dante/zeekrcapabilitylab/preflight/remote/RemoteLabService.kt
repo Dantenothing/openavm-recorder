@@ -22,9 +22,10 @@ class RemoteLabService:Service() {
     private lateinit var store:LabStore
     private var wire:LabWire?=null
     private var engine:Messenger?=null
-    private var engineStatus=obj()
-    private var engineAt=0L
+    @Volatile private var engineStatus=obj()
+    @Volatile private var engineAt=0L
     private var recovered=false
+    private var updateDeadline=0L
     @Volatile private var running=false
     @Volatile private var stopRequested=false
     private var endingAt=0L
@@ -55,10 +56,14 @@ class RemoteLabService:Service() {
         };true
     })
     override fun onCreate() {
-        super.onCreate();store=LabStore(this);permissions=LabPermissions.read(this)
+        super.onCreate();store=LabStore(this);permissions=LabPermissions.read(this);instance=this
         actor.execute {
             for((id,raw) in store.records())if(raw.jsonObject.string("state") !in LabPolicy.terminal) {
-                recovered=true
+                val pending=store.state["supportUpdate"] as? JsonObject
+                if(pending?.string("commandId")==id && SupportUpdatePolicy.installed(pending,BuildConfig.VERSION_CODE.toLong(),buildId)) {
+                    record(id,"SUCCEEDED",updateResult("UPDATE_INSTALLED",pending["target"] as? JsonObject ?: obj()));continue
+                }
+                if(!isUpdate(raw.jsonObject))recovered=true
                 record(id,"INTERRUPTED",obj("commandState" to "ACCEPTED","runState" to "INTERRUPTED",
                     "outcome" to "INCONCLUSIVE","cleanupState" to "UNKNOWN","reason" to "CONTROL_PROCESS_RESTARTED_NO_REPLAY"))
             }
@@ -66,6 +71,12 @@ class RemoteLabService:Service() {
     }
     override fun onBind(intent:Intent):IBinder=receiver.binder
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
+        if(intent?.action==CONFIRM_UPDATE) {
+            if(store.active())SupportInstallConfirmation.pending?.let { confirmation ->
+                runCatching {startActivity(confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))}
+            }
+            return START_NOT_STICKY
+        }
         if(intent?.action==END) {stopRequested=true;actor.execute {end("正在结束会话并等待测试收尾")};return START_NOT_STICKY}
         foreground()
         val parked=intent?.getBooleanExtra("parked",false)==true
@@ -75,7 +86,8 @@ class RemoteLabService:Service() {
             check(resume || parked) {"PARKED_CONFIRMATION_REQUIRED"}
             val connection=DiagnosticSettings(this).load()?.takeIf {it.paired} ?: error("PAIRING_REQUIRED")
             if(resume)check(store.active()) {"SESSION_EXPIRED"}
-            else if(!store.active())store.arm(false)
+            else if(!store.active())store.arm(BuildConfig.RECORDER_SUPPORT_ENABLED && intent?.getBooleanExtra("allowUpdates",false)==true)
+            permissions=LabPermissions.read(this)
             lane.invalidate();wire?.cancelAll();wire=LabWire(connection)
             endingAt=0;stopRequested=false;running=true;nextPoll=0;connectedAt=0
             main.post {acquireWake()};tick()
@@ -99,6 +111,8 @@ class RemoteLabService:Service() {
     }
     private fun engineReady()=engine!=null && engineAt>0 && SystemClock.elapsedRealtime()-engineAt<10_000 && engineStatus.flag("visible")
     private fun hasWork()=store.records().values.any {it.jsonObject.string("state") !in LabPolicy.terminal}
+    private fun isUpdate(record:JsonObject)=(record["command"] as? JsonObject)?.string("kind") in SupportUpdatePolicy.kinds
+    private fun updateBusy()=store.records().values.any {it.jsonObject.let {r -> isUpdate(r) && r.string("state") !in LabPolicy.terminal}}
     private fun tick() {
         if(!running)return
         try {tickOnce()}catch(t:Throwable) {end("控制状态异常 · "+errorCode(t))}
@@ -106,6 +120,7 @@ class RemoteLabService:Service() {
     }
     private fun tickOnce() {
         val now=SystemClock.elapsedRealtime()
+        processInstallerState()
         if((stopRequested || !store.active()) && endingAt==0L)end("会话已结束或到期，等待收尾")
         if(!engineReady() && now-exitsAt>30_000 && Build.VERSION.SDK_INT>=30) {
             exitsAt=now
@@ -119,7 +134,7 @@ class RemoteLabService:Service() {
         }
         for((id,raw) in store.records()) {
             val r=raw.jsonObject
-            if(r.string("state") !in LabPolicy.terminal && now-r.number("acceptedElapsed")>30_000 &&
+            if(r.string("state") !in LabPolicy.terminal && !isUpdate(r) && now-r.number("acceptedElapsed")>30_000 &&
                 (!engineReady() || r.string("state")=="ACCEPTED"))
                 record(id,"INTERRUPTED",obj("commandState" to "ACCEPTED","runState" to "INTERRUPTED",
                     "outcome" to "INCONCLUSIVE","cleanupState" to "UNKNOWN","reason" to "ENGINE_RESPONSE_LOST_NO_REPLAY"))
@@ -184,11 +199,13 @@ class RemoteLabService:Service() {
         "historicalProcessExits" to exitEvidence,"processExitQuery" to exitQuery,"processExitObservedElapsedMs" to exitsAt,
         "sessionId" to store.state.string("sessionId"),"armed" to (store.active() && !stopRequested),"running" to running,
         "controlObservedElapsedMs" to SystemClock.elapsedRealtime(),
-        "allowUpdates" to false,"networkConnected" to (connectedAt>0 && SystemClock.elapsedRealtime()-connectedAt<15_000),
+        "allowUpdates" to (BuildConfig.RECORDER_SUPPORT_ENABLED && store.state.flag("allowUpdates")),"networkConnected" to (connectedAt>0 && SystemClock.elapsedRealtime()-connectedAt<15_000),
         "remainingSeconds" to ((store.state.number("deadlineElapsed")-SystemClock.elapsedRealtime()).coerceAtLeast(0)/1000),
         "engineAgeMs" to if(engineAt>0)SystemClock.elapsedRealtime()-engineAt else -1,"engine" to engineStatus,
         "capabilities" to LabContract.capabilities(),"permissionQueries" to permissions,"message" to message,"lastConnectedEpochMs" to lastConnected,
-        "eventHighWater" to store.state.number("eventSeq"),"eventAck" to store.state.number("eventAck"),"updateInProgress" to false)
+        "eventHighWater" to store.state.number("eventSeq"),"eventAck" to store.state.number("eventAck"),"updateInProgress" to updateBusy(),
+        "update" to store.state["supportUpdate"],"preparedUpdate" to store.state["supportPrepared"],
+        "updateResumeError" to store.state["updateResumeError"])
     private fun publish() {runCatching {engine?.send(Message.obtain(null,LabMessages.UI).apply {data=Bundle().apply {putString("json",snapshot().toString())}})}}
     private fun sendEngine(c:JsonObject) {
         (engine ?: error("ENGINE_NOT_CONNECTED")).send(Message.obtain(null,LabMessages.COMMAND).apply {data=Bundle().apply {putString("json",c.toString())}})
@@ -199,14 +216,40 @@ class RemoteLabService:Service() {
             LabPolicy.validateCommand(c,store.state.string("sessionId"),BuildConfig.VERSION_CODE,now,buildId)
             check(store.active() && !stopRequested) {"SESSION_EXPIRED"}
             check(LabPolicy.canAccept(id,store.records())) {"COMMAND_ALREADY_SEEN_OR_FULL"}
-            check(engineReady()) {"ENGINE_NOT_READY"}
             val kind=c.string("kind")
-            if(kind !in setOf("STOP","REPORT")) {
+            check(!updateBusy() || kind=="STOP") {"UPDATE_IN_PROGRESS"}
+            if(kind=="STOP" && updateBusy()) {
+                val target=c.getValue("payload").jsonObject.string("commandId")
+                val r=store.records()[target] as? JsonObject ?: error("CANCEL_TARGET_NOT_ACTIVE")
+                check(isUpdate(r) && r.string("state") !in LabPolicy.terminal) {"CANCEL_TARGET_NOT_ACTIVE"}
+                cancelUpdate(target,"UPDATE_CANCELLED")
+                record(id,"SUCCEEDED",updateResult("UPDATE_CANCELLATION_REQUESTED"));return
+            }
+            check(engineReady()) {"ENGINE_NOT_READY"}
+            if(BuildConfig.RECORDER_SUPPORT_ENABLED) {
+                check(kind in setOf("STOP","REPORT","CAPABILITIES","RUN_RECIPE")+SupportUpdatePolicy.kinds) {"PRODUCT_COMMAND_NOT_SUPPORTED"}
+                if(kind=="RUN_RECIPE") check(!engineStatus.flag("active") && engineStatus.flag("productStartReady")) {"ENGINE_BUSY"}
+            } else if(kind !in setOf("STOP","REPORT")) {
                 check(!engineStatus.flag("active") && !engineStatus.flag("cameraBusy")) {"ENGINE_BUSY"}
                 if(kind !in setOf("CAPABILITIES","DIAGNOSTICS_LIST"))check(!engineStatus.flag("blocked")) {"ENGINE_UNSETTLED"}
             }
             record(id,"ACCEPTED",obj("commandState" to "ACCEPTED","runState" to "QUEUED","outcome" to "PENDING","cleanupState" to "NOT_APPLICABLE"),
                 obj("command" to c,"acceptedElapsed" to SystemClock.elapsedRealtime()))
+            if(kind in SupportUpdatePolicy.kinds) {
+                check(BuildConfig.RECORDER_SUPPORT_ENABLED && store.state.flag("allowUpdates")) {"UPDATES_NOT_ENABLED"}
+                check(SupportUpdatePolicy.idle(engineStatus) && !hasOtherWork(id)) {"ENGINE_BUSY"}
+                SupportUpdatePolicy.target(c.getValue("payload").jsonObject,BuildConfig.VERSION_CODE.toLong())
+                updateDeadline=SystemClock.elapsedRealtime()+(c.number("expires")-now).coerceAtMost(180_000)
+                if(kind=="PREPARE_UPDATE") {
+                    record(id,"RUNNING",updatePending("DOWNLOADING_UPDATE"))
+                    check(lane.submit({ SupportUpdater(this,store).prepare(requireNotNull(wire),c.getValue("payload").jsonObject) }) { result ->
+                        result.onSuccess {record(id,"SUCCEEDED",updateResult("APK_PREPARED",it))}
+                            .onFailure {record(id,"FAILED",updateFailure(errorCode(it)))}
+                    }) {"UPDATE_LANE_BUSY"}
+                    return
+                }
+                check(packageManager.canRequestPackageInstalls()) {"INSTALL_PERMISSION_REQUIRED"}
+            }
             sendEngine(JsonObject(c+obj("executeBeforeElapsed" to
                 (SystemClock.elapsedRealtime()+minOf(10_000,c.number("expires")-now)))))
         } catch(t:Throwable) {
@@ -226,12 +269,66 @@ class RemoteLabService:Service() {
         val id=data.string("id");val prior=store.records()[id] as? JsonObject ?: return
         if(prior.string("state") in LabPolicy.terminal)return
         val state=data.string("state")
+        if(isUpdate(prior) && data["result"]?.jsonObject?.string("reason")=="UPDATE_RESERVED") {
+            val command=prior.getValue("command").jsonObject
+            record(id,"RUNNING",updatePending("INSTALLING_UPDATE"))
+            val submitted=lane.submit({ SupportUpdater(this,store).install(command) {
+                !stopRequested && store.active() && engineReady() && engineStatus.string("updateReservation")==id &&
+                    SystemClock.elapsedRealtime()<updateDeadline && store.records()[id]?.jsonObject?.string("state")=="RUNNING"
+            } }) { result ->
+                result.onFailure {releaseUpdate(id);record(id,"FAILED",updateFailure(errorCode(it)))}
+            }
+            if(!submitted) {releaseUpdate(id);record(id,"FAILED",updateFailure("UPDATE_LANE_BUSY"))}
+            return
+        }
         if(state in setOf("RUNNING","SUCCEEDED","FAILED","REJECTED","INTERRUPTED"))record(id,state,data["result"] as? JsonObject ?: obj())
+    }
+    private fun hasOtherWork(id:String)=store.records().any {(other,r)->other!=id && r.jsonObject.string("state") !in LabPolicy.terminal}
+    private fun updatePending(reason:String)=obj("commandState" to "ACCEPTED","runState" to "RUNNING",
+        "outcome" to "PENDING","cleanupState" to "NOT_APPLICABLE","reason" to reason)
+    private fun updateResult(reason:String,identity:JsonObject=obj())=JsonObject(identity+obj("commandState" to "ACCEPTED",
+        "runState" to "FINISHED","outcome" to "PASS","cleanupState" to "NOT_APPLICABLE","reason" to reason))
+    private fun updateFailure(reason:String)=obj("commandState" to "ACCEPTED","runState" to "FINISHED",
+        "outcome" to "INCONCLUSIVE","cleanupState" to "NOT_APPLICABLE","reason" to reason)
+    private fun releaseUpdate(id:String) {runCatching {sendEngine(obj("kind" to "RELEASE_UPDATE","commandId" to id))}}
+    private fun cancelUpdate(id:String,reason:String) {
+        lane.invalidate();wire?.cancelAll()
+        val pending=store.state["supportUpdate"] as? JsonObject
+        if(pending?.string("commandId")==id) {
+            store.change("supportUpdate" to JsonObject(pending+obj("phase" to "CANCELLED")))
+            runCatching {packageManager.packageInstaller.abandonSession(pending.number("installerSession").toInt())}
+        }
+        SupportInstallConfirmation.pending=null
+        record(id,"INTERRUPTED",updateFailure(reason));releaseUpdate(id)
+    }
+    private fun processInstallerState() {
+        val pending=store.state["supportUpdate"] as? JsonObject ?: return
+        val id=pending.string("commandId")
+        val prior=store.records()[id] as? JsonObject ?: return
+        if(prior.string("state") in LabPolicy.terminal)return
+        if(SupportUpdatePolicy.installed(pending,BuildConfig.VERSION_CODE.toLong(),buildId)) {
+            record(id,"SUCCEEDED",updateResult("UPDATE_INSTALLED",pending["target"] as? JsonObject ?: obj()))
+            releaseUpdate(id);return
+        }
+        val status=(pending["installerStatus"] as? JsonPrimitive)?.intOrNull
+        when {
+            status==android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                if((prior["result"] as? JsonObject)?.string("reason")!="SYSTEM_CONFIRMATION_REQUIRED")
+                    record(id,"RUNNING",updatePending("SYSTEM_CONFIRMATION_REQUIRED"))
+            }
+            status!=null && status>0 -> {
+                record(id,"FAILED",JsonObject(updateFailure("SYSTEM_INSTALL_FAILED")+obj("installerStatus" to status)));releaseUpdate(id)
+                return
+            }
+        }
+        if(SystemClock.elapsedRealtime()-pending.number("committedElapsed")>SupportUpdatePolicy.INSTALL_WAIT_MS)
+            cancelUpdate(id,"INSTALL_RESULT_TIMEOUT_NO_REPLAY")
     }
     private fun end(reason:String) {
         stopRequested=true
         if(endingAt==0L) {
             endingAt=SystemClock.elapsedRealtime()
+            store.records().forEach { (id,r) -> if(isUpdate(r.jsonObject) && r.jsonObject.string("state") !in LabPolicy.terminal)cancelUpdate(id,"SESSION_ENDED") }
             lane.invalidate();wire?.cancelAll();nextPoll=0
             store.change("armed" to false)
             runCatching {sendEngine(obj("kind" to "SESSION_END"))}
@@ -249,11 +346,15 @@ class RemoteLabService:Service() {
         actor.execute {end("系统结束了远程会话");finishService()}
     }
     override fun onDestroy() {
+        if(instance===this)instance=null
         running=false;wire?.cancelAll();actor.shutdownNow();io.shutdownNow()
         wake?.takeIf {it.isHeld}?.release();super.onDestroy()
     }
     companion object {
         const val START="openavm.remote.START";const val END="openavm.remote.END";const val RESUME="openavm.remote.RESUME"
+        const val CONFIRM_UPDATE="openavm.remote.CONFIRM_UPDATE"
+        @Volatile private var instance:RemoteLabService?=null
+        fun supportInstallerEvent() { instance?.let { s -> runCatching {s.actor.execute {s.processInstallerState();s.publish()}} } }
         private const val CHANNEL="openavm_remote_lab"
         fun installerEvent(@Suppress("UNUSED_PARAMETER") data:JsonObject):Boolean=false
         private fun errorCode(t:Throwable)=when(t) {

@@ -27,8 +27,8 @@ internal object DriveAttachmentSnapshot {
         require(VehicleTelemetryStore.validId(session)) { "Recording session is invalid" }
         val gps = RecordingTelemetry.store(context).load(session)
         val vehicle = RecordingVehicleTelemetry.store(context).load(session)
-        val report = SessionRecorderEvidence.collect(context, session, sidecar, gps, vehicle)
-        val bytes = DriveDataCodec.encode(build(sidecar, gps, vehicle).copy(recorderReport = report))
+        val report = if (task.driveSelection == null) SessionRecorderEvidence.collect(context, session, sidecar, gps, vehicle) else null
+        val bytes = DriveDataCodec.encode(build(sidecar, gps, vehicle, task.driveSelection).copy(recorderReport = report))
         val descriptor = requireNotNull(DriveDataCodec.descriptor(bytes))
         requireNotNull(DriveDataCodec.verify(bytes, descriptor, sidecar))
         val target = file(context, task.id)
@@ -58,7 +58,8 @@ internal object DriveAttachmentSnapshot {
 
     fun remove(context: Context, id: String) { runCatching { file(context, id).delete() } }
 
-    internal fun build(sidecarJson: String, gps: TelemetryTrack?, vehicle: VehicleTelemetryTrack?): DriveDataBundle {
+    internal fun build(sidecarJson: String, gps: TelemetryTrack?, vehicle: VehicleTelemetryTrack?, selection: DriveDataSelection? = null): DriveDataBundle {
+        require(selection?.valid() != false) { "Invalid drive-data selection" }
         require(sidecarJson.toByteArray(Charsets.UTF_8).size <= TransferProtocol.MAX_SIDECAR_BYTES)
         val sidecar = json.parseToJsonElement(sidecarJson).jsonObject
         val session = sidecar["recordingSessionId"]?.jsonPrimitive?.content ?: error("Recording session is missing")
@@ -67,16 +68,33 @@ internal object DriveAttachmentSnapshot {
         require(start >= 0 && end > start) { "Recording time window is invalid" }
         require(sidecar["recordingMode"]?.jsonPrimitive?.content == "NORMAL" &&
             (sidecar["timeLapseMultiplier"]?.jsonPrimitive?.intOrNull ?: 1) == 1) { "Drive-data transfer currently supports normal recordings only" }
-        val points = gps?.takeIf { it.header.sessionId == session }?.points.orEmpty()
-            .filter { it.elapsedMs >= start && it.elapsedMs < end }
-            .map { p -> DriveGpsSample(p.elapsedMs, p.epochMs, p.latitude, p.longitude, p.accuracyM,
-                p.provider, p.speedMps, p.speedAccuracyMps, p.breakBefore) }
-        val samples = vehicle?.takeIf { it.header.sessionId == session }?.samples.orEmpty()
-            .filter { it.elapsedMs >= start && it.elapsedMs < end }
-            .map { sample -> DriveVehicleSample(sample.elapsedMs, sample.epochMs,
-                sample.values.filterValues { it.readElapsedMs >= start && it.readElapsedMs < end }.mapValues { (_, field) ->
+        val windows = mutableListOf<DriveDataWindow>()
+        selection?.windows.orEmpty().sortedBy { it.startElapsedMs }.forEach { window ->
+            val last = windows.lastOrNull()
+            if (last != null && window.startElapsedMs <= last.endElapsedMs)
+                windows[windows.lastIndex] = last.copy(endElapsedMs = maxOf(last.endElapsedMs, window.endElapsedMs))
+            else windows += window
+        }
+        fun sameWindow(a: Long, b: Long) = windows.isEmpty() || windows.any { it.contains(a) && it.contains(b) }
+        var previousGps: Long? = null
+        val points = gps?.takeIf { it.header.sessionId == session && selection?.gps != false }?.points.orEmpty()
+            .filter { it.elapsedMs >= start && it.elapsedMs < end && selection?.contains(it.elapsedMs) != false }
+            .map { p ->
+                val gap = previousGps?.let { !sameWindow(it, p.elapsedMs) } == true
+                previousGps = p.elapsedMs
+                DriveGpsSample(p.elapsedMs, p.epochMs, p.latitude, p.longitude, p.accuracyM,
+                    p.provider, p.speedMps, p.speedAccuracyMps, p.breakBefore || gap)
+            }
+        var previousVehicle: Long? = null
+        val samples = vehicle?.takeIf { it.header.sessionId == session && selection?.vehicle != false }?.samples.orEmpty()
+            .filter { it.elapsedMs >= start && it.elapsedMs < end && selection?.contains(it.elapsedMs) != false }
+            .map { sample ->
+                val gap = previousVehicle?.let { !sameWindow(it, sample.elapsedMs) } == true
+                previousVehicle = sample.elapsedMs
+                DriveVehicleSample(sample.elapsedMs, sample.epochMs,
+                sample.values.filterValues { it.readElapsedMs >= start && it.readElapsedMs < end && sameWindow(it.readElapsedMs, sample.elapsedMs) }.mapValues { (_, field) ->
                     DriveVehicleValue(field.readElapsedMs, field.number, field.text, field.status)
-                }, sample.breakBefore) }
+                }, sample.breakBefore || gap) }
         val anchor = sidecar["videoClockAnchor"]?.takeUnless { it == JsonNull }?.let {
             json.decodeFromJsonElement<VideoClockAnchor>(it).also { value -> require(value.valid()) }
         }

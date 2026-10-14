@@ -29,7 +29,7 @@ Build and test tools downloaded by Gradle are not bundled in the release APK. Th
 
 ## Recorded road maps
 
-The development drive playback build uses MapLibre Native OpenGL ES 11.13.5 on both devices. The renderer retains its upstream licence notices in the shared `drive-map` module assets, which are packaged in both APKs. [MapLibre Native](https://github.com/maplibre/maplibre-native).
+OpenAVM V5.1 uses MapLibre Native OpenGL ES 11.13.5 on both devices. The renderer retains its upstream licence notices in the shared `drive-map` module assets, which are packaged in both APKs. [MapLibre Native](https://github.com/maplibre/maplibre-native).
 
 Optional online street maps use the OpenFreeMap Liberty style. The map displays linked attribution to OpenFreeMap, OpenMapTiles and OpenStreetMap contributors. OpenStreetMap data is available under the Open Database Licence; the map data and style licences are separate from the renderer and this application's code. The application does not include an offline region bundle. [OpenFreeMap](https://openfreemap.org/), [OpenMapTiles](https://openmaptiles.org/), [OpenStreetMap copyright and licence](https://www.openstreetmap.org/copyright).
 

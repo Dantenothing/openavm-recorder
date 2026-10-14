@@ -12,6 +12,13 @@ class DiagnosticPolicyTest {
         assertThrows(IllegalStateException::class.java) { DiagnosticPolicy.identity(bytes(),"22222222-2222-4222-8222-222222222222") }
         assertEquals("4.1.0-beta18",DiagnosticPolicy.identity(bytes(),run).version)
     }
+    @Test fun v5PrivateReportUsesSameIdentityAndUnknownMajorStillFails() {
+        val v5=String(bytes()).replace("4.1.0-beta18","5.1.0-support1").toByteArray()
+        assertEquals("5.1.0-support1",DiagnosticPolicy.identity(v5,run).version)
+        assertThrows(IllegalArgumentException::class.java) {
+            DiagnosticPolicy.identity(String(bytes()).replace("4.1.0-beta18","6.0.0").toByteArray())
+        }
+    }
     @Test fun endpointRequiresHttpsOriginWithoutCredentialOrRedirectParameters() {
         assertEquals("https://example.com",DiagnosticPolicy.origin("https://example.com/"))
         for(url in listOf("http://example.com","https://key@example.com","https://example.com/p","https://example.com?a=b","https://example.com#token","https://example.com:443","https://localhost"))

@@ -27,7 +27,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class FloatingMirrorState(val active: Boolean = false, val busy: Boolean = false, val error: String? = null)
+data class FloatingMirrorState(val active: Boolean = false, val busy: Boolean = false, val error: String? = null,
+    val previewPreparing: Boolean = false)
 
 /** Visible controls with per-install opt-in return behaviour. Handoffs expire; this service owns no camera or encoder. */
 class FloatingMirrorService : Service() {
@@ -52,6 +53,7 @@ class FloatingMirrorService : Service() {
     private var startingToken: String? = null
     private var startDeadline = 0L
     private val previewRestart = PreviewRestartBudget()
+    private var retiringPreviewOwner: String? = null
     private var stopConfirmed = false
     private var ending = false
     private var idleChoice = RecordingModeChoice(RecordingMode.NORMAL)
@@ -59,9 +61,11 @@ class FloatingMirrorService : Service() {
     private var pendingStorage: RecordingStorageIdentity? = null
     private var startingStorage: RecordingStorageIdentity? = null
     private var previewRole = RecordingSourceRole.SURROUND
+    private var diagnosticPreview: PreviewOrderTrial? = null
     private val sleep = MirrorSleepRetention()
     private var pausedWindow: PausedMirrorWindow? = null
     private val controlsSession = java.util.UUID.randomUUID().toString()
+    private fun connectionTicket(request: MirrorHandoffGate.Request) = "$controlsSession:${request.token}"
     private var sleepCycle: String? = null
     private var lastSleepFacts: Map<String, String>? = null
     private var returnObserved = false
@@ -79,17 +83,29 @@ class FloatingMirrorService : Service() {
         ContextCompat.registerReceiver(this, screen, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (ending) { mutable.value = FloatingMirrorState(); stopSelf(); return START_NOT_STICKY }
+        // A cancelled/consumed diagnostic handoff still has an Android foreground
+        // start to acknowledge. Promoting the controls admits no camera or recording.
+        if (intent?.action in setOf(OPEN, FOLLOW)) {
+            try { goForeground() } catch (_: Exception) { end(); stopSelf(); return START_NOT_STICKY }
+        }
+        if (ending) { mutable.value = FloatingMirrorState(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY }
         if (intent?.action !in setOf(OPEN, FOLLOW)) { end(); return START_NOT_STICKY }
-        val close = PendingIntent.getService(this, 91, Intent(this, FloatingMirrorService::class.java).setAction(CLOSE), PendingIntent.FLAG_IMMUTABLE)
-        val open = PendingIntent.getActivity(this, 92, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val notification = NotificationCompat.Builder(this, RecorderNotification.CHANNEL_ID).setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("OpenAVM").setContentText(Utils.t("Floating mirror controls", "悬浮后视镜控制"))
-            .setContentIntent(open).setOngoing(true).addAction(0, Utils.t("Close window", "关闭悬浮窗"), close).build()
-        try {
-            if (Build.VERSION.SDK_INT >= 34) startForeground(0x5E49, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            else startForeground(0x5E49, notification)
-        } catch (_: Exception) { end(); return START_NOT_STICKY }
+        intent?.getStringExtra("diagnosticPreviewOrder")?.let { id ->
+            val trial = DiagnosticPreviewOrder.take(id)
+            if (trial == null) {
+                // A cancelled/duplicate service intent has no authority over a newer live preview.
+                if (diagnosticPreview == null && gate.pending == null && starting == null &&
+                    !CameraRecordingService.isRunning() && !StandaloneMirrorService.isRunning()) {
+                    stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
+                }
+                return START_NOT_STICKY
+            }
+            if (diagnosticPreview != null || CameraRecordingService.isRunning() || StandaloneMirrorService.isRunning()) {
+                DiagnosticPreviewOrder.finish(id); return START_NOT_STICKY
+            }
+            diagnosticPreview = trial
+            previewRole = trial.sourceRole
+        }
         mutable.value = FloatingMirrorState(active = true, busy = gate.pending != null || starting != null)
         if (!authorized()) { end(); return START_NOT_STICKY }
         if (!screenUsable()) suspendOrEnd("START_WITH_SCREEN_UNAVAILABLE")
@@ -111,6 +127,15 @@ class FloatingMirrorService : Service() {
         }
         main.removeCallbacks(tick); main.post(tick)
         return START_NOT_STICKY
+    }
+    private fun goForeground() {
+        val close = PendingIntent.getService(this, 91, Intent(this, FloatingMirrorService::class.java).setAction(CLOSE), PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(this, 92, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(this, RecorderNotification.CHANNEL_ID).setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentTitle("OpenAVM").setContentText(Utils.t("Floating mirror controls", "悬浮后视镜控制"))
+            .setContentIntent(open).setOngoing(true).addAction(0, Utils.t("Close window", "关闭悬浮窗"), close).build()
+        if (Build.VERSION.SDK_INT >= 34) startForeground(0x5E49, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(0x5E49, notification)
     }
     private fun authorized(): Boolean = !ending && Settings.canDrawOverlays(this) && SettingsStore.get(this).mirrorPreviewEnabled
     private fun screenUsable(): Boolean = MirrorDisplayState.usable(this)
@@ -148,6 +173,7 @@ class FloatingMirrorService : Service() {
         if (screenAvailableNow) { logSleep("STALE_POWER_HINT_IGNORED", reason); return }
         if (!returnSettings.effective.retained || !authorized()) { end(); return }
         val newlySuspended = sleep.suspend()
+        RetainedCameraConnection.cancel()
         if (!newlySuspended && screenWasUnavailable) return
         screenWasUnavailable = true
         suspendedRecordingSession = CameraRecordingService.state.value.recordingSessionId.takeIf { CameraRecordingService.isRunning() }
@@ -334,18 +360,39 @@ class FloatingMirrorService : Service() {
                         waitForProfile: Boolean = false, retryingPreview: Boolean = false): Boolean {
         if (!usable() || starting != null || gate.pending != null) return false
         val request = gate.begin(target, SystemClock.elapsedRealtime(), stoppedSession) ?: return false
+        retiringPreviewOwner = if (retryingPreview) StandaloneMirrorService.ownerId() else null
         startingToken = null // Revoke callbacks from the outgoing preview before waiting for its release.
         if (!retryingPreview) previewRestart.newRequest()
         log("REQUESTED", request)
-        pendingConfig = config; profileWaiting = false; pendingStorage = requiredStorage; stopConfirmed = stoppedSession == null
+        pendingConfig = config ?: diagnosticPreview?.recordingConfig
+        profileWaiting = false; pendingStorage = requiredStorage; stopConfirmed = stoppedSession == null
         mutable.value = FloatingMirrorState(active = true, busy = true)
+        // A connection may cross this one explicit intent only. Diagnostic reopen
+        // trials and failed/stale previews still use complete native retirement.
+        RetainedCameraConnection.cancel()
+        if (RetainedCameraConnection.enabled && diagnosticPreview == null && !retryingPreview) {
+            val recorder = CameraRecordingService.state.value
+            val fromPreview = StandaloneMirrorService.healthyCameraId().takeIf {
+                target == MirrorHandoffGate.Target.RECORD && recordingRole == previewRole &&
+                    (pendingConfig == null || pendingConfig?.cameraId == it)
+            }
+            val fromRecorder = recorder.cameraId?.takeIf {
+                target == (if (recorder.sourceRole == RecordingSourceRole.CABIN) MirrorHandoffGate.Target.CABIN else MirrorHandoffGate.Target.PREVIEW) &&
+                    stoppedSession == recorder.recordingSessionId && recorder.status == RecorderStatus.RECORDING &&
+                    recorder.lastError == null && recorder.videoFlowConfirmed
+            }
+            (fromPreview ?: fromRecorder)?.let { cameraId ->
+                RetainedCameraConnection.expect(cameraId, connectionTicket(request),
+                    minOf(request.deadlineMs, SystemClock.elapsedRealtime() + CameraDeviceLease.MAX_HANDOFF_MS))
+            }
+        }
         StandaloneMirrorService.stopForHandoff()
         previewRole = when (target) {
             MirrorHandoffGate.Target.RECORD -> recordingRole
             MirrorHandoffGate.Target.CABIN -> RecordingSourceRole.CABIN
             else -> RecordingSourceRole.SURROUND
         }
-        if (config == null) configJob = scope.launch {
+        if (pendingConfig == null) configJob = scope.launch {
             val role = previewRole
             val choice = if (target == MirrorHandoffGate.Target.RECORD) idleChoice else RecordingModeChoice(RecordingMode.NORMAL)
             val result = withTimeoutOrNull(if (waitForProfile) 17_000 else 8_000) {
@@ -379,22 +426,40 @@ class FloatingMirrorService : Service() {
         return true
     }
     private fun advance() {
+        diagnosticPreview?.closeTrial?.failure?.let {
+            fail(it); StandaloneMirrorService.stopForHandoff(); return
+        }
         if (!automaticReturnStillAllowed()) { applyReturnSettingsChange(); return }
         val request = gate.pending
         if (request != null) {
+            pendingConfig?.let { RetainedCameraConnection.discardIfDifferent(connectionTicket(request), it.cameraId) }
             val aux = CameraWorkCoordinator.state.value
+            // An outgoing preview can take longer than its close-warning deadline.
+            // Keep this one preview-only retry pending; the gates below still require
+            // actual native, service and GL release. Other errors revoke the request.
+            val waitingForRetiringPreview = request.target != MirrorHandoffGate.Target.RECORD &&
+                retiringPreviewOwner != null && aux.owner == retiringPreviewOwner && aux.kind == "PREVIEW" &&
+                aux.error == "CLEANUP_UNCONFIRMED" && StandaloneMirrorService.isReleasingOwner(retiringPreviewOwner)
             val allowed = usable() && (request.target == MirrorHandoffGate.Target.RECORD || preferences.videoVisible) &&
-                aux.error == null && pendingConfig?.validate()?.isEmpty() != false
+                (aux.error == null || waitingForRetiringPreview) && pendingConfig?.validate()?.isEmpty() != false
             when (gate.poll(request.token, SystemClock.elapsedRealtime(), allowed,
                 recorderGone = !CameraRecordingService.isRunning(), previewGone = !StandaloneMirrorService.isRunning(),
-                auxiliaryGone = !aux.active, nativeIdle = CanaryCameraInterlock.normalIdle(), glIdle = MirrorGlPreview.isIdle(),
+                auxiliaryGone = !aux.active, nativeIdle = RetainedCameraConnection.idle() ||
+                    RetainedCameraConnection.ready(connectionTicket(request), pendingConfig?.cameraId), glIdle = MirrorGlPreview.isIdle(),
                 stopConfirmed = stopConfirmed && pendingConfig != null)) {
                 MirrorHandoffGate.Decision.WAIT -> Unit
                 MirrorHandoffGate.Decision.CANCEL -> fail(if (allowed) "CAMERA_RELEASE_UNCONFIRMED" else "HANDOFF_CANCELLED")
                 MirrorHandoffGate.Decision.START -> {
+                    retiringPreviewOwner = null
+                    if (diagnosticPreview?.let { it.cameraId != pendingConfig?.cameraId ||
+                        request.target == MirrorHandoffGate.Target.RECORD && !it.admitsRecording(pendingConfig) } == true) {
+                        fail("PREVIEW_ORDER_CONFIGURATION_CHANGED"); return
+                    }
                     log("RELEASE_CONFIRMED", request)
                     starting = request.target; startDeadline = SystemClock.elapsedRealtime() + 20_000
-                    startingToken = java.util.UUID.randomUUID().toString()
+                    startingToken = connectionTicket(request)
+                    mutable.value = FloatingMirrorState(active = true, busy = true,
+                        previewPreparing = request.target != MirrorHandoffGate.Target.RECORD)
                     startingStorage = pendingStorage; pendingStorage = null
                     val accepted = when (request.target) {
                         MirrorHandoffGate.Target.PREVIEW -> StandaloneMirrorService.startOwned(this, checkNotNull(startingToken), checkNotNull(pendingConfig))
@@ -409,7 +474,8 @@ class FloatingMirrorService : Service() {
         starting?.let { target ->
             val recorder = CameraRecordingService.state.value
             val ready = if (target != MirrorHandoffGate.Target.RECORD) StandaloneMirrorService.isPreviewing()
-                else CameraRecordingService.isRunning() && recorder.status == RecorderStatus.RECORDING && recorder.sourceRole == previewRole
+                else CameraRecordingService.isRunning() && recorder.status == RecorderStatus.RECORDING &&
+                    recorder.videoFlowConfirmed && recorder.sourceRole == previewRole
             if (ready) {
                 if (automaticReturnChoice != null) logSleep("AUTO_STARTED", automaticReturnChoice!!.mode.name)
                 automaticReturnChoice = null; starting = null; startingStorage = null; mutable.value = FloatingMirrorState(active = true)
@@ -424,6 +490,7 @@ class FloatingMirrorService : Service() {
         }
     }
     private fun retryPreview(reason: String): Boolean {
+        if (diagnosticPreview != null) return false // Both comparison orders receive exactly one attempt.
         val allowed = !ending && !sleep.suspended && usable() && automaticReturnStillAllowed() && preferences.videoVisible &&
             !CameraRecordingService.isRunning() && !recordingCommandPending() && gate.pending == null
         if (!previewRestart.request(reason, allowed)) return false
@@ -437,6 +504,7 @@ class FloatingMirrorService : Service() {
         return request(target, retryingPreview = true)
     }
     private fun fail(reason: String) {
+        RetainedCameraConnection.cancel()
         if (ending || mutable.value.error == reason) return
         if (automaticReturnChoice != null) {
             logSleep("AUTO_FAILED", reason)
@@ -494,6 +562,8 @@ class FloatingMirrorService : Service() {
             waiting -> Utils.t("Camera in use · waiting to resume", "相机被占用 · 等待恢复")
             automaticReturnChoice?.mode == MirrorReturnMode.RECORD && busy -> Utils.t("Starting automatic recording…", "正在自动开始录像…")
             automaticReturnChoice?.mode == MirrorReturnMode.PREVIEW && busy -> Utils.t("Restoring preview…", "正在恢复预览…")
+            running && s.status == RecorderStatus.RECORDING && !s.videoFlowConfirmed -> Utils.t("Waiting for camera frames…", "正在等待相机画面…")
+            mutable.value.previewPreparing -> Utils.t("Waiting for preview · recording can be started", "等待预览画面 · 可点击开始录像")
             busy -> Utils.t("Switching / saving…", "正在切换／保存…")
             running -> Utils.t("Recording", "录像中")
             !preferences.videoVisible -> Utils.t("Video hidden · not recording", "画面隐藏 · 未录像")
@@ -504,6 +574,7 @@ class FloatingMirrorService : Service() {
         fallback?.render(MirrorOverlayState(label, running || recordPending, busy, mode = choice.mode,
             multiplier = if (choice.mode == RecordingMode.NORMAL) SettingsStore.get(this).timeLapseMultiplier else choice.multiplier,
             canChangeMode = !running || RecordingModeOverlayMenu.available(), canStopWhileBusy = waiting || recordPending,
+            canStartWhileBusy = canReplacePreviewPreparation(),
             cabin = previewRole == RecordingSourceRole.CABIN,
             error = mutable.value.error != null,
             elapsedMs = s.sessionStartedAtEpochMs?.let { System.currentTimeMillis() - it } ?: 0))
@@ -524,7 +595,9 @@ class FloatingMirrorService : Service() {
         preferences.videoVisible = show
         if (!show && !CameraRecordingService.isRunning()) {
             surroundReturnConfig = null
-            if (gate.pending?.target != MirrorHandoffGate.Target.RECORD) gate.cancel()
+            if (gate.pending?.target != MirrorHandoffGate.Target.RECORD) {
+                RetainedCameraConnection.cancel(); gate.cancel()
+            }
             if (starting != MirrorHandoffGate.Target.RECORD) { starting = null; startingToken = null }
             StandaloneMirrorService.stopForHandoff()
             mutable.value = FloatingMirrorState(active = true, busy = gate.pending != null || starting != null)
@@ -534,13 +607,26 @@ class FloatingMirrorService : Service() {
         MirrorPreviewRuntime.refreshHome()
     }
     private fun enterCabin() {
-        if (!usable() || mutable.value.busy || previewRole == RecordingSourceRole.CABIN || !preferences.videoVisible) return
+        if (!usable() || mutable.value.busy || !preferences.videoVisible) return
+        if (CameraRecordingService.isRunning()) { selectRecordingView(RecordingSourceRole.CABIN); return }
+        if (previewRole == RecordingSourceRole.CABIN) return
         switchSource(RecordingSourceRole.CABIN)
     }
     private fun beginRecording(config: RecorderConfig? = null) {
+        if (diagnosticPreview?.admitsRecording(config) == false) { fail("PREVIEW_ORDER_RECORDING_FORBIDDEN"); return }
+        if (canReplacePreviewPreparation()) {
+            // An explicit Record click replaces waiting for a preview frame. The next
+            // handoff still waits for this camera's actual close acknowledgement.
+            returnGate.cancel(); automaticReturnChoice = null
+            starting = null; startingToken = null; startingStorage = null
+            configJob?.cancel(); configJob = null; pendingConfig = null
+        }
         request(MirrorHandoffGate.Target.RECORD, config, recordingRole = config?.source?.sourceRole ?: previewRole)
     }
+    private fun canReplacePreviewPreparation(): Boolean = usable() && !CameraRecordingService.isRunning() &&
+        gate.pending == null && starting in setOf(MirrorHandoffGate.Target.PREVIEW, MirrorHandoffGate.Target.CABIN)
     private fun returnToSurround() {
+        if (CameraRecordingService.isRunning()) { selectRecordingView(RecordingSourceRole.SURROUND); return }
         if (previewRole != RecordingSourceRole.CABIN || mutable.value.busy) return
         switchSource(RecordingSourceRole.SURROUND)
     }
@@ -560,25 +646,19 @@ class FloatingMirrorService : Service() {
     }
     private fun switchSource(role: RecordingSourceRole) {
         if (!usable()) return
-        val running = CameraRecordingService.isRunning()
-        val transfer = if (running) CameraRecordingService.mirrorRecordingTransfer() ?: return else null
-        if (transfer == null) {
-            surroundReturnConfig = null
-            request(if (role == RecordingSourceRole.CABIN) MirrorHandoffGate.Target.CABIN else MirrorHandoffGate.Target.PREVIEW)
-            return
-        }
-        idleChoice = RecordingModeChoice(transfer.config.recordingMode, transfer.config.timeLapseMultiplier)
-        selection.value = idleChoice
-        val frozen = surroundReturnConfig.takeIf { role == RecordingSourceRole.SURROUND }
-        if (request(MirrorHandoffGate.Target.RECORD, stoppedSession = transfer.session, requiredStorage = transfer.storage,
-                recordingRole = role, transfer = transfer, frozenSource = frozen)) {
-            if (role == RecordingSourceRole.CABIN) surroundReturnConfig = transfer.config
-            CameraRecordingService.stopForMirrorSourceSwitch(transfer.session)
-        }
+        if (CameraRecordingService.isRunning()) { selectRecordingView(role); return }
+        surroundReturnConfig = null
+        request(if (role == RecordingSourceRole.CABIN) MirrorHandoffGate.Target.CABIN else MirrorHandoffGate.Target.PREVIEW)
+    }
+    private fun selectRecordingView(role: RecordingSourceRole) {
+        if (!MirrorPreviewRuntime.selectRecordingSource(role))
+            android.widget.Toast.makeText(this, Utils.t("Live view is preparing. Recording continues.",
+                "正在准备预览，录像继续。"), android.widget.Toast.LENGTH_SHORT).show()
     }
     private fun hideFallback() { fallback?.close(); fallback = null }
     private fun end() {
         if (ending) return
+        RetainedCameraConnection.cancel()
         returnGate.cancel()
         if (automaticReturnChoice != null && starting == MirrorHandoffGate.Target.RECORD) CameraRecordingService.cancelFloatingStart()
         automaticReturnChoice = null
@@ -609,8 +689,12 @@ class FloatingMirrorService : Service() {
         fun active() = mutable.value.active
         fun visible() = instance?.pausedWindow?.shown == true || instance?.fallback?.isVisible == true || MirrorPreviewRuntime.overlayVisible
         fun open(context: Context): Boolean = launch(context, OPEN)
+        internal fun openDiagnosticPreview(context: Context, trialId: String): Boolean {
+            check(com.dante.zeekrcapabilitylab.BuildConfig.RECORDER_SUPPORT_ENABLED)
+            return launch(context, OPEN, trialId)
+        }
         fun followRecording(context: Context) { if (!active()) launch(context, FOLLOW) }
-        private fun launch(context: Context, action: String): Boolean {
+        private fun launch(context: Context, action: String, diagnosticTrialId: String? = null): Boolean {
             if (!Settings.canDrawOverlays(context)) return false
             if (SettingsStore.get(context).mirrorRearLane !in 1..4 || ContextCompat.checkSelfPermission(context,
                     android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) return false
@@ -618,7 +702,8 @@ class FloatingMirrorService : Service() {
             SettingsStore.get(context).setMirrorPreviewEnabled(true)
             mutable.value = FloatingMirrorState(active = true, busy = action == OPEN)
             return runCatching { ContextCompat.startForegroundService(context,
-                Intent(context, FloatingMirrorService::class.java).setAction(action)); true }
+                Intent(context, FloatingMirrorService::class.java).setAction(action)
+                    .apply { diagnosticTrialId?.let { putExtra("diagnosticPreviewOrder", it) } }); true }
                 .getOrElse { mutable.value = FloatingMirrorState(); false }
         }
         fun close() { instance?.end() }
@@ -630,6 +715,7 @@ class FloatingMirrorService : Service() {
         fun startRecording(config: RecorderConfig? = null) { instance?.beginRecording(config) }
         fun recordControl() { instance?.recordOrStop() }
         fun recordingTransferPending() = instance?.recordingCommandPending() == true
+        fun canStartWhilePreviewPrepares() = instance?.canReplacePreviewPreparation() == true
         fun selectCabin() { instance?.enterCabin() }
         fun selectSurround() { instance?.returnToSurround() }
         /** Home source buttons select preview only; existing recording transfers stay separate. */
@@ -646,12 +732,18 @@ class FloatingMirrorService : Service() {
         } == true
         internal fun recordingStartStorage(token: String): RecordingStorageIdentity? =
             instance?.takeIf { admitsRecordingStart(token) }?.startingStorage
+        internal fun recordingStartCloseTrial(token: String): TerminalCloseTrial? =
+            instance?.takeIf { admitsRecordingStart(token) }?.diagnosticPreview?.closeTrial
+        internal fun diagnosticPreviewOrder(token: String): PreviewOrderTrial? =
+            instance?.takeIf { admitsPreviewStart(token, it.previewRole) }?.diagnosticPreview
         /** Re-check a queued service intent: closing the controls or locking revokes it. */
         fun admitsRecordingStart(token: String): Boolean = instance?.let {
-            it.usable() && it.automaticReturnStillAllowed() && it.starting == MirrorHandoffGate.Target.RECORD && it.startingToken == token
+            it.usable() && it.automaticReturnStillAllowed() && it.diagnosticPreview?.closeTrial?.failure == null &&
+                it.starting == MirrorHandoffGate.Target.RECORD && it.startingToken == token
         } == true
         fun admitsPreviewStart(token: String, role: RecordingSourceRole = RecordingSourceRole.SURROUND): Boolean = instance?.let {
-            it.usable() && it.automaticReturnStillAllowed() && it.preferences.videoVisible && it.previewRole == role &&
+            it.usable() && it.automaticReturnStillAllowed() && it.diagnosticPreview?.closeTrial?.failure == null &&
+                it.preferences.videoVisible && it.previewRole == role &&
                 it.starting == (if (role == RecordingSourceRole.CABIN) MirrorHandoffGate.Target.CABIN else MirrorHandoffGate.Target.PREVIEW) && it.startingToken == token
         } == true
         fun onManualStop(current: RecorderState) {
@@ -676,11 +768,25 @@ class FloatingMirrorService : Service() {
             if (owner.sleep.suspended) { owner.main.post { if (!owner.ending) owner.observeSleep() }; return }
             if (!owner.preferences.resident && owner.gate.pending == null) { owner.end(); return }
             val request = owner.gate.pending ?: run {
-                // Automatic completion (or a cancelled start) is not a new preview command.
-                // Keep usable controls instead of indefinitely claiming a preview is preparing.
-                owner.preferences.videoVisible = false
+                // The user already requested a visible preview. A recorder failure must not
+                // persistently switch that preference off. Return to preview only, through
+                // the same native/GL release gates as an explicit Stop; never retry recording.
+                val restorePreview = MirrorStoppedRecordingPolicy.restoreRequestedPreview(current,
+                    owner.preferences.resident, owner.preferences.videoVisible, owner.usable())
+                owner.returnGate.cancel(); owner.automaticReturnChoice = null
                 owner.starting = null
+                owner.startingToken = null
                 mutable.value = FloatingMirrorState(active = true)
+                if (restorePreview) {
+                    current.sourceRole?.takeIf { it in setOf(RecordingSourceRole.CABIN, RecordingSourceRole.SURROUND) }
+                        ?.let { owner.previewRole = it }
+                    if (owner.request(owner.previewTarget(), stoppedSession = current.recordingSessionId)) {
+                        // This method is the fenced onStopped callback. Admission still waits
+                        // for service destruction and every actual resource-release ACK.
+                        owner.stopConfirmed = true
+                        owner.gate.pending?.let { owner.log("PREVIEW_CONTINUATION_REQUESTED", it) }
+                    }
+                }
                 return
             }
             if (request.stoppedSession != null) {

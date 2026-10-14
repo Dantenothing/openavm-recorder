@@ -4,18 +4,18 @@ OpenAVM includes the vehicle Recorder and the Android phone app. Reports about s
 
 ## Supported versions
 
-The [current V5 release](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1) contains two separately versioned apps:
+The [current V5 release](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.1.0) contains two separately versioned apps:
 
 | App | Supported release |
 | --- | --- |
-| Vehicle Recorder | **5.0.0 / 102** |
-| Android Phone | **5.0.1 / 52** |
+| Vehicle Recorder | **5.1.0 / 134** |
+| Android Phone | **5.1.0 / 56** |
 
-The 5.0.1 update changes only the phone. Existing Recorder 5.0.0 users do not need to reinstall the vehicle app. V4 and older releases are superseded; fixes target the current releases. The withdrawn Phone 5.0.0 package and older test APKs are not supported.
+The 5.1.0 release updates both apps. V4 and older releases are superseded; fixes target the current releases. The withdrawn Phone 5.0.0 package and older test APKs are not supported.
 
-For local recording transfer, upgrade both ends from V4 and complete secure pairing again, comparing the complete phone fingerprint. Existing V5 pairing is retained by the Phone 5.0.1 update. See the [upgrade guide](docs/v5/GETTING_STARTED.md).
+For local recording transfer, upgrade both ends from V4 and complete secure pairing again, comparing the complete phone fingerprint. Existing V5 pairing is retained by the Phone 5.1.0 update. See the [upgrade guide](docs/v5/GETTING_STARTED.md).
 
-Phone 5.0.1 does not include or automatically download manufacturer cloud connection parameters. Optional cloud controls require user-supplied configuration and an authorised account. This is separate from local Recorder pairing and media transfer, which need neither cloud configuration nor a ZEEKR login.
+Phone 5.1.0 does not include or automatically download manufacturer cloud connection parameters. Optional cloud controls require user-supplied configuration and an authorised account. This is separate from local Recorder pairing and media transfer, which need neither cloud configuration nor a ZEEKR login.
 
 ## Report vulnerabilities privately
 

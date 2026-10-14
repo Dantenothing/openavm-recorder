@@ -36,8 +36,13 @@ object UsbExportPolicy {
     fun segmentManifestName(prefix: String, segmentNumber: Int): String =
         "${prefix}_S${segmentNumber.toString().padStart(3, '0')}.segment.json"
 
-    fun bundleId(recordingSessionId: String, segmentNumber: Int, startedAtEpochMs: Long): String =
-        sha256("$recordingSessionId|$segmentNumber|$startedAtEpochMs".toByteArray(Charsets.UTF_8))
+    fun bundleId(recordingSessionId: String, segmentNumber: Int, startedAtEpochMs: Long, channelId: String? = null): String {
+        require(channelId == null || channelId in setOf("SURROUND", "FRONT_CABIN", "REAR_CABIN"))
+        // Preserve existing surround identities. Concurrent cabin channels can share both
+        // a session and an exact millisecond; their files must still be distinct.
+        val suffix = if (channelId == null || channelId == "SURROUND") "" else "|$channelId"
+        return sha256("$recordingSessionId|$segmentNumber|$startedAtEpochMs$suffix".toByteArray(Charsets.UTF_8))
+    }
 
     fun operationId(): String = UUID.randomUUID().toString()
 

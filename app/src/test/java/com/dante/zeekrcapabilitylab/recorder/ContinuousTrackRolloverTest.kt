@@ -41,10 +41,10 @@ class ContinuousTrackRolloverTest {
         val state = ContinuousTrackFormatState(); state.accept(spec())
         reject { state.accept(spec(2)) }
     }
-    @Test fun firstMediaSampleMustBeKeyframeAndTheActualPlannerBoundary() {
+    @Test fun dependentFramesWaitButFirstWrittenFrameStillRequiresTheActualPlannerBoundary() {
         for (keyframe in listOf(false, true)) {
             val state = ContinuousTrackFormatState(); state.accept(spec()); state.accept(spec(2), true)
-            if (!keyframe) reject { state.beforeMediaSample(false) }
+            if (!keyframe) assertFalse(state.beforeMediaSample(false))
             else { state.beforeMediaSample(true); reject { state.commitBoundary(false) } }
         }
     }
@@ -76,7 +76,7 @@ class ContinuousTrackRolloverTest {
         state.beforeMediaSample(true)
         val next = requireNotNull(planner.accept(61_000_000, true))
         val boundaryFormat = if (state.commitBoundary(next.cutBefore)) "B" else null
-        finishContinuousTrackBoundary(finish = { trace += "finish:A"; "old-summary" }, canContinue = { true },
+        finishContinuousTrackBoundary(finish = { trace += "finish:A"; "old-summary" },
             newFormat = boundaryFormat, applyFormat = { trace += "configure:$it" },
             done = { trace += "write:B:${next.ptsUs}" })
         assertEquals(listOf("configure:A", "write:A:0", "finish:A", "configure:B", "write:B:0"), trace)
@@ -86,30 +86,24 @@ class ContinuousTrackRolloverTest {
         val trace = mutableListOf<String>()
         reject {
             finishContinuousTrackBoundary<String, String>(
-                finish = { trace += "finish"; error("finalize-failed") }, canContinue = { true },
+                finish = { trace += "finish"; error("finalize-failed") },
                 newFormat = "B", applyFormat = { trace += "apply" }, done = { trace += "open" })
         }
         assertEquals(listOf("finish"), trace)
     }
 
-    @Test fun productionBoundaryHonorsStopBeforeOrAfterFormatApplication() {
-        for (stopAfterApply in listOf(false, true)) {
-            var active = true
-            val trace = mutableListOf<String>()
-            val continued = finishContinuousTrackBoundary(finish = {
-                trace += "finish"; active = stopAfterApply; "summary"
-            }, canContinue = { active }, newFormat = "B", applyFormat = {
-                trace += "apply"; active = false
-            }, done = { trace += "open" })
-            assertFalse(continued)
-            assertEquals(if (stopAfterApply) listOf("finish", "apply") else listOf("finish"), trace)
-        }
+    @Test fun committedBoundaryAppliesItsTrackAndKeyframeEvenIfStopArrivesDuringFinalization() {
+        val trace = mutableListOf<String>()
+        assertTrue(finishContinuousTrackBoundary(finish = {
+            trace += "finish"; trace += "stop-requested"; "summary"
+        }, newFormat = "B", applyFormat = { trace += "apply:$it" }, done = { trace += "write-keyframe" }))
+        assertEquals(listOf("finish", "stop-requested", "apply:B", "write-keyframe"), trace)
     }
 
     @Test fun productionBoundaryKeepsExistingRotationWhenThereIsNoNewFormat() {
         val trace = mutableListOf<String>()
         assertTrue(finishContinuousTrackBoundary<String, String>(
-            finish = { trace += "finish"; "summary" }, canContinue = { true }, newFormat = null,
+            finish = { trace += "finish"; "summary" }, newFormat = null,
             applyFormat = { trace += "apply" }, done = { trace += "open:$it" }))
         assertEquals(listOf("finish", "open:summary"), trace)
     }
@@ -168,7 +162,7 @@ class ContinuousTrackRolloverTest {
             val state = ContinuousTrackFormatState(); state.accept(spec()); state.accept(spec(2), true)
             reject {
                 if (formatNotification) state.accept(spec(3), cutPending = false)
-                else state.beforeMediaSample(false)
+                else state.commitBoundary(false)
             } // terminal flag was not visible yet.
             val rejected = state.snapshot()
             state.discardAtEnd() // It becomes visible at the catch site, before any failure publication.

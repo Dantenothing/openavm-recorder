@@ -23,19 +23,23 @@ internal data class LabExperiment(val profile:String,val bitrateBps:Int,val iFra
     val high get()=profile=="HIGH_SHARED"
     val rateControlled get()=profile=="RATE_CONTROL_SHARED"
     val realCamera get()=profile in cameraProfiles
+    val product get()=profile in productProfiles
     fun cameraPlan()=com.dante.zeekrcapabilitylab.preflight.continuous.CameraProbePlan(
         requireNotNull(cameraProfiles[profile]),true)
-    fun json():JsonObject=if(reference || realCamera)obj("profile" to profile) else obj("profile" to profile,
+    fun json():JsonObject=if(reference || realCamera || product)obj("profile" to profile) else obj("profile" to profile,
         "bitrateBps" to bitrateBps,"iFrameIntervalSeconds" to iFrameIntervalSeconds).let {
             if(rateControlled)JsonObject(it+obj("bitrateMode" to bitrateMode,"avcProfile" to avcProfile)) else it
         }
     companion object {
         val cameraProfiles=mapOf("CAMERA_SMOKE" to 20,"CAMERA_MINUTE" to 240,"CAMERA_SOAK" to 600)
-        val profiles=setOf("REFERENCE_INPUT","HEALTH_DIRECT","HEALTH_SHARED","TARGET_SHARED","HIGH_SHARED","RATE_CONTROL_SHARED")+cameraProfiles.keys
+        val productProfiles=setOf("PRODUCT_PREVIEW","PRODUCT_RESTART","PRODUCT_SOAK",
+            "PRODUCT_PREVIEW_CAMERA_FIRST","PRODUCT_PREVIEW_SURFACE_FIRST",
+            "PRODUCT_CLOSE_DRAIN_FIRST","PRODUCT_CLOSE_DEVICE_FIRST")
+        val profiles=setOf("REFERENCE_INPUT","HEALTH_DIRECT","HEALTH_SHARED","TARGET_SHARED","HIGH_SHARED","RATE_CONTROL_SHARED")+cameraProfiles.keys+productProfiles
         fun parse(v:JsonObject):LabExperiment {
             fields(v,setOf("profile"),setOf("bitrateBps","iFrameIntervalSeconds","bitrateMode","avcProfile"))
             val profile=v.string("profile");require(profile in profiles) { "EXPERIMENT_NOT_SUPPORTED" }
-            if(profile in cameraProfiles) {
+            if(profile in cameraProfiles || profile in productProfiles) {
                 require(v.size==1) {"CAMERA_OVERRIDES_FORBIDDEN"}
                 return LabExperiment(profile,28_000_000,1)
             }
@@ -59,7 +63,7 @@ internal data class LabExperiment(val profile:String,val bitrateBps:Int,val iFra
 internal data class LabStep(val op:String,val experiment:LabExperiment?=null,val event:String?=null,val stage:String?=null,val timeoutMs:Long=0)
 internal data class LabRecipe(val steps:List<LabStep>,val hash:String) {
     companion object {
-        const val RUNNER_VERSION=3
+        const val RUNNER_VERSION=7
         const val MAX_MS=30*60*1000L
         val stagePattern=Regex("(health|full|stress)_(QUERY|GL_ALLOCATE|CODEC_CONFIGURE|PACED_ENCODING|COLD_FILE_DECODE)|camera_(QUERY|GL_ALLOCATE|CODEC_CONFIGURE|OPEN|LIVE|WINDOW_DETACHED|WINDOW_REJOINED|STOP_PRODUCER|COLD_FILE_DECODE)")
         fun parse(value:JsonObject):LabRecipe {
@@ -99,10 +103,11 @@ internal data class LabRecipe(val steps:List<LabStep>,val hash:String) {
 }
 
 internal object LabContract {
-    val kinds=setOf("CAPABILITIES","RUN_RECIPE","STOP","REPORT","DIAGNOSTICS_LIST","DIAGNOSTICS_RETIRE")
+    val kinds=setOf("CAPABILITIES","RUN_RECIPE","STOP","REPORT","DIAGNOSTICS_LIST","DIAGNOSTICS_RETIRE") + SupportUpdatePolicy.kinds
     fun payload(kind:String,p:JsonObject) {
         require(kind in kinds) {"COMMAND_NOT_SUPPORTED"}
         when(kind) {
+            "PREPARE_UPDATE","INSTALL_UPDATE"->SupportUpdatePolicy.payload(p)
             "RUN_RECIPE"->LabRecipe.parse(p)
             "STOP"->{fields(p,setOf("commandId"));require(LabPolicy.uuid.matches(p.string("commandId"))) {"CANCEL_TARGET_INVALID"}}
             "DIAGNOSTICS_RETIRE"->{
@@ -120,7 +125,20 @@ internal object LabContract {
         val p=c["payload"] as? JsonObject ?: error("COMMAND_PAYLOAD_INVALID")
         require(c.string("payloadHash")==payloadHash(p)) {"PAYLOAD_HASH_MISMATCH"};payload(c.string("kind"),p)
     }
-    fun capabilities()=obj("runnerVersion" to LabRecipe.RUNNER_VERSION,"recipeVersion" to 1,"operations" to kinds.sorted(),
+    fun capabilities()=if(com.dante.zeekrcapabilitylab.BuildConfig.RECORDER_SUPPORT_ENABLED) obj(
+        "runnerVersion" to LabRecipe.RUNNER_VERSION,"recipeVersion" to 1,
+        "operations" to listOf("CAPABILITIES","RUN_RECIPE","STOP","REPORT","PREPARE_UPDATE","INSTALL_UPDATE"),
+        "selfUpdate" to obj("ownerOptInRequired" to true,"sameSignerAndPackageOnly" to true,
+            "sessionDeadlineSurvivesUpdate" to true,"replayInterruptedTests" to false,"systemConfirmationMayBeRequired" to true),
+        "profiles" to LabExperiment.productProfiles.sorted(),"configuration" to "CURRENT_PRODUCT_SETTINGS_NO_REMOTE_OVERRIDES",
+        "previewSeconds" to 30,"restartFirstSeconds" to 75,"soakFirstSeconds" to 780,"secondRecordingSeconds" to 75,
+        "previewOrderComparison" to obj("orders" to listOf("CAMERA_FIRST","SURFACE_FIRST"),
+            "cameraCount" to 1,"recording" to false,"automaticRetries" to false,"persistentSetting" to false),
+        "terminalCloseComparison" to obj("orders" to listOf("DRAIN_FIRST","DEVICE_FIRST"),
+            "previewOrder" to "CAMERA_FIRST", "recordingSeconds" to 75, "recordings" to 2,
+            "automaticRetries" to false,"persistentSetting" to false,"requiredDeviceFencesPreserved" to true),
+        "stopOnFirstFailure" to true,"maxRecipeMs" to LabRecipe.MAX_MS,"arbitraryCode" to false,"videoUploaded" to false
+    ) else obj("runnerVersion" to LabRecipe.RUNNER_VERSION,"recipeVersion" to 1,"operations" to kinds.sorted(),
         "profiles" to LabExperiment.profiles.sorted(),"frameRate" to 30,"fileCount" to 4,"healthFrames" to 120,"fullFrames" to 600,
         "healthBitrateBps" to listOf(1_000_000,3_000_000),"fullBitrateBps" to listOf(8_000_000,28_000_000),
         "iFrameIntervalSeconds" to listOf(1,2),"parametersApply" to "NEXT_RUN_AFTER_CONFIRMED_CLEANUP",

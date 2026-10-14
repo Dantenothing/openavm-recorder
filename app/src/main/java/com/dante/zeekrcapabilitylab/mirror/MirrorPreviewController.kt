@@ -47,6 +47,7 @@ object MirrorPreviewRuntime {
     fun toggleHomeLane(lane: Int) { controller.get()?.toggleHomeLane(lane) }
     fun transformHome(zoom: Float, x: Float, y: Float) { controller.get()?.transformHome(zoom, x, y) }
     fun refreshHome() { controller.get()?.refreshSoon() }
+    internal fun selectRecordingSource(role: RecordingSourceRole): Boolean = controller.get()?.selectRecordingSource(role) == true
     internal fun wasDismissed(session: String) = dismissedSession == session
     internal fun dismiss(session: String) { dismissedSession = session }
     fun restore() { FloatingMirrorService.open(ZeekrApp.appContext) }
@@ -79,9 +80,9 @@ class MirrorHomeHost(context: Context) : FrameLayout(context) {
 }
 
 /**
- * Camera input belongs to an offscreen GL consumer for the entire manual surround run.
- * HOME/OVERLAY host display-only TextureViews; replacing one never replaces the camera output.
- * The recorder's output-release acknowledgement still owns the input texture lifetime.
+ * Recording retains its offscreen GL display bridge. Preview-only uses the same direct
+ * TextureView consumer as the vehicle-tested multi-camera probe. Moving HOME/OVERLAY
+ * retains that camera SurfaceTexture; only a native producer release can retire it.
  */
 class MirrorPreviewController(private val context: Context, private val config: RecorderConfig,
     private val source: MirrorCameraSource, private val runId: String, private val cameraGeneration: Long,
@@ -91,6 +92,8 @@ class MirrorPreviewController(private val context: Context, private val config: 
     private val settings = SettingsStore.get(context)
     private val preferences = MirrorPresentation(context)
     private val freshness = MirrorFrameFreshness()
+    private val directPreview = source.previewOnly
+    @Volatile private var directFrames = 0L
     private val displayRecovery = MirrorDisplayRecoveryBudget()
     @Volatile private var glPreview: MirrorGlPreview? = null
     private var closed = false
@@ -117,6 +120,9 @@ class MirrorPreviewController(private val context: Context, private val config: 
     private var photoBusy = false
     private var receiverRegistered = false
     private val cabin = config.source.sourceRole == RecordingSourceRole.CABIN
+    private var recordingCabinView: RecordingCabinView? = null
+    private var showingRecordedCabin = false
+    private val displayedCabin get() = cabin || showingRecordedCabin
     private val displayReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             // SCREEN_OFF may be delivered after SCREEN_ON or to a newly restored controller.
@@ -159,6 +165,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
                 bufferSize = chosen
                 if (chosen == null) fail("NO_DECLARED_PREVIEW_SIZE") else {
                     log("BUFFER_SELECTED", "DECLARED_COMPOSITE")
+                    if (directPreview) refreshSoon() else {
                     glPreview = MirrorGlPreview.create(chosen.width, chosen.height, ready = { input ->
                         if (closed || failed) glPreview?.closeAfterProducer() else {
                             texture = input
@@ -168,6 +175,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
                         }
                     }, failed = { reason -> if (!closed && !failed) fail(reason) })
                     if (glPreview == null) fail("GL_PREVIOUS_CLEANUP_PENDING")
+                    }
                 }
             }
         }
@@ -175,13 +183,48 @@ class MirrorPreviewController(private val context: Context, private val config: 
     }
 
     fun refreshSoon() { if (!closed) { handler.removeCallbacks(tick); handler.post(tick) } }
-    internal fun sourceFrameCount(): Long = glPreview?.evidence(SystemClock.elapsedRealtime())?.inputFrames ?: 0L
+    internal fun sourceFrameCount(): Long = if (directPreview) directFrames else glPreview?.evidence(SystemClock.elapsedRealtime())?.inputFrames ?: 0L
+    private fun inputEvidence(now: Long): MirrorGlEvidence = if (directPreview)
+        MirrorGlEvidence(backend = "DIRECT_CAMERA_TEXTUREVIEW", inputFrames = directFrames,
+            inputFrameAgeMs = freshness.age(now), inputTimestampNs = freshness.lastTextureTimestampNs,
+            cleanupPending = closed && lease?.released == false)
+        else glPreview?.evidence(now) ?: MirrorGlEvidence()
     fun restore() { if (!closed && !failed) { dismissed = false; preferences.dock = 0; rebuildOverlay(); refreshSoon() } }
     fun dismiss() { dismissed = true; MirrorPreviewRuntime.dismiss(runId); refreshSoon() }
+
+    /** The selector chooses a display, never a recording source or a new camera owner. */
+    internal fun selectRecordingSource(role: RecordingSourceRole): Boolean {
+        val current = source.state
+        if (closed || failed || source.previewOnly || presentation == null ||
+            current.status != RecorderStatus.RECORDING || current.cleanupPending || current.cleanupUnconfirmed ||
+            !MirrorPreviewPolicy.commandMatches(runId, cameraGeneration, current)) return false
+        if (role == config.source.sourceRole) {
+            showingRecordedCabin = false; recordingCabinView?.select(false); refreshSoon(); return true
+        }
+        if (role == RecordingSourceRole.CABIN && config.source.sourceRole == RecordingSourceRole.SURROUND) {
+            val stream = RecordingCabinFeed.find(runId)
+            if (stream == null) {
+                toast(Utils.t("Cabin is not recording. Enable cabin recording before your next recording.",
+                    "本次未录制舱内；请在下次开始录像前开启舱内录像。"))
+                return true
+            }
+            if (recordingCabinView == null) {
+                recordingCabinView = RecordingCabinView(context, stream).also {
+                    presentation!!.addView(it, FrameLayout.LayoutParams(-1, -1))
+                }
+            }
+            showingRecordedCabin = true; recordingCabinView?.select(true); refreshSoon()
+            log("VIEW_SELECTED", "EXISTING_CABIN_ENCODER")
+            return true
+        }
+        toast(Utils.t("This view is not part of the current recording.", "本次录像未启用这个视角。"))
+        return true
+    }
 
     fun toggleHomeLane(lane: Int) {
         // Back can still leave a selected lane while the display is unavailable.
         if (closed || cabin || lane !in 1..4) return
+        if (showingRecordedCabin) selectRecordingSource(RecordingSourceRole.SURROUND)
         homeDisplayMode = homeDisplayMode.toggleLane(lane)
         homeViewport = MirrorViewport()
         refreshSoon()
@@ -199,6 +242,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
 
     private fun update() {
         val state = source.state
+        recordingCabinView?.refresh()
         val now = SystemClock.elapsedRealtime()
         val recording = state.status in setOf(RecorderStatus.RECORDING, RecorderStatus.PREVIEWING)
         freshness.recorderProgress(state.segmentNumber, recording, now,
@@ -210,7 +254,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
         if (!alive && !failed) fail("RECORDING_ENDED")
         if (sameRun && submitted && state.previewFallbackUsed && !failed) fail("PREVIEW_CONFIG_REJECTED")
         val displayUsable = MirrorDisplayState.usable(context)
-        val desired = MirrorPreviewPolicy.destination(alive && !failed && texture != null,
+        val desired = MirrorPreviewPolicy.destination(alive && !failed && (texture != null || directPreview && bufferSize != null),
             ZeekrApp.isForeground.value, MirrorPreviewRuntime.homeHost() != null,
             Settings.canDrawOverlays(context), dismissed, displayUsable)
         if (desired != destination || (desired == MirrorDestination.HOME && presentation?.parent !== MirrorPreviewRuntime.homeHost())) moveTo(desired)
@@ -220,21 +264,22 @@ class MirrorPreviewController(private val context: Context, private val config: 
         val visible = desired != MirrorDestination.NONE && !failed && textureAttached &&
             presentation?.isShown == true && presentation?.windowVisibility == View.VISIBLE &&
             (desired == MirrorDestination.HOME || rear in 1..4)
-        // Window changes do not gate the camera input. The offscreen consumer keeps draining.
-        // Screen-off / lock still disables preview requests under the existing display policy.
-        val expected = !failed && texture != null && displayUsable
+        // Recording keeps draining its offscreen input. Direct preview consumes only
+        // while attached to a visible destination, retaining the queue across moves.
+        val expected = !failed && texture != null && displayUsable &&
+            (!directPreview || textureAttached && desired != MirrorDestination.NONE)
         glPreview?.setInputPollingEnabled(expected)
         if (submitted && targetEnabled != expected) {
             targetEnabled = expected
             source.enable(expected, runId, cameraGeneration)
             freshness.presentationChanged(now)
         }
-        val inputEvidence = glPreview?.evidence(now)
+        val inputEvidence = inputEvidence(now)
         if (source.previewOnly && !failed && submitted && expected && recording && visible &&
-            (inputEvidence?.inputFrames ?: 0L) > 0 && (inputEvidence?.inputFrameAgeMs ?: 0L) > 8_000 &&
+            inputEvidence.inputFrames > 0 && (inputEvidence.inputFrameAgeMs ?: 0L) > 8_000 &&
             freshness.outputTimedOut(now)) fail("PREVIEW_SOURCE_STALLED")
-        if (!failed && submitted && expected && recording) {
-            when (displayRecovery.evaluate(inputEvidence?.inputHeartbeatAgeMs, inputEvidence?.inputFrameAgeMs,
+        if (!directPreview && !failed && submitted && expected && recording) {
+            when (displayRecovery.evaluate(inputEvidence.inputHeartbeatAgeMs, inputEvidence.inputFrameAgeMs,
                 sameRun && visible && freshness.outputTimedOut(now))) {
                 MirrorDisplayRecoveryBudget.Action.REBUILD_DISPLAY -> {
                     rebuildDisplay()
@@ -286,7 +331,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
         (MirrorPreviewRuntime.homeHost() as? MirrorHomeHost)?.showMessage(message(reason))
         curtain?.apply { visibility = if (reason == "LIVE") View.GONE else View.VISIBLE; text = message(reason) }
         MirrorPreviewRuntime.homeControls(MirrorHomeControls(homeDisplayMode, homeViewport.zoom,
-            destination == MirrorDestination.HOME && reason == "LIVE", config.source.sourceRole))
+            destination == MirrorDestination.HOME && reason == "LIVE", if (showingRecordedCabin) RecordingSourceRole.CABIN else config.source.sourceRole))
         MirrorPreviewRuntime.evidence = MirrorEvidence(alive && !failed, destination.name, reason, freshness.frames,
             freshness.age(SystemClock.elapsedRealtime()), rear, settings.mirrorRotation, settings.mirrorHorizontal,
             config.profile.size.width, config.profile.size.height, bufferSize?.width, bufferSize?.height,
@@ -306,7 +351,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
         if (presentation != null) return
         val render = FourLaneTextureContainer(context).apply {
             val declared = checkNotNull(bufferSize)
-            // This is a GL display buffer, not a camera buffer. Preserve full composite detail.
+            // Keep both direct camera and GL display buffers at the declared composite size.
             fixedInputViewSize = android.util.Size(declared.width, declared.height)
             setBackgroundColor(Color.BLACK)
             setCompositeSize(config.profile.size.width, config.profile.size.height)
@@ -320,14 +365,32 @@ class MirrorPreviewController(private val context: Context, private val config: 
         }
         body.addView(render, FrameLayout.LayoutParams(-1, -1))
         body.addView(mask, FrameLayout.LayoutParams(-1, -1))
+        recordingCabinView?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            body.addView(it, FrameLayout.LayoutParams(-1, -1))
+        }
         renderer = render; presentation = body; curtain = mask
         render.textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(available: SurfaceTexture, width: Int, height: Int) {
                 if (closed || failed || render !== renderer) return
                 try {
                     val size = checkNotNull(bufferSize)
-                    available.setDefaultBufferSize(size.width, size.height)
-                    checkNotNull(glPreview).attachDisplay(available)
+                    if (directPreview) {
+                        val retained = texture
+                        if (retained == null) {
+                            texture = available
+                            lease = RetainedPreviewLease { available.release() }
+                        } else if (retained !== available) {
+                            // setSurfaceTexture releases the unused replacement, but does not
+                            // invoke its availability callback. The camera keeps the original.
+                            render.textureView.setSurfaceTexture(retained)
+                        }
+                        checkNotNull(texture).setDefaultBufferSize(size.width, size.height)
+                        checkNotNull(lease).attach()
+                    } else {
+                        available.setDefaultBufferSize(size.width, size.height)
+                        checkNotNull(glPreview).attachDisplay(available)
+                    }
                     textureAttached = true
                     freshness.presentationChanged(SystemClock.elapsedRealtime()); refreshSoon()
                 } catch (_: Exception) { fail("TEXTURE_ATTACH_FAILED") }
@@ -335,6 +398,11 @@ class MirrorPreviewController(private val context: Context, private val config: 
             override fun onSurfaceTextureDestroyed(destroyed: SurfaceTexture): Boolean {
                 if (render === renderer) textureAttached = false
                 refreshSoon()
+                if (directPreview && destroyed === texture) {
+                    // Removing a window cannot abandon a buffer queue still owned by Camera2.
+                    lease?.detach()
+                    return false
+                }
                 // The GL window producer may still be inside swap. Its acknowledgement owns release.
                 return glPreview?.destroyDisplay(destroyed) ?: true
             }
@@ -343,6 +411,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
                 if (!closed && !failed && render === renderer) {
                     val before = freshness.frames
                     freshness.frame(surface.timestamp, SystemClock.elapsedRealtime())
+                    if (directPreview) directFrames = freshness.frames
                     if (freshness.frames > before) {
                         source.displayedFrame(runId, cameraGeneration)
                     }
@@ -352,7 +421,9 @@ class MirrorPreviewController(private val context: Context, private val config: 
     }
 
     private fun ensureSubmitted(state: RecorderState) {
-        if (submitted || failed || closed || state.status !in setOf(RecorderStatus.RECORDING, RecorderStatus.PREVIEWING)) return
+        val accepting = state.status in setOf(RecorderStatus.RECORDING, RecorderStatus.PREVIEWING) ||
+            source.previewOnly && source.acceptsPreviewOutputBeforeOpen && state.status == RecorderStatus.STARTING
+        if (submitted || failed || closed || !accepting) return
         val retained = texture ?: return
         val currentLease = lease ?: return
         val surface = Surface(retained)
@@ -392,9 +463,13 @@ class MirrorPreviewController(private val context: Context, private val config: 
             onMode = { FloatingMirrorService.selectMode(it) },
             onVideo = { FloatingMirrorService.setVideoVisible(it); refreshSoon() },
             onClose = { FloatingMirrorService.close(); dismiss(); if (source.previewOnly) source.stop() },
-            onPhoto = ::savePhoto, onLane = ::selectLane, onCabin = { preferences.grid = false; FloatingMirrorService.selectCabin() },
+            onPhoto = ::savePhoto, onLane = ::selectLane, onCabin = {
+                preferences.grid = false
+                if (source.previewOnly) FloatingMirrorService.selectCabin() else selectRecordingSource(RecordingSourceRole.CABIN)
+            },
             onEmergency = ::saveEmergencyVideo,
-            onGrid = { if (cabin) FloatingMirrorService.selectSurround(); refreshSoon() },
+            onGrid = { if (showingRecordedCabin) selectRecordingSource(RecordingSourceRole.SURROUND)
+                else if (cabin) FloatingMirrorService.selectSurround(); refreshSoon() },
             onLens = { preferences.triple = false; preferences.setLens(viewportRearLane, it); refreshSoon() },
             onZoom = { adjustFraming(it, 0f, 0f); preferences.save(viewportRearLane, viewport) },
             onReset = ::resetFraming,
@@ -413,14 +488,14 @@ class MirrorPreviewController(private val context: Context, private val config: 
         host.addView(presentation, FrameLayout.LayoutParams(-1, -1))
         val scale = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                if (!cabin && !preferences.triple && !preferences.grid) adjustFraming(detector.scaleFactor, 0f, 0f)
+                if (!displayedCabin && !preferences.triple && !preferences.grid) adjustFraming(detector.scaleFactor, 0f, 0f)
                 return true
             }
         })
         val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(event: MotionEvent) = true
             override fun onScroll(first: MotionEvent?, event: MotionEvent, dx: Float, dy: Float): Boolean {
-                if (!cabin && !preferences.triple && !preferences.grid && !scale.isInProgress && event.pointerCount == 1) adjustFraming(1f, -dx, -dy)
+                if (!displayedCabin && !preferences.triple && !preferences.grid && !scale.isInProgress && event.pointerCount == 1) adjustFraming(1f, -dx, -dy)
                 return true
             }
             override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
@@ -429,7 +504,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
                 else if (preferences.triple) preferences.lanes()?.getOrNull(MirrorLayoutPolicy.panelAt(event.x / host.width.coerceAtLeast(1)))?.let(::selectLane)
                 return true
             }
-            override fun onDoubleTap(event: MotionEvent): Boolean { if (!cabin && !preferences.triple && !preferences.grid) resetFraming(); return true }
+            override fun onDoubleTap(event: MotionEvent): Boolean { if (!displayedCabin && !preferences.triple && !preferences.grid) resetFraming(); return true }
         })
         host.setOnTouchListener { _, event ->
             if (failed) false else {
@@ -450,21 +525,26 @@ class MirrorPreviewController(private val context: Context, private val config: 
         val current = source.state
         val choice = if (source.previewOnly) FloatingMirrorService.idleMode() else RecordingModeChoice(current.recordingMode, current.timeLapseMultiplier)
         val busy = FloatingMirrorService.state.value.busy || CameraRecordingService.modeSwitchProgress.value != null ||
-            !source.previewOnly && current.status != RecorderStatus.RECORDING
+            !source.previewOnly && (current.status != RecorderStatus.RECORDING || !current.videoFlowConfirmed)
         val label = when {
             source.previewOnly && busy -> Utils.t("Preparing live preview…", "正在恢复预览…")
+            !source.previewOnly && current.status == RecorderStatus.RECORDING && !current.videoFlowConfirmed ->
+                Utils.t("Waiting for camera frames…", "正在等待相机画面…")
             busy -> Utils.t("Switching / saving…", "正在切换／保存…")
+            showingRecordedCabin -> Utils.t("Recording · cabin view", "正在录像 · 舱内视角")
              cabin -> if (source.previewOnly) Utils.t("Cabin preview · not recording", "车内预览 · 未录像") else Utils.t("Recording cabin", "正在录制车内")
              source.previewOnly -> Utils.t("Live preview · not recording", "实时预览 · 未录像")
             else -> com.dante.zeekrcapabilitylab.service.RecordingModeOverlayMenu.label(choice.mode, choice.multiplier)
         }
         overlayWindow?.render(MirrorOverlayState(label, recording = !source.previewOnly, busy = busy,
+            canStartWhileBusy = source.previewOnly && FloatingMirrorService.canStartWhilePreviewPrepares(),
             canStopWhileBusy = FloatingMirrorService.recordingTransferPending() ||
+                !source.previewOnly && current.status in setOf(RecorderStatus.STARTING, RecorderStatus.RECORDING) ||
                 current.status in setOf(RecorderStatus.WAITING_CAMERA, RecorderStatus.RESUMING),
             canChangeMode = source.previewOnly || com.dante.zeekrcapabilitylab.service.RecordingModeOverlayMenu.available(),
-            canPhoto = !cabin && !preferences.grid && !photoBusy && !failed && freshness.isFresh(SystemClock.elapsedRealtime()),
+            canPhoto = !displayedCabin && !preferences.grid && !photoBusy && !failed && freshness.isFresh(SystemClock.elapsedRealtime()),
             mode = choice.mode, multiplier = if (choice.mode == RecordingMode.NORMAL) settings.timeLapseMultiplier else choice.multiplier,
-            zoom = viewport.zoom, cabin = cabin,
+            zoom = viewport.zoom, cabin = displayedCabin,
             canSaveEmergency = !closed && !failed && MirrorEmergencyAction.allowed(source.previewOnly, current.status, current.recordingMode, busy),
             elapsedMs = current.sessionStartedAtEpochMs?.let { System.currentTimeMillis() - it } ?: 0))
     }
@@ -482,6 +562,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
         preferences.save(viewportRearLane, viewport)
         preferences.selectedLane = lane; preferences.triple = false; preferences.grid = false
         viewportRearLane = lane; viewport = preferences.viewport(lane); refreshSoon()
+        if (showingRecordedCabin) selectRecordingSource(RecordingSourceRole.SURROUND)
         if (cabin) FloatingMirrorService.selectSurround()
     }
 
@@ -521,7 +602,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
 
     private fun toast(value: String) { Toast.makeText(context, value, Toast.LENGTH_SHORT).show() }
     private fun savePhoto() {
-        if (closed || failed || cabin || preferences.grid || photoBusy || !preferences.videoVisible || curtain?.visibility != View.GONE || !freshness.isFresh(SystemClock.elapsedRealtime())) return
+        if (closed || failed || displayedCabin || preferences.grid || photoBusy || !preferences.videoVisible || curtain?.visibility != View.GONE || !freshness.isFresh(SystemClock.elapsedRealtime())) return
         val lane = if (preferences.triple) settings.mirrorRearLane else viewportRearLane
         val size = bufferSize ?: return
         val view = renderer?.textureView ?: return
@@ -585,13 +666,14 @@ class MirrorPreviewController(private val context: Context, private val config: 
             textureAttached = textureAttached, textureAvailable = view?.isAvailable,
             textureShown = view?.isShown, hardwareAccelerated = view?.isHardwareAccelerated,
             displayRecoveryAttempts = displayRecovery.attempts,
-            gl = glPreview?.evidence(now) ?: MirrorGlEvidence(),
+            gl = inputEvidence(now),
         )
     }
 
     private fun fail(reason: String) {
         if (failed || closed) return
         failed = true; failure = reason
+        recordingCabinView?.close()
         glPreview?.setInputPollingEnabled(false)
         // Capture the failing display together with the independent recording
         // callback evidence BEFORE detaching changes the visible destination.
@@ -613,7 +695,9 @@ class MirrorPreviewController(private val context: Context, private val config: 
 
     fun close() {
         if (closed) return
+        log("PIPELINE_SNAPSHOT", "BEFORE_CLOSE")
         closed = true
+        recordingCabinView?.close()
         glPreview?.setInputPollingEnabled(false)
         handler.removeCallbacks(tick); scope.cancel()
         if (receiverRegistered) { runCatching { context.unregisterReceiver(displayReceiver) }; receiverRegistered = false }
@@ -627,7 +711,8 @@ class MirrorPreviewController(private val context: Context, private val config: 
     }
 
     /** A diagnostic observer may wait for native cleanup; a timeout never implies success. */
-    fun cleanupConfirmed(): Boolean = closed && (glPreview?.cleanupConfirmed() ?: true)
+    fun cleanupConfirmed(): Boolean = closed && recordingCabinView?.cleanupConfirmed() != false &&
+        (if (directPreview) lease?.released != false else glPreview?.cleanupConfirmed() ?: true)
 
     private fun message(reason: String) = when (reason) {
         "NO_DECLARED_PREVIEW_SIZE", "PREVIEW_CONFIG_REJECTED" -> Utils.t("High-resolution preview unavailable. Recording can continue; check diagnostics.", "高清预览不可用；录像可继续，请查看诊断。")
@@ -637,11 +722,21 @@ class MirrorPreviewController(private val context: Context, private val config: 
         "RECORDER_TRANSITION" -> Utils.t("Recording is changing segment. Waiting for live view…", "录像正在切换分段，等待实时画面…")
         else -> Utils.t("Live view unavailable · waiting for a new frame", "实时画面暂不可用 · 等待新画面")
     }
-    private fun log(event: String, reason: String) = EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MIRROR_$event",
-        payload = mapOf("reason" to reason, "frames" to freshness.frames.toString(),
+    private fun log(event: String, reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        val gl = inputEvidence(now)
+        EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MIRROR_$event",
+        payload = source.captureFacts() + mapOf("reason" to reason, "frames" to freshness.frames.toString(),
             "recordingSessionId" to runId,
-            "inputFrames" to sourceFrameCount().toString(),
-            "inputFrameAgeMs" to (glPreview?.evidence(SystemClock.elapsedRealtime())?.inputFrameAgeMs?.toString() ?: "unknown"),
+            "previewBackend" to gl.backend,
+            "inputFrames" to gl.inputFrames.toString(),
+            "inputFrameAgeMs" to (gl.inputFrameAgeMs?.toString() ?: "UNKNOWN"),
+            "inputNotifications" to gl.inputNotifications.toString(),
+            "inputPollAttempts" to gl.inputPollAttempts.toString(),
+            "inputPolledFrames" to gl.inputPolledFrames.toString(),
+            "inputHeartbeatAgeMs" to (gl.inputHeartbeatAgeMs?.toString() ?: "UNKNOWN"),
+            "displaySubmissions" to gl.displaySubmissions.toString(),
+            "displaySubmitAgeMs" to (gl.displaySubmitAgeMs?.toString() ?: "UNKNOWN"),
             "segmentNumber" to source.state.segmentNumber.toString(),
             "status" to source.state.status,
             "previewActive" to source.state.previewActive.toString(),
@@ -649,6 +744,7 @@ class MirrorPreviewController(private val context: Context, private val config: 
             "bufferWidth" to (bufferSize?.width?.toString() ?: "unknown"),
             "bufferHeight" to (bufferSize?.height?.toString() ?: "unknown"),
             "cameraGeneration" to cameraGeneration.toString(),
-            "lastFrameAgeMs" to (freshness.age(SystemClock.elapsedRealtime())?.toString() ?: "unknown")))
+            "lastFrameAgeMs" to (freshness.age(now)?.toString() ?: "UNKNOWN")))
+    }
     private fun dp(value: Int) = (value * context.resources.displayMetrics.density).toInt()
 }

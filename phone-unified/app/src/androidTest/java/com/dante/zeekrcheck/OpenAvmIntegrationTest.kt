@@ -163,7 +163,7 @@ class OpenAvmIntegrationTest {
             compose.setContent { AssistantTheme {
                 if(mounted) OpenAvmDestination("media",detail,{detail=it},{},{}) else Text("Local QA finished",Modifier.fillMaxSize())
             } }
-            compose.onNode(hasText("普通视频") and hasText("1 个分段",substring=true) and hasText("0:12")).performClick()
+            compose.onNode(hasText("普通录像 · 1 路摄像头") and hasText("1 个分段",substring=true) and hasText("0:12")).performClick()
             compose.waitUntil(15_000) { detail }
             compose.waitUntil(20_000) {
                 compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).fetchSemanticsNodes()

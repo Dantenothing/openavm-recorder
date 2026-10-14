@@ -14,6 +14,9 @@ internal object LabPolicy {
     val terminal=setOf("SUCCEEDED","FAILED","REJECTED","INTERRUPTED")
     fun recoveryState(state:String)=if(state in setOf("ACCEPTED","RUNNING")) "INTERRUPTED" else state
     fun canAccept(id:String,records:JsonObject)=uuid.matches(id) && id !in records && records.size<128
+    /** A product trial may close its own ordinary preview, but cannot take another camera job. */
+    fun productStartReady(recording:Boolean,pending:Int,ownerKind:String,nativeIdle:Boolean,usbBusy:Boolean):Boolean =
+        !recording && pending==0 && !usbBusy && (ownerKind=="PREVIEW" || ownerKind.isEmpty() && nativeIdle)
     fun testPassed(status:JsonObject,kind:String="CAPABILITIES"):Boolean {
         val required=setOf("build","public_capabilities")+when(kind) {
             "CAPABILITIES"->emptySet()

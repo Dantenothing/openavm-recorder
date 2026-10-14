@@ -12,6 +12,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DriveAttachmentSnapshotTest {
+    @Test fun gpsCanBeExcludedWhileKeepingHudWithTheExistingReceiverContract() {
+        val result = DriveAttachmentSnapshot.build(sidecar(), gps(fix(1_250)), vehicle(sample(1_250)), DriveDataSelection(gps = false, vehicle = true))
+        assertTrue(result.gps.isEmpty()); assertEquals(1, result.vehicle.size)
+        val payload = DriveDataCodec.encode(result)
+        assertFalse(payload.toString(Charsets.UTF_8).contains("latitude"))
+        assertNotNull(DriveDataCodec.verify(payload, DriveDataCodec.descriptor(payload)!!, sidecar()))
+    }
+    @Test fun hudCanBeExcludedWhileKeepingGps() {
+        val result = DriveAttachmentSnapshot.build(sidecar(), gps(fix(1_250)), vehicle(sample(1_250)), DriveDataSelection(gps = true, vehicle = false))
+        assertEquals(1, result.gps.size); assertTrue(result.vehicle.isEmpty()); assertNull(result.recorderReport)
+    }
+    @Test fun disjointConfirmedWindowsExcludeUnselectedReadingsEvenInsideOneOriginalFile() {
+        val windows = listOf(DriveDataWindow(1_000, 1_300), DriveDataWindow(1_700, 1_900))
+        val result = DriveAttachmentSnapshot.build(sidecar(), gps(fix(1_000), fix(1_300), fix(1_500), fix(1_700), fix(1_900)),
+            vehicle(sample(1_000), sample(1_500), sample(1_700)), DriveDataSelection(true, true, windows))
+        assertEquals(listOf(1_000L, 1_700L), result.gps.map { it.elapsedMs })
+        assertEquals(listOf(1_000L, 1_700L), result.vehicle.map { it.elapsedMs })
+        assertEquals(listOf(false, true), result.gps.map { it.breakBefore })
+        assertEquals(listOf(false, true), result.vehicle.map { it.breakBefore })
+        assertNotNull(DriveDataCodec.decode(DriveDataCodec.encode(result)))
+    }
+    @Test fun invalidUserWindowsFailBeforeMakingPayload() {
+        assertThrows(IllegalArgumentException::class.java) { DriveAttachmentSnapshot.build(sidecar(), null, null,
+            DriveDataSelection(true, true, listOf(DriveDataWindow(3_000, 1_000)))) }
+    }
     private val session = "00000000-0000-4000-8000-000000000001"
     private val other = "00000000-0000-4000-8000-000000000002"
     private val epoch = 1_791_000_000_000L

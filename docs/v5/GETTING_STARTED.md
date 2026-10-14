@@ -1,10 +1,8 @@
-# OpenAVM V5 setup guide
+# OpenAVM V5.1 setup guide
 
-Use **Recorder 5.0.0** on the head unit and **Phone 5.0.1** on Android. Phone downloads have resumed with user-supplied cloud configuration; local Recorder pairing, transfer and playback need no ZEEKR account or configuration file.
+Use **Recorder 5.1.0** on the head unit and **Phone 5.1.0** on Android. Update both apps for drive-data transfer and playback. Local Recorder pairing, transfer and playback need no ZEEKR account or connection configuration.
 
-**Already using Recorder 5.0.0?** Only update the phone. Recorder's current update checker compares GitHub release tags and may offer `v5.0.1`; that tag does not mean there is a Recorder 5.0.1 APK. The vehicle APK is unchanged.
-
-[Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.0.1)
+[Project introduction](../../README.md) · [V5 downloads](https://github.com/Dantenothing/openavm-recorder/releases/tag/v5.1.0)
 
 For vehicle recording, start at section 1. For phone vehicle controls, start at section 2. Add section 3 only when you want to transfer recordings.
 
@@ -37,6 +35,16 @@ Confirm this preference after each installation or update. Saving it does not st
 
 Reopen the app after system termination or a head-unit restart. **This does not provide continuous parking recording or remote vehicle wake-up.** Closing the floating window does not stop a recording already in progress; use Stop.
 
+### Record driving data and review a session
+
+In **Return, recording & playback**, choose optional cabin/infrared recording and driving-data capture. Grant location permission if you want GPS; saving the setting does not start a recording. Availability and recorded sizes depend on the firmware. Check the selected destination and enabled channels.
+
+Open a recording session from Library. Use the clip list and shared timeline, enlarge a camera view, and show the recorded HUD and route. Missing GPS or vehicle signals stay unavailable. Pedal bars are relative to the largest value observed so far, not calibrated physical percentages.
+
+The map panel opens by default unless you have turned it off. Initially it shows the local trace; select Street map to load online roads. This choice is remembered. Drag, zoom, or follow the recorded vehicle. Street maps use internet and show provider attribution; local trace and video work without them.
+
+When sending recordings, choose whether to include driving data. Use both 5.1 apps for route/HUD review on the phone. Do not publish route files or unredacted diagnostics containing personal data.
+
 ### Keep an important clip
 
 During normal recording, use the emergency-video action. It marks the available two preceding segments, the current segment and the next segment. The current and next segments must finish before they can be saved; fewer than four may exist.
@@ -47,7 +55,7 @@ Check the emergency-events library. Protection prevents automatic cleanup, but i
 
 ### Sign in
 
-Phone 5.0.1 uses [optional cloud configuration](CLOUD_SETUP.md): open **Home → Set up cloud** or **More → Account & connection**, import your independently prepared six-field JSON, then sign in with your authorised ZEEKR account and select the correct vehicle. Guest access requires permission from the owner. The older Phone 5.0.0 APK remains withdrawn.
+Phone 5.1.0 uses [optional cloud configuration](CLOUD_SETUP.md): open **Home → Set up cloud** or **More → Account & connection**, import your independently prepared six-field JSON, then sign in with your authorised ZEEKR account and select the correct vehicle. Guest access requires permission from the owner. The older Phone 5.0.0 APK remains withdrawn.
 
 No manufacturer connection parameters are bundled or automatically downloaded. Importing a configuration only checks and saves it locally; it does not query or control the car. Refresh after login and check the vehicle and data time. The current cloud-control baseline is Australian 7X / AU 1.6.6, not a claim of compatibility with every region.
 
@@ -124,7 +132,7 @@ Update both apps and pair again once when migrating from V4. Do not uninstall to
 | Existing project Recorder or original OpenAVM phone app | Install a matching-signature update in place |
 | Early standalone capability-check/assistant app | This has a different package identity; ask for its migration path rather than uninstalling |
 | Signature mismatch or upgrade rejection | Keep the existing app and data; report the old version and new APK filename |
-| Phone 5.0.0 or older cloud configuration | Install Phone 5.0.1 in place; import your configuration and sign in again if using cloud features. Recorder pairing and recordings remain; review and re-enable cloud automation |
+| Phone 5.0.0 or older cloud configuration | Install Phone 5.1.0 in place; import your configuration and sign in again if using cloud features. Recorder pairing and recordings remain; review and re-enable cloud automation |
 | New phone | Pair for local recordings; optionally import cloud configuration, sign in, set home/preferences and add widgets |
 | Keeping both phones | Pause departures, away guard and arrival deactivation on the old phone before enabling them on the new one |
 

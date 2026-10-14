@@ -123,6 +123,7 @@ internal object AwayJournal {
             "eventCounts" to scoped.groupingBy { it.event }.eachCount(),
             "cleanupNow" to obj("unsettledOwners" to CaptureCleanupRuntime.pendingOwners.value),
             "recordingEvidence" to AwayReportEvidence.recording(scoped),
+            "vehicleTelemetryNow" to com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryHealth.report(SystemClock.elapsedRealtime()),
             "lifecycleEvidence" to AwayReportEvidence.lifecycle(scoped),
             "mirrorSleep" to MirrorSleepEvidence.report(all),
             "previewStartup" to PreviewStartupEvidence.report(all),

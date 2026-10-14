@@ -46,8 +46,8 @@ fun PlaybackMapSettings(modifier: Modifier = Modifier) {
                 Switch(checked = openMap, onCheckedChange = null)
             }
             Text(Utils.t(
-                "Shows the recorded route with the video. You can hide it in the player. Street maps stay off until you choose to load them.",
-                "回放视频时展开已记录的轨迹，仍可随时收起。街道底图仅在你选择加载后联网。"),
+                "Shows the recorded route with the video. You can hide it in the player. Your Street map choice is remembered for future playback.",
+                "回放视频时展开已记录的轨迹，仍可随时收起。是否加载街道底图会记住你的选择，下次回放继续使用。"),
                 style = MaterialTheme.typography.bodyMedium)
             Text(Utils.t(
                 "This does not enable location recording. A route is available only when GPS data was recorded with the video.",

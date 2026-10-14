@@ -426,13 +426,13 @@ fun EventsScreen() {
         }
     }
 
-    suspend fun queueForPhone(files: List<File>, includeDriveData: Boolean = false): Boolean {
+    suspend fun queueForPhone(files: List<File>, includeDriveData: Boolean = false, driveSelection: com.dante.zeekrcapabilitylab.transfer.DriveDataSelection? = null): Boolean {
         val result = withContext(Dispatchers.IO) {
             val uniqueFiles = files.distinctBy { it.absolutePath }
             val sessionId = uniqueFiles.mapNotNull { file ->
                 SegmentSidecarIO.read(SegmentSidecarIO.sidecarFileFor(file))?.recordingSessionId
             }.distinct().singleOrNull()
-            TransferRepository.enqueueSelection(sessionId, uniqueFiles, includeDriveData)
+            TransferRepository.enqueueSelection(sessionId, uniqueFiles, includeDriveData, driveSelection)
         }
         statusText = result.fold(
             onSuccess = { queued ->
@@ -481,7 +481,7 @@ fun EventsScreen() {
         return result.isSuccess
     }
 
-    suspend fun queueUsbForPhone(recording: VehicleUsbRecording, files: List<File>, includeDriveData: Boolean = false): Boolean {
+    suspend fun queueUsbForPhone(recording: VehicleUsbRecording, files: List<File>, includeDriveData: Boolean = false, driveSelection: com.dante.zeekrcapabilitylab.transfer.DriveDataSelection? = null): Boolean {
         if (recording.availability != MediaAvailability.ONLINE) {
             statusText = Utils.t(
                 "Reconnect the same USB before sending these segments.",
@@ -494,6 +494,7 @@ fun EventsScreen() {
             recordingSessionId = recording.logicalId.removePrefix("session:"),
             files = files,
             includeDriveData = includeDriveData,
+            driveSelection = driveSelection,
         ) }
         statusText = result.fold(
             onSuccess = { queued ->
@@ -1116,8 +1117,8 @@ fun EventsScreen() {
                 val known = (internalFiles + sources.flatMap { it.second }).map { it.absolutePath }.toSet()
                 if (chosen.any { it.absolutePath !in known }) false else {
                     var success = true
-                    if (internalFiles.isNotEmpty() && !queueForPhone(internalFiles, withData)) success = false
-                    for ((source, selectedFiles) in sources) if (!queueUsbForPhone(source, selectedFiles, withData)) success = false
+                    if (internalFiles.isNotEmpty() && !queueForPhone(internalFiles, driveSelection = withData)) success = false
+                    for ((source, selectedFiles) in sources) if (!queueUsbForPhone(source, selectedFiles, driveSelection = withData)) success = false
                     if (!success) statusText = Utils.t("Some files were not queued. Check transfers and retry; completed files are retained.",
                         "部分文件未能加入队列。请检查传输后重试；已完成文件会保留。")
                     success
@@ -1164,7 +1165,7 @@ fun EventsScreen() {
         if (untimedPlaybackKey != playbackKey && !recording.isTimeLapse && recording.sidecar.recordingSessionId?.let(
                 com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryStore::validId) == true) SessionReviewDialog(
             files = recording.files, initialFile = file,
-            onSendToPhone = { chosen, withData -> queueForPhone(chosen, withData) },
+            onSendToPhone = { chosen, withData -> queueForPhone(chosen, driveSelection = withData) },
             onTimingUnavailable = { untimedPlaybackKey = playbackKey },
             onDismiss = { playRecording = null },
         ) else FourLanePlayerDialog(
@@ -1197,7 +1198,7 @@ fun EventsScreen() {
             if (untimedPlaybackKey != playbackKey && recording.category == VehicleMediaCategory.NORMAL &&
                 com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryStore.validId(recording.logicalId.removePrefix("session:"))) SessionReviewDialog(
                 files = recording.files, initialFile = recording.files.first(),
-                onSendToPhone = { chosen, withData -> queueUsbForPhone(recording, chosen, withData) },
+                onSendToPhone = { chosen, withData -> queueUsbForPhone(recording, chosen, driveSelection = withData) },
                 onTimingUnavailable = { untimedPlaybackKey = playbackKey },
                 onDismiss = { playUsbRecording = null },
             ) else FourLanePlayerDialog(

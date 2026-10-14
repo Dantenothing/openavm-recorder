@@ -236,7 +236,9 @@ fun RecordScreen() {
             val surface = previewController.acquireRecorderPreviewSurface(
                 Size(profile.size.width, profile.size.height),
             )
-            if (surface != null) CameraRecordingService.replacePreviewSurface(surface)
+            if (surface != null) CameraRecordingService.replacePreviewSurface(surface) {
+                previewController.recorderPreviewReleased(surface)
+            }
         }
     }
 
@@ -494,27 +496,20 @@ fun RecordScreen() {
 
     val selectedCabinCount = if (activeSourceRole == RecordingSourceRole.SURROUND && activeRecordingMode == RecordingMode.NORMAL)
         listOf(settings.recordFrontCabin, settings.recordRearCabin).count { it } else 0
-    // Reuse the existing foreground/start/storage-change cadence. The second destination
-    // is measured on the same IO job; no background capacity poller is added.
+    // All selected channels follow the primary destination, using one capacity budget.
     val capacities by produceState(initialValue = listOf(RecordingCapacity()), recordingActive,
         recorderState.activeStorageUuid, recorderState.activeStorageKind, appForeground, selectedCabinCount) {
         if (appForeground) value = withContext(Dispatchers.IO) {
             val primary = runCatching { RecordingCapacityReader.read(context, recorderState, serviceRunning) }.getOrDefault(RecordingCapacity())
-            buildList {
-                add(primary)
-                if (selectedCabinCount > 0 && primary.storage != RecordingStorageKind.INTERNAL) {
-                    add(runCatching { RecordingCapacityReader.readInternal(context,
-                        if (serviceRunning) recorderState.storageLimitBytes else settings.internalStorageLimitBytes) }
-                        .getOrDefault(RecordingCapacity(RecordingStorageKind.INTERNAL)))
-                }
-            }
+            listOf(primary)
         }
     }
     val capacity = capacities.first()
 
     val readyConfig = (configState as? RecordConfigState.Ready)?.config
     val canStart = RecorderCommandPolicy.canStart(recorderState.status, serviceRunning) &&
-        (!auxiliary.active || independentMirrorActive && floatingMirror.active) && !floatingMirror.busy && modeSwitchProgress == null &&
+        (!auxiliary.active || independentMirrorActive && floatingMirror.active) &&
+        (!floatingMirror.busy || floatingMirror.previewPreparing) && modeSwitchProgress == null &&
         configState !is RecordConfigState.Loading && !sourceHandoffPending && !awaitingRecorderStart
     val canStop = RecorderCommandPolicy.canStop(recorderState.status, serviceRunning)
     val canBookmark = RecorderCommandPolicy.canBookmark(serviceRunning) &&
@@ -545,7 +540,9 @@ fun RecordScreen() {
         RecorderStatus.AWAKE_IDLE -> Utils.t("Awake · recording paused", "已停录 · 保持运行")
         RecorderStatus.SENTRY_LISTENING -> Utils.t("Sentry RAM listening", "哨兵 RAM 监听中")
         RecorderStatus.STARTING -> Utils.t("Preparing", "正在准备")
-        RecorderStatus.RECORDING -> if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
+        RecorderStatus.RECORDING -> if (!recorderState.videoFlowConfirmed) {
+            Utils.t("Waiting for camera frames…", "正在等待相机画面…")
+        } else if (activeRecordingMode == RecordingMode.TIME_LAPSE) {
             Utils.t(
                 "Time-lapse {0}× · {1}", "延时摄影 {0}× · {1}", activeTimeLapseMultiplier, Utils.formatDuration(recordingElapsed))
         } else {
@@ -559,7 +556,7 @@ fun RecordScreen() {
         else -> Utils.t("Standby", "待机")
     }
     val recorderStatusColor = if (guardStoppedWithError) MaterialTheme.colorScheme.error else when (recorderState.status) {
-        RecorderStatus.RECORDING -> Color(0xFFFF6E6E)
+        RecorderStatus.RECORDING -> if (recorderState.videoFlowConfirmed) Color(0xFFFF6E6E) else Color(0xFFFFCC80)
         RecorderStatus.STARTING,
         RecorderStatus.FINALIZING,
         RecorderStatus.WAITING_CAMERA,
@@ -630,10 +627,12 @@ fun RecordScreen() {
                         previewEnabled = recorderPreviewSurface != null
                         awaitingRecorderStart = true
                         try {
-                            CameraRecordingService.start(context, ready.config.copy(mirrorPreviewEnabled = mirror), recorderPreviewSurface)
+                            CameraRecordingService.start(context, ready.config.copy(mirrorPreviewEnabled = mirror), recorderPreviewSurface,
+                                previewReleased = { recorderPreviewSurface?.let(previewController::recorderPreviewReleased) })
                         } catch (failure: Exception) {
                             awaitingRecorderStart = false
                             runCatching { recorderPreviewSurface?.release() }
+                            recorderPreviewSurface?.let(previewController::recorderPreviewReleased)
                             previewController.clearRecorderPreviewHandoff()
                             configState = RecordConfigState.Failed(Utils.t("Recording did not start. Please retry.", "录像未启动，请重试。"))
                             EventLogger.markError(Categories.SYSTEM, "RECORDER_START_DISPATCH_FAILED", "START_REJECTED", failure)
@@ -832,7 +831,7 @@ fun RecordScreen() {
                 Text(
                     when {
                         configState is RecordConfigState.Loading || awaitingRecorderStart -> Utils.t("Preparing…", "准备中…")
-                        recordingActive -> Utils.t("Recording", "录像中")
+                        recordingActive -> recorderStatusText
                         activeRecordingMode == RecordingMode.TIME_LAPSE ->
                             Utils.t("Start time-lapse", "开始延时摄影")
                         else -> Utils.t("Start recording", "开始录像")

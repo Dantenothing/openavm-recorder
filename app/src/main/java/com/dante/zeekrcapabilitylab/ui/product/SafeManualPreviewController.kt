@@ -81,11 +81,43 @@ class SafeManualPreviewController(context: Context) {
     // Accessed only on cameraHandler.
     private var closeTransaction: CaptureCloseTransaction? = null
     private var opening = false
+    private var pendingOpenTextureOwner: Any? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
     private var openWatchdog: Runnable? = null
     private var sessionWatchdog: Runnable? = null
+
+    // A detached page is not a Camera2/recorder release acknowledgement. These
+    // per-texture references have no worker or timeout; the existing producers
+    // return them after their actual native fence.
+    private class TextureOwnership {
+        var detached = false
+        val producers = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
+    }
+    private val textures = java.util.IdentityHashMap<SurfaceTexture, TextureOwnership>()
+    private val recorderTextures = java.util.IdentityHashMap<Surface, SurfaceTexture>()
+
+    private fun retainTexture(texture: SurfaceTexture, producer: Any): Boolean = synchronized(textures) {
+        if (texture.isReleased) return@synchronized false
+        val ownership = textures.getOrPut(texture) { TextureOwnership() }
+        if (ownership.detached) return@synchronized false
+        ownership.producers.add(producer)
+    }
+    private fun returnTexture(texture: SurfaceTexture, producer: Any) = synchronized(textures) {
+        textures[texture]?.let { ownership ->
+            ownership.producers.remove(producer)
+            if (ownership.detached && ownership.producers.isEmpty()) {
+                textures.remove(texture); texture.release()
+            }
+        }
+        Unit
+    }
+    private fun detachTexture(texture: SurfaceTexture) = synchronized(textures) {
+        val ownership = textures.getOrPut(texture) { TextureOwnership() }
+        ownership.detached = true
+        if (ownership.producers.isEmpty()) { textures.remove(texture); texture.release() }
+    }
 
     /** Called when the UI destroys a SurfaceTexture already handed to the recorder. */
     var onRecorderPreviewSurfaceDestroyed: (() -> Unit)? = null
@@ -127,7 +159,8 @@ class SafeManualPreviewController(context: Context) {
                     configuredTextureBufferSize = null
                     if (recorderLosesPreview) onRecorderPreviewSurfaceDestroyed?.invoke()
                 }
-                return true
+                detachTexture(texture)
+                return false
             }
 
             override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
@@ -161,6 +194,7 @@ class SafeManualPreviewController(context: Context) {
     fun startPreview(source: SessionSourceSnapshot) {
         if (released) return
         if (requested && requestedSource == source) return
+        generation.incrementAndGet()
         requestedSource = source
         requested = true
         _state.value = ManualPreviewState(
@@ -233,6 +267,8 @@ class SafeManualPreviewController(context: Context) {
             surface.release()
             return null
         }
+        if (!retainTexture(texture, surface)) { surface.release(); return null }
+        synchronized(recorderTextures) { recorderTextures[surface] = texture }
         recorderSurfaceHandedOff = true
         _state.value = ManualPreviewState(
             active = true,
@@ -257,6 +293,13 @@ class SafeManualPreviewController(context: Context) {
         return surface
     }
 
+    /** Called only after recorder-native release, or rejection before submission. */
+    fun recorderPreviewReleased(surface: Surface) {
+        val texture = synchronized(recorderTextures) { recorderTextures.remove(surface) } ?: return
+        surface.release()
+        returnTexture(texture, surface)
+    }
+
     fun clearRecorderPreviewHandoff() {
         recorderSurfaceHandedOff = false
         if (!requested) _state.value = ManualPreviewState()
@@ -272,7 +315,7 @@ class SafeManualPreviewController(context: Context) {
         textureView = null
         cameraHandler?.post {
             closeCameraOnWorker()
-            CaptureCleanupRuntime.awaitIdle { idle -> if (idle) cameraThread?.quitSafely() }
+            maybeQuitCameraWorker()
         }
         _state.value = ManualPreviewState()
     }
@@ -286,7 +329,10 @@ class SafeManualPreviewController(context: Context) {
             return
         }
         val handler = ensureCameraHandler()
-        val token = generation.incrementAndGet()
+        // Rebinding an available view is still the same preview request. Bumping
+        // the generation here cancels its in-flight onOpened, while the duplicate
+        // worker task is skipped by `opening`, leaving neither request able to run.
+        val token = generation.get()
         handler.post { openCameraOnWorker(token, attemptHighResolution = true) }
     }
 
@@ -312,6 +358,9 @@ class SafeManualPreviewController(context: Context) {
             fail(Utils.t("The camera service is unavailable", "系统没有 CameraManager"))
             return
         }
+        val textureOwner = Any()
+        if (!retainTexture(texture, textureOwner)) return
+        var submitted = false
         try {
             val cameraId = source.cameraId
             if (cameraId !in manager.cameraIdList) {
@@ -383,6 +432,7 @@ class SafeManualPreviewController(context: Context) {
             val previewSize = forcedSize ?: stableSize
             val streamKind = previewStreamKind(stableSize, forcedSize)
             opening = true
+            pendingOpenTextureOwner = textureOwner
             _state.value = ManualPreviewState(
                 cameraId = cameraId,
                 previewSize = previewSize,
@@ -414,8 +464,13 @@ class SafeManualPreviewController(context: Context) {
             val callback = object : CameraDevice.StateCallback() {
                     override fun onClosed(camera: CameraDevice) {
                         CaptureCleanupRuntime.deviceClosed(camera)
+                        if (pendingOpenTextureOwner === textureOwner) {
+                            opening = false; pendingOpenTextureOwner = null
+                        }
+                        returnTexture(texture, textureOwner)
                         EventLogger.logEvent(Categories.SYSTEM, "PRODUCT_MANUAL_PREVIEW_DEVICE_CLOSED",
                             payload = mapOf("cameraId" to cameraId, "generation" to token.toString()))
+                        maybeQuitCameraWorker()
                     }
 
                     override fun onOpened(camera: CameraDevice) {
@@ -466,6 +521,7 @@ class SafeManualPreviewController(context: Context) {
                     }
                 }
             CanaryCameraOpenAdapter.open(manager, cameraId, callback, handler)
+            submitted = true
         } catch (e: CameraAccessException) {
             opening = false
             cancelWatchdog()
@@ -474,6 +530,14 @@ class SafeManualPreviewController(context: Context) {
             opening = false
             cancelWatchdog()
             fail(t.message ?: t.javaClass.simpleName)
+        } finally {
+            if (!submitted) {
+                if (pendingOpenTextureOwner === textureOwner) {
+                    opening = false; pendingOpenTextureOwner = null
+                }
+                returnTexture(texture, textureOwner)
+                maybeQuitCameraWorker()
+            }
         }
     }
 
@@ -686,7 +750,9 @@ class SafeManualPreviewController(context: Context) {
         val camera = cameraDevice
         val session = captureSession
         val surface = previewSurface
-        opening = false
+        // A cancelled request can still deliver onOpened. Keep this worker alive
+        // to close that device and return its texture at the real onClosed.
+        if (opening && camera == null) return
         if (camera == null && session == null && surface == null) return
         val hold = Any()
         val traceId = "preview-" + System.identityHashCode(this) + "-" + generation.get()
@@ -716,7 +782,7 @@ class SafeManualPreviewController(context: Context) {
                     if (previewSurface === surface) previewSurface = null
                     closeTransaction = null
                     CaptureCleanupRuntime.settled(hold, true)
-                    if (released) cameraThread?.quitSafely()
+                    maybeQuitCameraWorker()
                 }
             } },
             preferDeviceClose = true,
@@ -724,6 +790,11 @@ class SafeManualPreviewController(context: Context) {
         closeTransaction = tx
         CaptureCleanupRuntime.retain(hold, camera?.id ?: _state.value.cameraId ?: "default", camera, tx)
         tx.begin()
+    }
+
+    private fun maybeQuitCameraWorker() {
+        if (released && !opening && pendingOpenTextureOwner == null && cameraDevice == null &&
+            captureSession == null && previewSurface == null && closeTransaction == null) cameraThread?.quitSafely()
     }
 
     private fun cancelWatchdog() {

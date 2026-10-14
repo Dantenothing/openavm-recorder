@@ -31,12 +31,12 @@ object RecordingCapacityMath {
         return (bytes.toDouble() * 8.0 / bitrateBps / 60.0 / 1.10 * timeLapseMultiplier).toLong()
     }
 
-    /** Cabin streams always use internal storage; an unknown main destination stays unknown. */
+    /** All selected channels start on the same destination; unknown capacity stays unknown. */
     fun bitrateForStorage(primaryStorage: RecordingStorageKind?, primaryBitrateBps: Long?,
                           destination: RecordingStorageKind?, cabinChannels: Int): Long? {
         if (primaryStorage == null || destination == null || cabinChannels !in 0..2) return null
         val primary = if (primaryStorage == destination) primaryBitrateBps?.takeIf { it > 0 } ?: return null else 0L
-        val cabin = if (destination == RecordingStorageKind.INTERNAL)
+        val cabin = if (destination == primaryStorage)
             cabinChannels.toLong() * com.dante.zeekrcapabilitylab.service.recorder.CabinRecordingProfile.MAX_BITRATE else 0L
         if (primary > Long.MAX_VALUE - cabin) return null
         return (primary + cabin).takeIf { it > 0 }

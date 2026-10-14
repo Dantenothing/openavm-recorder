@@ -11,7 +11,7 @@ import org.junit.Test
 class RecordingModeSwitchTest {
     private val running = RecorderState(status = RecorderStatus.RECORDING, recordingSessionId = "manual-1")
     private val timeLapse = RecordingModeChoice(RecordingMode.TIME_LAPSE, 30)
-    private val ready = RecordingModeSwitchReadiness(true, true, true, true, true, true)
+    private val ready = RecordingModeSwitchReadiness(true, true, true, true, true, true, true, true)
     private fun config() = RecorderConfig(
         source = SessionSourceSnapshot(RecordingSourceRole.SURROUND, "camera-2",
             CameraFormatProfile(ProfileSize(1280, 5120), 20_000_000), RecordingLayoutKind.FOUR_LANE_V1,
@@ -85,6 +85,45 @@ class RecordingModeSwitchTest {
         val request = requireNotNull(gate.begin(running, timeLapse, 500))
         assertNull(gate.take(request.token, 600, ready))
         assertNull(gate.take(request.token, 601, ready))
+    }
+
+    @Test fun primaryCompletionWaitsForNativeAndGlReleaseWithoutConsumingTheGesture() {
+        val gate = RecordingModeSwitchGate()
+        val request = requireNotNull(gate.begin(running, timeLapse, 0))
+        assertNull(gate.take(request.token, 1, ready.copy(nativeIdle = false)))
+        assertEquals(request, gate.pending)
+        assertNull(gate.take(request.token, 2, ready.copy(glIdle = false)))
+        assertEquals(request, gate.pending)
+        assertEquals(request, gate.take(request.token, 3, ready))
+        assertNull(gate.take(request.token, 4, ready))
+    }
+
+    @Test fun waitingForAnotherCameraCannotExtendDeadline() {
+        val gate = RecordingModeSwitchGate(timeoutMs = 100)
+        val request = requireNotNull(gate.begin(running, timeLapse, 500))
+        assertNull(gate.take(request.token, 599, ready.copy(nativeIdle = false)))
+        assertEquals(request, gate.pending)
+        assertNull(gate.take(request.token, 600, ready.copy(nativeIdle = false)))
+        assertNull(gate.pending)
+        assertNull(gate.take(request.token, 601, ready))
+    }
+
+    @Test fun stopDuringResourceWaitRevokesTheGestureBeforeALateAcknowledgement() {
+        val gate = RecordingModeSwitchGate()
+        val request = requireNotNull(gate.begin(running, timeLapse, 0))
+        assertNull(gate.take(request.token, 1, ready.copy(glIdle = false)))
+        gate.cancel()
+        assertNull(gate.take(request.token, 2, ready))
+        assertNull(gate.pending)
+    }
+
+    @Test fun powerLossDuringResourceWaitCannotBeReauthorizedByLateRelease() {
+        val gate = RecordingModeSwitchGate()
+        val request = requireNotNull(gate.begin(running, timeLapse, 0))
+        assertNull(gate.take(request.token, 1, ready.copy(nativeIdle = false)))
+        assertNull(gate.take(request.token, 2, ready.copy(nativeIdle = false, interactive = false)))
+        assertNull(gate.pending)
+        assertNull(gate.take(request.token, 3, ready))
     }
 
     @Test fun everyReleaseSavePowerStorageAndOwnerConditionMustHold() {

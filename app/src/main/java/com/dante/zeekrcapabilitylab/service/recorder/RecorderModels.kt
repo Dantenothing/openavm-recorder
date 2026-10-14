@@ -150,6 +150,8 @@ data class RecorderState(
     /** Successful CameraDevice ownership generation; unchanged across segment rotation. */
     val cameraGeneration: Long = 0,
     val recordingBackend: String = "MEDIA_RECORDER",
+    /** This camera generation has produced video evidence, not just accepted start(). */
+    val videoFlowConfirmed: Boolean = false,
     val nativeFileSwitches: Int = 0,
     val nativePendingFiles: Int = 0,
     val encoderSelection: ContinuousEncoderSelection? = null,

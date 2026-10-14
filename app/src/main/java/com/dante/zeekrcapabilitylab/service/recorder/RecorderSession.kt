@@ -50,8 +50,8 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Timing contract:
  *  - Legacy segments close/recreate their encoder; continuous segments retain the capture session
- *    across file rotation. Metadata and USB commits run on IO; first-USB verification
- *    can delay file admission while the continuous encoder uses a bounded sample queue.
+ *    across file rotation. Metadata and USB commits run on IO; a direct-codec cut is
+ *    requested only after its next output has been admitted. Stop retains accepted samples.
  *  - Every timeout is token-checked against the current segment generation and
  *    cancelled on every finalize/fail/stop/camera-loss/release path.
  *  - Segment gaps use SystemClock.elapsedRealtime; wall-clock epoch is kept only
@@ -64,7 +64,20 @@ class RecorderSession(
     private val externallyManagedPresence: Boolean = false,
     private val diagnosticScope: RecorderDiagnosticScope? = null,
     private val auxiliaryChannel: Boolean = false,
+    private val selectDirectCodec: (CameraManager, RecorderConfig) -> ContinuousEncoderSelection = ContinuousVideoRecorder::inspectEncoder,
+    private val cameraHandoffTicket: () -> String? = { null },
 ) {
+    private var retainOnManualStop = false
+    internal fun retainedReservation(cameraId: String): Any? =
+        if (auxiliaryChannel || diagnosticScope != null || terminalCloseTrial != null) null
+        else RetainedCameraConnection.reservation(cameraHandoffTicket(), cameraId)
+
+    private fun releaseUnsubmittedReservation(token: Any) {
+        // A borrowed connection was already opened by the previous producer.
+        // Only its real native onClosed may release its original interlock token.
+        if (!RetainedCameraConnection.ownsReservation(token))
+            com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock.normalClosed(token)
+    }
     /** App metadata returned with callbacks; this does not alter any HAL request controls. */
     private data class CaptureOutputTag(val includesPreview: Boolean)
 
@@ -89,6 +102,7 @@ class RecorderSession(
 
     private val segmentsDir = File(context.filesDir, "recordings/segments").apply { mkdirs() }
     private var channelIdentity: RecordingChannelIdentity? = null
+    private val usbBundleChannelId: String? get() = channelIdentity?.channelId.takeIf { auxiliaryChannel }
     private val internalOutputSink: RecordingOutputSink = InternalRecordingOutputSink(segmentsDir) {
         if (auxiliaryChannel) requireNotNull(channelIdentity).channelId.lowercase() + "-" else ""
     }
@@ -121,6 +135,7 @@ class RecorderSession(
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private var config: RecorderConfig? = null
+    private var terminalCloseTrial: TerminalCloseTrial? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     @Volatile private var recordingEncoder: RecordingEncoder? = null
@@ -129,10 +144,9 @@ class RecorderSession(
     private var continuousRotationWatchdog: Runnable? = null
     private var nativeRotationWatchdog: Runnable? = null
     private val nativeSidecars = linkedMapOf<UsbMediaStoreRecordingOutputHandle, SegmentSidecar>()
-    private var completedEncodedSegment: EncodedSegmentSummary? = null
     private var captureSessionRevision = 0L
     private val pendingContinuousOutputs = java.util.concurrent.atomic.AtomicInteger()
-    private val productFiles = java.util.IdentityHashMap<RecordingOutputHandle, SegmentSnapshot>()
+    private val continuousFiles = java.util.IdentityHashMap<RecordingOutputHandle, SegmentSnapshot>()
     private var nextProductTimelineUs = 0L
     private var productNextPreparing = false
     private var recordingPreviewSurface: Surface? = null
@@ -151,6 +165,7 @@ class RecorderSession(
     @Volatile private var releasing = false
     private var startInFlight = false
     private var cameraOpenInFlight = false
+    private var pendingCameraOpenGeneration: Long? = null
     private var protectedPending = false
     private var currentIncidentTag: IncidentTag? = null
     /** True only when this segment is fulfilling the persisted post-event slot. */
@@ -210,6 +225,10 @@ class RecorderSession(
     private var releaseWatchdogScheduled = false
     private var disposalStarted = false
     @Volatile private var disposalFinished = false
+    @Volatile private var groupEnded: ((String?, String?) -> Unit)? = null
+    private var groupStorageLost: ((String, RecordingStorageIdentity, String) -> Unit)? = null
+    @Volatile private var unavailableStorage: RecordingStorageIdentity? = null
+    private var groupOpened: (() -> Unit)? = null
     private var releaseCompletion: (() -> Unit)? = null
     private var timeLapseTeardownToken = 0L
     private var timeLapseQuiesceWatchdogRunnable: Runnable? = null
@@ -223,6 +242,7 @@ class RecorderSession(
         releaseWakeLock = { wakeLockHolder.releaseAll() },
         publish = publishState,
         onTerminated = { value, reason, source ->
+            groupEnded?.invoke(value.recordingSessionId, value.lastError)
             if (value.recordingSessionId != null) EventLogger.logEvent(Categories.SYSTEM, "RECORDER_SESSION_TERMINATED", payload =
                 vehicleAwayDiagnosticPayload() + mapOf(
                     "recordingSessionId" to (value.recordingSessionId ?: "NONE"),
@@ -257,14 +277,19 @@ class RecorderSession(
     }
 
     fun start(config: RecorderConfig, previewSurface: Surface? = null, requiredStorage: RecordingStorageIdentity? = null,
-              sharedIdentity: RecordingChannelIdentity? = null) {
-        postCamera {
+              sharedIdentity: RecordingChannelIdentity? = null,
+              prepared: ((RecordingStorageIdentity, RecordingChannelIdentity) -> Unit)? = null,
+              groupEnded: ((String?, String?) -> Unit)? = null,
+              groupStorageLost: ((String, RecordingStorageIdentity, String) -> Unit)? = null,
+              previewReleased: (() -> Unit)? = null, closeTrial: TerminalCloseTrial? = null) {
+        val posted = postCamera {
+            if (previewSurface != null && previewReleased != null) previewReleases.track(previewSurface, previewReleased)
             val errors = config.validate()
             if (errors.isNotEmpty()) {
                 val message = "CONFIG_INVALID: ${errors.joinToString("; ")}"
                 EventLogger.markError(Categories.SYSTEM, "RECORDER_CONFIG_INVALID", message, null)
                 setError(message)
-                runCatching { previewSurface?.release() }
+                previewSurface?.let(::releasePreviewWrapper)
                 onStopped()
                 return@postCamera
             }
@@ -272,7 +297,7 @@ class RecorderSession(
                 cameraDevice != null || recording || startInFlight || cameraOpenInFlight ||
                 closeTransaction != null || releaseRequested || cleanupUnconfirmed
             if (busy) {
-                runCatching { previewSurface?.release() }
+                previewSurface?.let(::releasePreviewWrapper)
                 EventLogger.logEvent(
                     Categories.SYSTEM,
                     "RECORDER_START_IGNORED",
@@ -286,11 +311,17 @@ class RecorderSession(
             }
             val selectedUsb = if (diagnosticScope != null) {
                 UsbExportVolumeResolver.resolveExact(context, diagnosticScope.target)
-            } else if (!auxiliaryChannel && config.storagePreference == RecordingStoragePreference.USB_PREFERRED) {
-                runCatching { UsbPendingRecordingRecovery.recoverMounted(context) }
-                UsbExportVolumeResolver.mountedTargets(context).singleOrNull()
+            } else if (config.storagePreference == RecordingStoragePreference.USB_PREFERRED) {
+                // The primary recovers old pending entries before any channel starts. An
+                // auxiliary start must not try to recover the primary's actively written file.
+                if (!auxiliaryChannel) runCatching { UsbPendingRecordingRecovery.recoverMounted(context) }
+                UsbExportVolumeResolver.mountedTargets(context).let { targets ->
+                    if (requiredStorage?.storageUuid != null) targets.singleOrNull { it.storageUuid == requiredStorage.storageUuid }
+                    else targets.singleOrNull()
+                }
             } else null
             if (diagnosticScope != null && selectedUsb == null) {
+                previewSurface?.let(::releasePreviewWrapper)
                 setError("PREFLIGHT_USB_REQUIRED"); onStopped(); return@postCamera
             }
             if (requiredStorage != null) {
@@ -299,18 +330,23 @@ class RecorderSession(
                     ?: RecordingStorageIdentity(RecordingStorageKind.INTERNAL)
                 if (!power.interactive || power.mainDisplayState != "ON" ||
                     !RecordingModeSwitchGate.storageMatches(requiredStorage, selectedStorage)) {
-                    runCatching { previewSurface?.release() }
+                    previewSurface?.let(::releasePreviewWrapper)
                     setError("MODE_SWITCH_START_CONDITIONS_CHANGED")
                     onStopped()
                     return@postCamera
                 }
             }
             this.config = config
+            this.terminalCloseTrial = closeTrial.takeIf { BuildConfig.RECORDER_SUPPORT_ENABLED }
+            this.groupEnded = groupEnded
+            this.groupStorageLost = groupStorageLost
+            this.unavailableStorage = null
+            this.groupOpened = null
             this.previewOutputDesired = true
             releaseRecordingPreviewSurface()
             releasePendingRecordingPreviewSurface()
             this.recordingPreviewSurface = previewSurface?.takeIf { it.isValid }
-            if (this.recordingPreviewSurface == null) runCatching { previewSurface?.release() }
+            if (this.recordingPreviewSurface == null) previewSurface?.let(::releasePreviewWrapper)
             this.stopping = false
             this.releasing = false
             this.timeLapseQuiesced = false
@@ -349,6 +385,7 @@ class RecorderSession(
                     recordingMode = config.recordingMode,
                     tokenDir = usbTokenDir,
                     journal = usbRecoveryJournal,
+                    channelId = usbBundleChannelId,
                 )
             }
             usbFallbackPendingReason = null
@@ -398,6 +435,7 @@ class RecorderSession(
                     previewFallbackUsed = false,
                     mirrorPreviewManaged = config.mirrorPreviewEnabled,
                     cameraGeneration = 0,
+                    videoFlowConfirmed = false,
                     recordingSessionId = recordingSessionId,
                     channelId = channelIdentity?.channelId,
                     sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
@@ -428,9 +466,70 @@ class RecorderSession(
             )
             startCameraConflictDiagnostics(config)
             startInFlight = true
-            openCamera(config.cameraId)
+            if (prepared == null) openCamera(config.cameraId)
+            else prepared(requireNotNull(sessionStoragePlan).active, requireNotNull(channelIdentity))
+        }
+        if (!posted) runCatching { previewSurface?.release(); previewReleased?.invoke() }
+    }
+
+    /** Existing RecordingChannels owns group admission; this session still owns every native resource. */
+    internal fun preparedStartAllowed(sessionId: String): Boolean = !releaseRequested && !cleanupUnconfirmed &&
+        statePublication.allowsOpen(sessionId) && state.status == RecorderStatus.STARTING
+
+    internal fun openPreparedCamera(sessionId: String, reservation: Any?, opened: () -> Unit) {
+        val accepted = postCamera {
+            if (!preparedStartAllowed(sessionId) || !startInFlight || cameraOpenInFlight || cameraDevice != null) {
+                // This reservation has never been submitted to CameraManager.
+                reservation?.let(::releaseUnsubmittedReservation)
+                groupEnded?.invoke(sessionId, state.lastError)
+                return@postCamera
+            }
+            groupOpened = opened
+            openCamera(requireNotNull(config).cameraId, reservation)
+        }
+        if (!accepted) {
+            reservation?.let(::releaseUnsubmittedReservation)
+            groupEnded?.invoke(sessionId, "GROUP_CAMERA_WORKER_CLOSED")
         }
     }
+
+    internal fun configurePreparedCamera(sessionId: String) {
+        postCamera {
+            if (!preparedStartAllowed(sessionId) || cameraDevice == null || groupOpened == null) return@postCamera
+            groupOpened = null
+            EventLogger.logEvent(Categories.SYSTEM, "RECORDER_GROUP_CONFIGURE", payload = mapOf(
+                "recordingSessionId" to sessionId, "cameraId" to requireNotNull(config).cameraId))
+            startSegment()
+        }
+    }
+
+    internal fun stopConcurrentGroup(sessionId: String, error: String?) {
+        statePublication.terminate("CONCURRENT_GROUP_STOP", "GROUP_CONTROL", error, sessionId)
+        postCamera {
+            // A sibling's fault ends this intent, but is not evidence that this member's
+            // valid tail is corrupt. Its own pipeline still supplies any real finalize error.
+            if (statePublication.isCurrent(sessionId)) stopSessionOnCameraThread("STOP", "CONCURRENT_GROUP_STOP", null, false)
+        }
+    }
+
+    /** Synchronous intent only: every native/FD release still waits for its real producer fence. */
+    internal fun markConcurrentStorageLost(sessionId: String, storage: RecordingStorageIdentity) {
+        val snapshot = state
+        if (snapshot.recordingSessionId != sessionId || storage.kind != RecordingStorageKind.USB_MEDIASTORE ||
+            snapshot.activeStorageKind != storage.kind ||
+            !snapshot.activeStorageUuid.equals(storage.storageUuid, ignoreCase = true)) return
+        unavailableStorage = storage
+        recordingEncoder?.abandonOutput()
+        closeTransaction?.merge(outputLost = true)
+    }
+
+    private fun storageUnavailable(storage: RecordingStorageIdentity): Boolean = unavailableStorage?.let {
+        RecordingModeSwitchGate.storageMatches(it, storage)
+    } == true
+
+    internal fun auxiliarySession(publish: (RecorderState) -> Unit, stopped: () -> Unit): RecorderSession =
+        RecorderSession(context.applicationContext, publish, stopped, externallyManagedPresence = true,
+            auxiliaryChannel = true, selectDirectCodec = selectDirectCodec)
 
     /**
      * Keeps the configured preview Surface but removes/adds it from the active
@@ -921,6 +1020,9 @@ class RecorderSession(
         }
         if (stopping) return
         val generation = manualSessionGeneration
+        retainOnManualStop = authorityReason == "MANUAL_STOP" && !vehicleAwayConfirmed && !outputLost &&
+            forcedError == null && state.lastError == null && state.status in setOf(RecorderStatus.RECORDING, RecorderStatus.FINALIZING) &&
+            recording && !auxiliaryChannel && diagnosticScope == null && terminalCloseTrial == null
         stopping = true
         startInFlight = false
 
@@ -1315,7 +1417,7 @@ class RecorderSession(
 
     private fun maybeFinishDisposal() {
         if (!releaseRequested || disposalStarted || closeTransaction != null || cameraDevice != null || cameraOpenInFlight ||
-            pendingContinuousOutputs.get() != 0) return
+            pendingContinuousOutputs.get() != 0 || pendingUsbCommits != 0) return
         disposalStarted = true
         // One IO barrier; late cleanup callbacks may reach here after the bounded wait has ended.
         runIo {
@@ -1329,6 +1431,9 @@ class RecorderSession(
                 ioExecutor.shutdown()
                 releaseCompletion?.invoke()
                 releaseCompletion = null
+                groupEnded = null
+                groupStorageLost = null
+                groupOpened = null
                 cameraThread?.quitSafely()
             }
         }
@@ -1533,59 +1638,77 @@ class RecorderSession(
         "recoveryAttempts" to cameraRecovery.snapshot.attemptsMade.toString(),
     )
 
-    private fun openCamera(cameraId: String) {
-        if (releaseRequested || cleanupUnconfirmed || closeTransaction != null || stopping || releasing) return
-        if (!statePublication.allowsOpen(state.recordingSessionId)) return
-        val cfg = config ?: run {
-            startInFlight = false
-            return
-        }
-        if (reconcileVehiclePowerSnapshot(source = "CAMERA_OPEN")) return
-        if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            startInFlight = false
-            cameraUnavailable("CAMERA_PERMISSION_DENIED")
-            return
-        }
-        val declared = CameraRuntime.videoSizeCandidates(context, cameraId)
-            .map { ProfileSize(it.width, it.height) }
-        if (!RecorderConfig.profileDeclared(cfg.profile, declared)) {
-            val message = "Profile ${cfg.profile.key} not declared by camera $cameraId"
-            EventLogger.markError(Categories.SYSTEM, "RECORDER_PROFILE_NOT_DECLARED", message, null)
-            startInFlight = false
-            cameraUnavailable(message)
-            return
-        }
-        // Capability/permission queries above may take time. Recheck immediately before opening.
-        if (reconcileVehiclePowerSnapshot(source = "CAMERA_OPEN_COMMIT")) return
-        if (cameraRecovery.snapshot.phase == CameraRecoveryPhase.RESUMING &&
-            applyVehicleAwayAction(vehicleAway.onCameraLoss(manualSessionGeneration))) return
-        if (releaseRequested || cleanupUnconfirmed || closeTransaction != null || stopping || releasing ||
-            !statePublication.allowsOpen(state.recordingSessionId)) return
-        if (!cameraRecovery.mayOpen(manualSessionGeneration, SystemClock.elapsedRealtime())) {
-            cameraUnavailable("RECOVERY_OPEN_AUTHORITY_INVALID",
-                recoverableContention = cameraRecovery.snapshot.availability == CameraAvailabilityState.UNAVAILABLE)
-            return
-        }
-        cameraOpenInFlight = true
-        openGeneration++
-        val generation = openGeneration
-        val sessionToken = manualSessionGeneration
-        scheduleOpenWatchdog(generation)
+    private fun openCamera(cameraId: String, reservation: Any? = null) {
+        var submitted = false
         try {
-            CanaryCameraOpenAdapter.open(manager, cameraId, createStateCallback(generation, sessionToken), cameraHandler)
-        } catch (e: CameraAccessException) {
-            cancelOpenWatchdog()
-            cameraOpenInFlight = false
-            startInFlight = false
-            cameraUnavailable(
-                cameraAccessMessage(e),
-                recoverableContention = isRecoverableCameraAccessReason(e.reason),
-            )
-        } catch (t: Throwable) {
-            cancelOpenWatchdog()
-            cameraOpenInFlight = false
-            startInFlight = false
-            cameraUnavailable(t.message ?: "camera open failed")
+            if (releaseRequested || cleanupUnconfirmed || closeTransaction != null || stopping || releasing) return
+            if (!statePublication.allowsOpen(state.recordingSessionId)) return
+            val cfg = config ?: run {
+                startInFlight = false
+                return
+            }
+            if (reconcileVehiclePowerSnapshot(source = "CAMERA_OPEN")) return
+            if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                startInFlight = false
+                cameraUnavailable("CAMERA_PERMISSION_DENIED")
+                return
+            }
+            val declared = CameraRuntime.videoSizeCandidates(context, cameraId)
+                .map { ProfileSize(it.width, it.height) }
+            if (!RecorderConfig.profileDeclared(cfg.profile, declared)) {
+                val message = "Profile ${cfg.profile.key} not declared by camera $cameraId"
+                EventLogger.markError(Categories.SYSTEM, "RECORDER_PROFILE_NOT_DECLARED", message, null)
+                startInFlight = false
+                cameraUnavailable(message)
+                return
+            }
+            // Capability/permission queries above may take time. Recheck immediately before opening.
+            if (reconcileVehiclePowerSnapshot(source = "CAMERA_OPEN_COMMIT")) return
+            if (cameraRecovery.snapshot.phase == CameraRecoveryPhase.RESUMING &&
+                applyVehicleAwayAction(vehicleAway.onCameraLoss(manualSessionGeneration))) return
+            if (releaseRequested || cleanupUnconfirmed || closeTransaction != null || stopping || releasing ||
+                !statePublication.allowsOpen(state.recordingSessionId)) return
+            if (!cameraRecovery.mayOpen(manualSessionGeneration, SystemClock.elapsedRealtime())) {
+                cameraUnavailable("RECOVERY_OPEN_AUTHORITY_INVALID",
+                    recoverableContention = cameraRecovery.snapshot.availability == CameraAvailabilityState.UNAVAILABLE)
+                return
+            }
+            cameraOpenInFlight = true
+            openGeneration++
+            val generation = openGeneration
+            pendingCameraOpenGeneration = generation
+            val sessionToken = manualSessionGeneration
+            scheduleOpenWatchdog(generation)
+            try {
+                submitted = true
+                val ticket = cameraHandoffTicket().takeIf { RetainedCameraConnection.enabled &&
+                    !auxiliaryChannel && diagnosticScope == null && terminalCloseTrial == null }
+                if (ticket != null) RetainedCameraConnection.open(manager, cameraId, ticket,
+                    createStateCallback(generation, sessionToken), requireNotNull(cameraHandler), reservation)
+                else if (reservation == null) CanaryCameraOpenAdapter.open(manager, cameraId, createStateCallback(generation, sessionToken), cameraHandler)
+                else CanaryCameraOpenAdapter.openReserved(manager, cameraId, reservation, createStateCallback(generation, sessionToken), cameraHandler)
+            } catch (e: CameraAccessException) {
+                reservation?.let(::releaseUnsubmittedReservation)
+                cancelOpenWatchdog()
+                cameraOpenInFlight = false
+                pendingCameraOpenGeneration = null
+                startInFlight = false
+                cameraUnavailable(
+                    cameraAccessMessage(e),
+                    recoverableContention = isRecoverableCameraAccessReason(e.reason),
+                )
+            } catch (t: Throwable) {
+                reservation?.let(::releaseUnsubmittedReservation)
+                cancelOpenWatchdog()
+                cameraOpenInFlight = false
+                pendingCameraOpenGeneration = null
+                startInFlight = false
+                cameraUnavailable(t.message ?: "camera open failed")
+            }
+        } finally {
+            // No timeout or close() return releases a submitted open. Its adapter retains
+            // the token until CameraDevice.onClosed, even if our worker later exits.
+            if (!submitted) reservation?.let(::releaseUnsubmittedReservation)
         }
     }
 
@@ -1620,6 +1743,7 @@ class RecorderSession(
                     return
                 }
                 cameraOpenInFlight = false
+                pendingCameraOpenGeneration = null
                 startInFlight = false
                 cancelOpenWatchdog()
                 if (stopping || releasing || releaseRequested || cleanupUnconfirmed || closeTransaction != null || config == null) {
@@ -1634,8 +1758,8 @@ class RecorderSession(
                     return
                 }
                 cameraDevice = camera
-                updateState(state.copy(cameraGeneration = generation))
-                startSegment()
+                updateState(state.copy(cameraGeneration = generation, videoFlowConfirmed = false))
+                groupOpened?.invoke() ?: startSegment()
             }
 
             override fun onDisconnected(camera: CameraDevice) {
@@ -1669,6 +1793,13 @@ class RecorderSession(
 
             override fun onClosed(camera: CameraDevice) {
                 evidence("ON_CLOSED", deviceOwnerId = System.identityHashCode(camera))
+                // Stop invalidates the run generation before a pending open answers.
+                // Its late device must close, then settle that exact open even if the
+                // service has not yet called release(). An old close cannot clear a newer open.
+                if (pendingCameraOpenGeneration == generation) {
+                    pendingCameraOpenGeneration = null
+                    cameraOpenInFlight = false
+                }
                 onCameraDeviceProducerClosed(camera)
             }
         }
@@ -1693,12 +1824,11 @@ class RecorderSession(
             storageBlocked(decision.reason ?: "STORAGE_BLOCKED")
             return
         }
-        val continuing = (recordingEncoder as? ContinuousVideoRecorder)?.takeIf { it.started }
         segmentGeneration++
         timeLapseQuiesced = false
         previewReplacementGeneration++
         cancelPreviewReplacementWatchdog()
-        pendingRecordingPreviewSurface?.takeIf { continuing == null }?.let { pending ->
+        pendingRecordingPreviewSurface?.let { pending ->
             pendingRecordingPreviewSurface = null
             if (pending.isValid) {
                 releaseRecordingPreviewSurface()
@@ -1728,7 +1858,7 @@ class RecorderSession(
         lastTimestampNs = null
         lastFrameReceivedAtElapsedMs = null
         latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber,
-            channelId = channelIdentity?.channelId)
+            channelId = channelIdentity?.channelId, cameraGeneration = state.cameraGeneration)
         if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
         if (diagnosticScope == null && currentIncidentTag == null) {
             val pendingIncident = if (auxiliaryChannel) null else incidentStore.pending(nowEpoch)
@@ -1737,10 +1867,6 @@ class RecorderSession(
                 currentConsumesPendingIncident = true
                 protectedPending = true
             }
-        }
-        if (continuing != null) {
-            prepareContinuousOutputAsync(cfg, generation, sessionToken, device, continuing, nowEpoch)
-            return
         }
         val output = if (sessionStoragePlan?.active?.kind == RecordingStorageKind.USB_MEDIASTORE) {
             val target = requireNotNull(activeUsbTarget)
@@ -1756,6 +1882,7 @@ class RecorderSession(
                 recordingSessionIdentity.requireCurrentId(),
                 segmentNumber,
                 nowEpoch,
+                usbBundleChannelId,
             )
             try {
                 if (diagnosticScope != null) diagnosticScope.admit(estimated) else usbRetentionManager.admit(
@@ -1777,11 +1904,11 @@ class RecorderSession(
         } else {
             internalOutputSink.openSegment(segmentNumber, cfg.profile, nowEpoch)
         }
-        startPreparedOutput(output, cfg, generation, sessionToken, device, continuing)
+        startPreparedOutput(output, cfg, generation, sessionToken, device)
     }
 
     private fun startPreparedOutput(output: RecordingOutputHandle, cfg: RecorderConfig, generation: Long,
-                                    sessionToken: Long, device: CameraDevice, continuing: ContinuousVideoRecorder?) {
+                                    sessionToken: Long, device: CameraDevice) {
         val partial = requireNotNull(output.localWorkingFile) {
             "Recording output must expose a stable ownership marker"
         }
@@ -1811,8 +1938,13 @@ class RecorderSession(
         currentPartial = partial
         scheduleSetupWatchdog(generation)
         try {
-            val recorder = continuing ?: newRecordingEncoder(cfg)
+            check(!storageUnavailable(output.storage)) { "USB_VOLUME_UNAVAILABLE_BEFORE_PREPARE" }
+            val recorder = newRecordingEncoder(cfg)
             recordingEncoder = recorder // Own even partial prepare failures before allocating native resources.
+            if (storageUnavailable(output.storage)) {
+                recorder.abandonOutput()
+                error("USB_VOLUME_UNAVAILABLE_BEFORE_PREPARE")
+            }
             if (recorder is NativeFileRecordingEncoder && output is UsbMediaStoreRecordingOutputHandle) {
                 val sidecar = nativeSidecar(output, cfg).copy(protected = protectedPending,
                     eventId = currentIncidentTag?.eventId, eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs,
@@ -1821,8 +1953,9 @@ class RecorderSession(
                 output.checkpointNative(sidecar)
                 nativeSidecars[output] = sidecar
             }
-            if (recorder is ProductContinuousRecorder) {
-                registerProductOutput(output, cfg, segmentNumber, segmentStartedAtEpochMs ?: System.currentTimeMillis())
+            if (recorder is ProductContinuousRecorder || recorder is ContinuousVideoRecorder) {
+                registerContinuousOutput(output, cfg, segmentNumber, segmentStartedAtEpochMs ?: System.currentTimeMillis(),
+                    productRepacked = recorder is ProductContinuousRecorder)
             }
             recorder.prepare(cfg, output)
             if (recorder is ProductContinuousRecorder) {
@@ -1831,19 +1964,6 @@ class RecorderSession(
             }
             val surface = recorder.surface
             activeEncoderSurface = surface
-            if (continuing != null) {
-                check(captureSession != null) { "CONTINUOUS_CAPTURE_SESSION_MISSING" }
-                completeSegmentStart(recorder, output, cfg, generation, sessionToken,
-                    recordingPreviewSurface?.takeIf { previewOutputDesired && it.isValid && !state.previewFallbackUsed },
-                    TimeLapseCaptureCadencePolicy.plan(RecordingMode.NORMAL, 1))
-                // A UI replacement requested during file rotation is an explicit topology change,
-                // handled by the existing output-retirement owner after the writer is attached.
-                val replacement = pendingRecordingPreviewSurface
-                pendingRecordingPreviewSurface = null
-                if (replacement != null) replacePreviewSurface(replacement)
-                else setPreviewOutputEnabled(previewOutputDesired)
-                return
-            }
             cancelPacedEncoderCaptures()
             captureSession?.close()
             captureSession = null
@@ -1963,9 +2083,10 @@ class RecorderSession(
         }
     }
 
-    private fun registerProductOutput(output: RecordingOutputHandle, cfg: RecorderConfig, number: Int, requestedEpoch: Long) {
-        check(productFiles.size < 3 && !productFiles.containsKey(output)) { "PRODUCT_METADATA_OWNER_LIMIT" }
-        productFiles[output] = SegmentSnapshot(
+    private fun registerContinuousOutput(output: RecordingOutputHandle, cfg: RecorderConfig, number: Int, requestedEpoch: Long,
+                                      productRepacked: Boolean = true) {
+        check(continuousFiles.size < 3 && !continuousFiles.containsKey(output)) { "PRODUCT_METADATA_OWNER_LIMIT" }
+        continuousFiles[output] = SegmentSnapshot(
             file = requireNotNull(output.localWorkingFile), finalPath = null, cameraId = cfg.cameraId, profile = cfg.profile,
             sourceRole = cfg.source.sourceRole, layoutKind = cfg.source.layoutKind, mappingRevision = cfg.source.mappingRevision,
             laneLayout = cfg.source.laneLayout, segmentSeconds = cfg.segmentSeconds,
@@ -1979,28 +2100,29 @@ class RecorderSession(
             protected = false, eventId = null, eventRequestedAtEpochMs = null, eventRole = null,
             frameStats = SegmentFrameStats(), storageLimitBytes = cfg.storageLimitBytes,
             channelId = channelIdentity?.channelId, sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
-            productRepacked = true)
+            productRepacked = productRepacked)
     }
 
-    private fun freezeProductProtection(output: RecordingOutputHandle?) {
-        val seed = productFiles[output] ?: return
-        productFiles[output] = seed.copy(protected = protectedPending, eventId = currentIncidentTag?.eventId,
+    private fun freezeContinuousProtection(output: RecordingOutputHandle?) {
+        val seed = continuousFiles[output] ?: return
+        continuousFiles[output] = seed.copy(protected = protectedPending, eventId = currentIncidentTag?.eventId,
             eventRequestedAtEpochMs = currentIncidentTag?.requestedAtEpochMs, eventRole = currentIncidentTag?.role,
             eventRequestedElapsedMs = currentIncidentTag?.requestedAtElapsedMs,
             consumesPendingIncident = currentConsumesPendingIncident)
     }
 
-    private fun onProductFileStarted(owner: ProductContinuousRecorder, number: Int, output: RecordingOutputHandle,
+    private fun onContinuousFileStarted(owner: RecordingEncoder, output: RecordingOutputHandle,
                                      epoch: Long, elapsed: Long) {
         cameraHandler?.post {
             if (recordingEncoder !== owner) return@post
             if (output !== currentOutput) {
-                freezeProductProtection(currentOutput)
+                freezeContinuousProtection(currentOutput)
                 protectedPending = false; currentIncidentTag = null; currentConsumesPendingIncident = false
                 incidentStore.pending(epoch)?.let { currentIncidentTag = it; currentConsumesPendingIncident = true; protectedPending = true }
             }
-            val seed = productFiles[output] ?: run { failContinuousRun("PRODUCT_FILE_SEED_MISSING", false); return@post }
-            productFiles[output] = seed.copy(startedAtEpochMs = epoch, startedAtElapsedRealtimeMs = elapsed)
+            val seed = continuousFiles[output] ?: run { failContinuousRun("CONTINUOUS_FILE_SEED_MISSING", false); return@post }
+            val number = seed.segmentNumber
+            continuousFiles[output] = seed.copy(startedAtEpochMs = epoch, startedAtElapsedRealtimeMs = elapsed)
             if (stopping || releasing || releaseRequested || closeTransaction != null ||
                 !statePublication.allowsOpen(state.recordingSessionId)) return@post
             currentOutput = output; currentPartial = output.localWorkingFile; segmentNumber = number
@@ -2009,11 +2131,24 @@ class RecorderSession(
             segmentStartedAtEpochMs = seed.requestedAtEpochMs; segmentStartedAtElapsedMs = seed.requestedAtElapsedRealtimeMs
             updateState(state.copy(status = RecorderStatus.RECORDING, segmentNumber = number, currentFile = output.displayName,
                 segmentStartedAtEpochMs = epoch, message = null))
-            EventLogger.logEvent(Categories.SYSTEM, "RECORDER_PRODUCT_FILE_STARTED", payload = mapOf(
+            EventLogger.logEvent(Categories.SYSTEM, if (owner is ProductContinuousRecorder) "RECORDER_PRODUCT_FILE_STARTED" else "RECORDER_CONTINUOUS_FILE_STARTED", payload = mapOf(
                 "segment" to number.toString(), "captureSessionRevision" to captureSessionRevision.toString()))
             scheduleTimeout(segmentGeneration, seed.effectiveSegmentSeconds * 1000L)
             if (output is UsbMediaStoreRecordingOutputHandle) scheduleUsbPresenceWatchdog(segmentGeneration, output)
-            prepareProductNext(owner, requireNotNull(config), number + 1)
+            if (owner is ProductContinuousRecorder) prepareProductNext(owner, requireNotNull(config), number + 1)
+            else {
+                continuousRotationPending = false
+                continuousRotationWatchdog?.let { cameraHandler?.removeCallbacks(it) }
+                // A new format can arrive after the previous boundary was queued but before
+                // this writer acknowledgement. Service the retained request now.
+                if (owner is ContinuousVideoRecorder && owner.formatBoundaryNeeded) onDirectFormatBoundaryNeeded(owner)
+                continuousRotationWatchdog = null
+                val replacement = pendingRecordingPreviewSurface
+                pendingRecordingPreviewSurface = null
+                if (replacement != null) replacePreviewSurface(replacement)
+                // A file boundary does not change Camera2 targets. Visibility commands already
+                // update their own request; do not reinstall the same repeating request here.
+            }
         }
     }
 
@@ -2031,13 +2166,15 @@ class RecorderSession(
         productNextPreparing = true; pendingContinuousOutputs.incrementAndGet()
         runIo {
             val prepared = runCatching {
+                requireOutputPreparation(owner, sessionId)
                 if (target != null) usbRetentionManager.admit(target,
                     StoragePolicy.estimateSegmentBytes(cfg.profile.bitrateBps, USB_SEGMENT_SECONDS), cfg.usbQuotaBytes,
-                    UsbExportPolicy.bundleId(sessionId, number, epoch))
+                    UsbExportPolicy.bundleId(sessionId, number, epoch, usbBundleChannelId))
                 else check(prepareStorage(cfg).proceed) { "PRODUCT_INTERNAL_STORAGE_BLOCKED" }
+                requireOutputPreparation(owner, sessionId)
                 sink.openSegment(number, cfg.profile, epoch)
             }
-            val openingFailure = prepared.exceptionOrNull()?.let {
+            val openingFailure = prepared.exceptionOrNull()?.takeUnless { it is java.util.concurrent.CancellationException }?.let {
                 owner.captureFailure(it, ContinuousFailureStage.OUTPUT_OPEN)
             }
             val posted = cameraHandler?.post {
@@ -2045,19 +2182,19 @@ class RecorderSession(
                 if (recordingEncoder !== owner || manualSessionGeneration != sessionToken || stopping || releasing ||
                     releaseRequested || cleanupUnconfirmed || closeTransaction != null || !statePublication.allowsOpen(sessionId)) {
                     runIo {
-                        prepared.getOrNull()?.let(::discardUnusedProductOutput)
+                        prepared.getOrNull()?.let(::discardUnusedContinuousOutput)
                         pendingContinuousOutputs.decrementAndGet(); cameraHandler?.post { maybeFinishDisposal() }
                     }
                     return@post
                 }
                 pendingContinuousOutputs.decrementAndGet()
                 prepared.onSuccess { output ->
-                    registerProductOutput(output, cfg, number, System.currentTimeMillis())
+                    registerContinuousOutput(output, cfg, number, System.currentTimeMillis())
                     try { owner.prepareNext(number, output) }
                     catch (error: Throwable) {
                         val preparationFailure = owner.captureFailure(error, ContinuousFailureStage.OUTPUT_PREPARE)
                         // The adapter reports whether ownership was admitted before a failure.
-                        if (!owner.owns(output)) onProductOutputUnused(owner, output)
+                        if (!owner.owns(output)) onContinuousOutputUnused(owner, output)
                         failContinuousRun(error.message ?: "PRODUCT_NEXT_PREPARE_FAILED", false,
                             failureEvidence = preparationFailure, originalError = error, failureStage = ContinuousFailureStage.OUTPUT_PREPARE)
                     }
@@ -2065,17 +2202,22 @@ class RecorderSession(
                     failureEvidence = openingFailure, originalError = it, failureStage = ContinuousFailureStage.OUTPUT_OPEN) }
             } == true
             if (!posted) {
-                prepared.getOrNull()?.let(::discardUnusedProductOutput)
+                prepared.getOrNull()?.let(::discardUnusedContinuousOutput)
                 pendingContinuousOutputs.decrementAndGet()
             }
         }
     }
 
-    private fun discardUnusedProductOutput(output: RecordingOutputHandle) {
+    private fun discardUnusedContinuousOutput(output: RecordingOutputHandle) {
         runCatching {
+            if (output is UsbMediaStoreRecordingOutputHandle && storageUnavailable(output.storage)) {
+                output.abandonUnavailableTarget()
+                check(output.nativeReleaseConfirmed)
+                return@runCatching // Retain the exact pending URI; never recover/delete a lost volume here.
+            }
             output.close()
             check(output.nativeReleaseConfirmed)
-            output.abort()
+            if (output is UsbMediaStoreRecordingOutputHandle) output.discardUnused() else output.abort()
             if (output !is UsbMediaStoreRecordingOutputHandle) output.localWorkingFile?.let { if (it.exists()) check(it.delete()) }
         }.onFailure {
             EventLogger.markError(Categories.SYSTEM, "PRODUCT_UNUSED_OUTPUT_CLEANUP_FAILED", it.javaClass.simpleName, it)
@@ -2105,12 +2247,12 @@ class RecorderSession(
         tx.begin()
     }
 
-    private fun onProductOutputUnused(owner: ProductContinuousRecorder, output: RecordingOutputHandle) {
+    private fun onContinuousOutputUnused(owner: RecordingEncoder, output: RecordingOutputHandle) {
         pendingContinuousOutputs.incrementAndGet()
         cameraHandler?.post {
-            productFiles.remove(output)
+            continuousFiles.remove(output)
             runIo {
-                discardUnusedProductOutput(output)
+                discardUnusedContinuousOutput(output)
                 pendingContinuousOutputs.decrementAndGet(); cameraHandler?.post { maybeFinishDisposal() }
             }
         }
@@ -2121,8 +2263,8 @@ class RecorderSession(
         pendingContinuousOutputs.incrementAndGet()
         cameraHandler?.post {
             nextProductTimelineUs = maxOf(nextProductTimelineUs, file.endPtsUs)
-            if (currentOutput === file.output) freezeProductProtection(file.output)
-            val seed = productFiles.remove(file.output)
+            if (currentOutput === file.output) freezeContinuousProtection(file.output)
+            val seed = continuousFiles.remove(file.output)
             if (seed == null) {
                 pendingContinuousOutputs.decrementAndGet()
                 EventLogger.markError(Categories.SYSTEM, "PRODUCT_CLOSED_FILE_SEED_MISSING", file.number.toString(), null)
@@ -2138,107 +2280,158 @@ class RecorderSession(
                     RecordingClockPolicy.observedAnchor(file.firstElapsedMs, "CALLBACK_OBSERVED") else null,
                 gapFromPreviousMs = SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, file.firstElapsedMs))
             previousSegmentStoppedElapsedMs = file.endedElapsedMs
-            pendingUsbCommits++
-            runIo {
-                val outcome = runCatching {
-                    val sidecar = buildSidecarFromSnapshot(frozen, requireNotNull(frozen.profile), null, null)
-                    val document = SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), sidecar)
-                    if (file.output is UsbMediaStoreRecordingOutputHandle) file.output.checkpointNative(sidecar)
-                    file.output.appendFinalMetadata(document)
-                    if (file.output is UsbMediaStoreRecordingOutputHandle) {
-                        val usb = file.output
-                        val canary = usbCapabilityStore.requiresCanary(usb.pendingVideo.target)
-                        val committed = usbCommitEngine.commitDirect(usb.pendingVideo, sidecar,
-                            canaryRequired = canary, preserveVideoOnFailure = true)
-                        check(com.dante.zeekrcapabilitylab.usbexport.UsbCommittedBundleStore(context).mark(
-                            usb.pendingVideo.target.storageUuid, committed.bundleId, committed.observedOwnerPackage)) { "PRODUCT_USB_OWNERSHIP_PENDING" }
-                        usb.markCommitted()
-                        if (canary) usbCapabilityStore.markPassed(usb.pendingVideo.target, committed.observedOwnerPackage)
-                    } else {
-                        val partial = requireNotNull(file.output.localWorkingFile)
-                        val track = requireNotNull(CameraRuntime.readTrackMetadata(partial)) { "PRODUCT_TRACK_UNREADABLE" }
-                        check(owner.raster.matchesTrack(track.width ?: 0, track.height ?: 0)) { "PRODUCT_TRACK_SIZE_MISMATCH" }
-                        val final = SegmentNaming.finalFileFor(partial)
-                        check(partial.renameTo(final)) { "PRODUCT_FILE_RENAME_FAILED" }
-                        val snapshot = frozen.copy(file = final, finalPath = final, fileBytes = final.length())
-                        pendingSidecarFiles += final.name
-                        finishSegmentAsync(snapshot, true)
+            publishContinuousFile(owner, file.output, frozen, publicationSessionId)
+        }
+    }
+
+    private fun onDirectFileClosed(owner: ContinuousVideoRecorder, summary: EncodedSegmentSummary) {
+        val publicationSessionId = state.recordingSessionId
+        pendingContinuousOutputs.incrementAndGet()
+        cameraHandler?.post {
+            if (currentOutput === summary.output) freezeContinuousProtection(summary.output)
+            val seed = continuousFiles.remove(summary.output)
+            if (seed == null) {
+                pendingContinuousOutputs.decrementAndGet()
+                EventLogger.markError(Categories.SYSTEM, "CONTINUOUS_CLOSED_FILE_SEED_MISSING", "direct", null)
+                return@post
+            }
+            val frozen = seed.copy(startedAtEpochMs = summary.firstEpochMs, startedAtElapsedRealtimeMs = summary.firstElapsedMs,
+                stoppedAtEpochMs = summary.endedEpochMs, stoppedAtElapsedRealtimeMs = summary.endedElapsedMs,
+                continuousTimeline = summary.continuousTimeline, videoClockAnchor = summary.videoClockAnchor,
+                frameStats = if (currentOutput === summary.output) frameStats else seed.frameStats,
+                gapFromPreviousMs = SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, summary.firstElapsedMs))
+            previousSegmentStoppedElapsedMs = summary.endedElapsedMs
+            publishContinuousFile(owner, summary.output, frozen, publicationSessionId)
+        }
+    }
+
+    private fun publishContinuousFile(owner: RecordingEncoder, output: RecordingOutputHandle,
+                                      frozen: SegmentSnapshot, publicationSessionId: String?) {
+        pendingUsbCommits++
+        runIo {
+            val outcome = runCatching {
+                val sidecar = buildSidecarFromSnapshot(frozen, requireNotNull(frozen.profile), null, null)
+                val document = SegmentSidecarIO.json.encodeToString(SegmentSidecar.serializer(), sidecar)
+                if (output is UsbMediaStoreRecordingOutputHandle) output.checkpointNative(sidecar)
+                check(!storageUnavailable(output.storage)) { "USB_VOLUME_UNAVAILABLE_BEFORE_PUBLICATION" }
+                // Embedded raster metadata is the repacked surround contract. Cabin/direct
+                // recordings retain their existing MP4 + sidecar format.
+                if (owner is ProductContinuousRecorder) output.appendFinalMetadata(document)
+                if (output is UsbMediaStoreRecordingOutputHandle) {
+                    val usb = output
+                    val canary = usbCapabilityStore.requiresCanary(usb.pendingVideo.target)
+                    val committed = usbCommitEngine.commitDirect(usb.pendingVideo, sidecar,
+                        canaryRequired = canary, preserveVideoOnFailure = true)
+                    check(com.dante.zeekrcapabilitylab.usbexport.UsbCommittedBundleStore(context).mark(
+                        usb.pendingVideo.target.storageUuid, committed.bundleId, committed.observedOwnerPackage)) { "PRODUCT_USB_OWNERSHIP_PENDING" }
+                    usb.markCommitted()
+                    if (canary) usbCapabilityStore.markPassed(usb.pendingVideo.target, committed.observedOwnerPackage)
+                } else {
+                    val partial = requireNotNull(output.localWorkingFile)
+                    val track = requireNotNull(CameraRuntime.readTrackMetadata(partial)) { "PRODUCT_TRACK_UNREADABLE" }
+                    check(if (owner is ProductContinuousRecorder) owner.raster.matchesTrack(track.width ?: 0, track.height ?: 0)
+                        else track.width == frozen.profile?.size?.width && track.height == frozen.profile?.size?.height) {
+                        "CONTINUOUS_TRACK_SIZE_MISMATCH"
                     }
-                    if (frozen.consumesPendingIncident && frozen.eventId != null) incidentStore.consume(frozen.eventId)
+                    val final = SegmentNaming.finalFileFor(partial)
+                    check(partial.renameTo(final)) { "PRODUCT_FILE_RENAME_FAILED" }
+                    val snapshot = frozen.copy(file = final, finalPath = final, fileBytes = final.length())
+                    pendingSidecarFiles += final.name
+                    finishSegmentAsync(snapshot, true)
                 }
-                val publicationFailure = outcome.exceptionOrNull()?.let {
-                    owner.captureFailure(it, ContinuousFailureStage.OUTPUT_PUBLISH, "PRODUCT_PUBLICATION_FAILED")
+                if (frozen.consumesPendingIncident && frozen.eventId != null) incidentStore.consume(frozen.eventId)
+            }
+            val publicationFailure = outcome.exceptionOrNull()?.let {
+                if (owner is ProductContinuousRecorder) owner.captureFailure(it, ContinuousFailureStage.OUTPUT_PUBLISH, "PRODUCT_PUBLICATION_FAILED")
+                else continuousFailureCapture.capture(it, ContinuousFailureStage.OUTPUT_PUBLISH, signal = "CONTINUOUS_PUBLICATION_FAILED")
+            }
+            cameraHandler?.post {
+                pendingUsbCommits = (pendingUsbCommits - 1).coerceAtLeast(0)
+                pendingContinuousOutputs.decrementAndGet()
+                if (outcome.isSuccess) updateState(state.copy(libraryRevision = state.libraryRevision + 1), publicationSessionId)
+                else {
+                    val error = "CONTINUOUS_PUBLICATION_FAILED:${outcome.exceptionOrNull()?.message}"
+                    updateState(state.copy(lastError = error), publicationSessionId)
+                    if (recordingEncoder === owner && !stopping && closeTransaction == null) failContinuousRun(error, false,
+                        failureEvidence = publicationFailure, originalError = outcome.exceptionOrNull(),
+                        failureStage = ContinuousFailureStage.OUTPUT_PUBLISH)
                 }
-                cameraHandler?.post {
-                    pendingUsbCommits = (pendingUsbCommits - 1).coerceAtLeast(0)
-                    pendingContinuousOutputs.decrementAndGet()
-                    if (outcome.isSuccess) updateState(state.copy(libraryRevision = state.libraryRevision + 1), publicationSessionId)
-                    else {
-                        val error = "PRODUCT_PUBLICATION_FAILED:${outcome.exceptionOrNull()?.message}"
-                        updateState(state.copy(lastError = error), publicationSessionId)
-                        if (recordingEncoder === owner && !stopping && closeTransaction == null) failContinuousRun(error, false,
-                            failureEvidence = publicationFailure, originalError = outcome.exceptionOrNull(),
-                            failureStage = ContinuousFailureStage.OUTPUT_PUBLISH)
-                    }
-                    maybeFinishDisposal()
-                }
+                maybeFinishDisposal()
             }
         }
     }
 
-    private fun prepareContinuousOutputAsync(cfg: RecorderConfig, generation: Long, sessionToken: Long,
-                                              device: CameraDevice, continuing: ContinuousVideoRecorder, epoch: Long) {
-        val number = segmentNumber
+    private fun prepareDirectCut(owner: ContinuousVideoRecorder, token: Long, progress: DirectCutProgress) {
+        val cfg = requireNotNull(config)
+        val sessionToken = manualSessionGeneration
+        val number = segmentNumber + 1
         val failureCapture = continuousFailureCapture
         val target = activeUsbTarget?.takeIf { sessionStoragePlan?.active?.kind == RecordingStorageKind.USB_MEDIASTORE }
         val sink = if (target != null) requireNotNull(usbOutputSink) else internalOutputSink
         val sessionId = recordingSessionIdentity.requireCurrentId()
-        updateState(state.copy(segmentNumber = number, currentFile = null))
+        val epoch = System.currentTimeMillis()
         pendingContinuousOutputs.incrementAndGet()
-        // The previous USB commit can hold the volume lock while hashing. Waiting for that lock
-        // must not hold the camera handler or prevent STOP / producer acknowledgements.
         runIo {
             val prepared = runCatching {
+                requireOutputPreparation(owner, sessionId)
                 if (target != null) usbRetentionManager.admit(target,
                     StoragePolicy.estimateSegmentBytes(cfg.profile.bitrateBps, USB_SEGMENT_SECONDS), cfg.usbQuotaBytes,
-                    com.dante.zeekrcapabilitylab.usbexport.UsbExportPolicy.bundleId(sessionId, number, epoch))
+                    UsbExportPolicy.bundleId(sessionId, number, epoch, usbBundleChannelId))
+                else check(prepareStorage(cfg).proceed) { "CONTINUOUS_INTERNAL_STORAGE_BLOCKED" }
+                requireOutputPreparation(owner, sessionId)
                 sink.openSegment(number, cfg.profile, epoch)
             }
-            val failure = prepared.exceptionOrNull()?.let { error -> runCatching {
+            val failure = prepared.exceptionOrNull()?.takeUnless { it is java.util.concurrent.CancellationException }?.let { error -> runCatching {
                 failureCapture.capture(error, ContinuousFailureStage.OUTPUT_OPEN, signal = "CONTINUOUS_OUTPUT_OPEN_FAILED")
             }.getOrNull() }
             val posted = cameraHandler?.post {
-                val valid = generation == segmentGeneration && sessionToken == manualSessionGeneration &&
-                    recordingEncoder === continuing && cameraDevice === device && !stopping && !releasing &&
-                    !releaseRequested && !cleanupUnconfirmed && closeTransaction == null
-                if (!valid) {
+                if (!ContinuousRecordingPolicy.mayAdmitCut(token == continuousRotationToken,
+                        recordingEncoder === owner, sessionToken == manualSessionGeneration,
+                        stopping || releasing || releaseRequested || !statePublication.allowsOpen(sessionId),
+                        cleanupUnconfirmed || closeTransaction != null)) {
                     runIo {
-                        prepared.getOrNull()?.let { unused -> runCatching { unused.abort() } }
-                        pendingContinuousOutputs.decrementAndGet()
-                        cameraHandler?.post { maybeFinishDisposal() }
+                        prepared.getOrNull()?.let(::discardUnusedContinuousOutput)
+                        pendingContinuousOutputs.decrementAndGet(); cameraHandler?.post { maybeFinishDisposal() }
                     }
                     return@post
                 }
                 pendingContinuousOutputs.decrementAndGet()
-                prepared.onSuccess { startPreparedOutput(it, cfg, generation, sessionToken, device, continuing) }
-                    .onFailure { failContinuousRun("CONTINUOUS_OUTPUT_OPEN_FAILED:${it.message ?: it.javaClass.simpleName}",
-                        outputLost = false, failureEvidence = failure, originalError = it,
-                        failureStage = ContinuousFailureStage.OUTPUT_OPEN) }
+                prepared.onSuccess { output ->
+                    registerContinuousOutput(output, cfg, number, epoch, productRepacked = false)
+                    try { owner.requestCut(output, progress) }
+                    catch (error: Throwable) {
+                        if (!owner.owns(output)) onContinuousOutputUnused(owner, output)
+                        failContinuousRun(error.message ?: "CONTINUOUS_CUT_FAILED", false,
+                            originalError = error, failureStage = ContinuousFailureStage.CUT_REQUEST)
+                    }
+                }.onFailure { failContinuousRun("CONTINUOUS_OUTPUT_OPEN_FAILED:${it.message ?: it.javaClass.simpleName}",
+                    outputLost = false, failureEvidence = failure, originalError = it,
+                    failureStage = ContinuousFailureStage.OUTPUT_OPEN) }
             } == true
             if (!posted) {
-                prepared.getOrNull()?.let { runCatching { it.abort() } }
+                prepared.getOrNull()?.let(::discardUnusedContinuousOutput)
                 pendingContinuousOutputs.decrementAndGet()
             }
         }
     }
 
+    private fun requireOutputPreparation(owner: RecordingEncoder, sessionId: String) {
+        // Admission can wait behind a volume commit. Recheck after that wait, before creating
+        // another provider row/FD. Cancellation is not a new codec/storage fault.
+        if (recordingEncoder !== owner || !statePublication.allowsOpen(sessionId))
+            throw java.util.concurrent.CancellationException("CONTINUOUS_OUTPUT_CANCELLED")
+    }
+
     private fun newRecordingEncoder(cfg: RecorderConfig): RecordingEncoder {
         if (auxiliaryChannel) {
-            val selection = ContinuousVideoRecorder.inspectEncoder(manager, cfg)
+            val selection = selectDirectCodec(manager, cfg)
             updateState(state.copy(encoderSelection = selection))
             val codec = requireNotNull(selection.codecName) { "AUXILIARY_CODEC_UNAVAILABLE:${selection.reason}" }
             return ContinuousVideoRecorder(codec, ::onEncoderError, continuousFailureCapture,
-                RecordingChannelPolicy.QUEUE_BYTES, RecordingChannelPolicy.QUEUE_ITEMS)
+                RecordingChannelPolicy.QUEUE_BYTES, RecordingChannelPolicy.QUEUE_ITEMS,
+                ::onContinuousFileStarted, ::onDirectFileClosed, ::onContinuousOutputUnused,
+                cabinPreviewSessionId = recordingSessionIdentity.requireCurrentId(),
+                onFormatBoundaryNeeded = ::onDirectFormatBoundaryNeeded)
         }
         if (diagnosticScope != null) {
             updateState(state.copy(encoderSelection = ContinuousEncoderSelection("PREFLIGHT_MEDIA_RECORDER_BASELINE")))
@@ -2250,8 +2443,8 @@ class RecorderSession(
             val codec = requireNotNull(selection.codecName) { "SHARED_INPUT_REJECTED:${selection.reason}" }
             EventLogger.logEvent(Categories.SYSTEM, "RECORDER_ENCODER_SELECTED", payload = mapOf(
                 "route" to "SHARED_INPUT_CONTINUOUS_CODEC", "reason" to selection.reason))
-            return ProductContinuousRecorder(codec, segmentNumber, nextProductTimelineUs, ::onEncoderError, ::onProductFileStarted,
-                ::onProductFileClosed, ::onProductOutputUnused, continuousFailureCapture) { owner, problem ->
+            return ProductContinuousRecorder(codec, segmentNumber, nextProductTimelineUs, ::onEncoderError, { owner, _, output, epoch, elapsed -> onContinuousFileStarted(owner, output, epoch, elapsed) },
+                ::onProductFileClosed, ::onContinuousOutputUnused, continuousFailureCapture) { owner, problem ->
                 cameraHandler?.post {
                     if (recordingEncoder === owner) {
                         updateState(state.copy(previewActive = false, message = "Preview unavailable; recording continues"))
@@ -2262,7 +2455,7 @@ class RecorderSession(
         }
         val eligible = com.dante.zeekrcapabilitylab.BuildConfig.CONTINUOUS_MIRROR_RECORDING_ENABLED &&
             ContinuousRecordingPolicy.eligible(cfg.recordingMode, cfg.mirrorPreviewEnabled, cfg.source.sourceRole)
-        val selection = if (eligible) runCatching { ContinuousVideoRecorder.inspectEncoder(manager, cfg) }
+        val selection = if (eligible) runCatching { selectDirectCodec(manager, cfg) }
             .getOrElse { ContinuousEncoderSelection("CODEC_INSPECTION_FAILED", queryError = it.javaClass.simpleName) }
             else ContinuousEncoderSelection("CONFIG_NOT_ELIGIBLE")
         val declared = selection.codecName
@@ -2272,7 +2465,10 @@ class RecorderSession(
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_ENCODER_SELECTED", payload = mapOf(
             "route" to when { declared != null -> "CONTINUOUS_CODEC"; nativeFiles -> "CONTINUOUS_MEDIA_RECORDER"; else -> "MEDIA_RECORDER" },
             "reason" to selection.reason))
-        return if (declared != null) ContinuousVideoRecorder(declared, ::onEncoderError, continuousFailureCapture)
+        return if (declared != null) ContinuousVideoRecorder(declared, ::onEncoderError, continuousFailureCapture,
+            onStarted = ::onContinuousFileStarted, onClosed = ::onDirectFileClosed, onUnused = ::onContinuousOutputUnused,
+            cabinPreviewSessionId = recordingSessionIdentity.requireCurrentId(),
+            onFormatBoundaryNeeded = ::onDirectFormatBoundaryNeeded)
             else if (nativeFiles) NativeFileRecordingEncoder(currentOutput as UsbMediaStoreRecordingOutputHandle,
                 ::onEncoderError, ::onNativeRecorderInfo)
             else LegacyRecordingEncoder(::onEncoderError)
@@ -2399,7 +2595,7 @@ class RecorderSession(
         pendingContinuousOutputs.incrementAndGet()
         runIo {
             val prepared = runCatching {
-                usbRetentionManager.admit(target, reservation, cfg.usbQuotaBytes, UsbExportPolicy.bundleId(sessionId, nextNumber, epoch))
+                usbRetentionManager.admit(target, reservation, cfg.usbQuotaBytes, UsbExportPolicy.bundleId(sessionId, nextNumber, epoch, usbBundleChannelId))
                 val output = sink.openSegment(nextNumber, cfg.profile, epoch) as UsbMediaStoreRecordingOutputHandle
                 try { output.checkpointNative(nativeSidecar(output, cfg)) }
                 catch (failure: Throwable) { output.clearNativeCheckpoint(); output.abort(); throw failure }
@@ -2471,6 +2667,7 @@ class RecorderSession(
             ?: (recordingEncoder as? ProductContinuousRecorder)?.let {
                 it.firstFailure ?: it.captureFailure(originalError, failureStage, reason)
             }
+            ?: (recordingEncoder as? ContinuousVideoRecorder)?.captureFailure(originalError, failureStage, reason)
             ?: runCatching { continuousFailureCapture.capture(originalError, failureStage, signal = reason) }.getOrNull()
         if (recordingEncoder is ProductContinuousRecorder) publishCaptureEvidence()
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CONTINUOUS_FAILED", severity = com.dante.zeekrcapabilitylab.data.Severity.ERROR,
@@ -2728,7 +2925,7 @@ class RecorderSession(
     private fun openWatchdogFired(generation: Long) {
         if (!WatchdogPolicy.isCurrent(generation, openGeneration)) return
         openGeneration++ // any pending onOpened becomes stale and closes its own camera
-        cameraOpenInFlight = false
+        // A deadline revokes capture, but does not acknowledge the unanswered native open.
         startInFlight = false
         EventLogger.markError(
             Categories.SYSTEM,
@@ -3335,8 +3532,16 @@ class RecorderSession(
         latestCapture = CaptureEvidence(recordingSessionIdentity.requireCurrentId(), segmentNumber,
             frameStats, lastFrameReceivedAtElapsedMs, previewCaptureTracker.stats,
             (recordingEncoder as? ProductContinuousRecorder)?.evidence() ?: (recordingEncoder as? ContinuousVideoRecorder)?.evidence(),
-            channelId = channelIdentity?.channelId)
+            channelId = channelIdentity?.channelId, cameraGeneration = state.cameraGeneration)
         if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
+        if (!state.videoFlowConfirmed && RecordingVideoReadiness.confirmed(state, latestCapture)) {
+            updateState(state.copy(videoFlowConfirmed = true))
+            EventLogger.logEvent(Categories.SYSTEM, "RECORDER_SOURCE_STARTUP_VIDEO_CONFIRMED", payload = mapOf(
+                "recordingSessionId" to recordingSessionIdentity.requireCurrentId(),
+                "cameraGeneration" to state.cameraGeneration.toString(), "channelId" to (state.channelId ?: "UNKNOWN"),
+                "captureFrames" to frameStats.count.toString(),
+                "encodedFrames" to (latestCapture.encoder?.frames?.toString() ?: "UNKNOWN")))
+        }
     }
 
     private fun failSegmentStart(generation: Long, partial: File, message: String, originalError: Throwable? = null) {
@@ -3374,37 +3579,44 @@ class RecorderSession(
         } else beginResourceClose(reason, forcedError, outputLost = false)
     }
 
+    private fun onDirectFormatBoundaryNeeded(encoder: ContinuousVideoRecorder) {
+        cameraHandler?.post {
+            if (recordingEncoder !== encoder || !encoder.formatBoundaryNeeded || stopping || releasing || releaseRequested ||
+                closeTransaction != null || !statePublication.allowsOpen(state.recordingSessionId)) return@post
+            rotateContinuousFile(encoder)
+        }
+    }
+
     private fun rotateContinuousFile(encoder: ContinuousVideoRecorder) {
         if (continuousRotationPending) return
-        val output = currentOutput ?: return
+        if (currentOutput == null) return
+        if (pendingUsbCommits >= 2 || usbFallbackPendingReason != null) {
+            failContinuousRun("CONTINUOUS_PUBLICATION_BACKLOG", outputLost = false)
+            return
+        }
         continuousRotationPending = true
         val token = ++continuousRotationToken
         cancelTimeout()
-        val watchdog = Runnable {
-            if (continuousRotationPending && token == continuousRotationToken) {
-                failContinuousRun("CONTINUOUS_CUT_TIMEOUT", outputLost = false)
+        val progress = encoder.beginCut()
+        val watchdog = object : Runnable {
+            override fun run() {
+                if (!continuousRotationPending || token != continuousRotationToken || recordingEncoder !== encoder) return
+                val problem = progress.problem(SystemClock.uptimeMillis())
+                if (problem != null) failContinuousRun(problem, false, failureStage = ContinuousFailureStage.CUT_WATCHDOG)
+                else cameraHandler?.postDelayed(this, 250)
             }
         }
         continuousRotationWatchdog = watchdog
-        cameraHandler?.postDelayed(watchdog, 8_000)
-        encoder.requestCut { summary -> cameraHandler?.post {
-            if (!ContinuousRecordingPolicy.mayCommitRotation(token == continuousRotationToken,
-                    recordingEncoder === encoder, currentOutput === output,
-                    stopping || releasing || releaseRequested, closeTransaction != null || cleanupUnconfirmed)) return@post
-            continuousRotationWatchdog?.let { cameraHandler?.removeCallbacks(it) }
-            continuousRotationWatchdog = null
-            completedEncodedSegment = summary
-            EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CONTINUOUS_FILE_CLOSED", payload = mapOf(
-                "segment" to segmentNumber.toString(), "frames" to summary.frames.toString(),
-                "captureSessionRevision" to captureSessionRevision.toString()))
-            // The writer acknowledged muxer release and descriptor close. Camera/codec remain owned.
-            commitFinalizeCurrentSegment("TIMEOUT", null, emptyMap())
-        } }
+        cameraHandler?.postDelayed(watchdog, 250)
+        prepareDirectCut(encoder, token, progress)
     }
 
     private fun beginResourceClose(reason: String, forcedError: String?, outputLost: Boolean) {
-        (recordingEncoder as? ProductContinuousRecorder)?.let {
-            freezeProductProtection(currentOutput); it.prepareForStop()
+        val lostOutput = outputLost || currentOutput?.let { storageUnavailable(it.storage) } == true
+        if (recordingEncoder is ProductContinuousRecorder || recordingEncoder is ContinuousVideoRecorder) {
+            freezeContinuousProtection(currentOutput)
+            (recordingEncoder as? ProductContinuousRecorder)?.prepareForStop()
+            (recordingEncoder as? ContinuousVideoRecorder)?.prepareForStop()
         }
         if (recordingEncoder != null)
             com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.recordRun(context, state)
@@ -3415,13 +3627,14 @@ class RecorderSession(
         continuousRotationToken++
         continuousRotationWatchdog?.let { cameraHandler?.removeCallbacks(it) }
         continuousRotationWatchdog = null
-        if (outputLost) recordingEncoder?.abandonOutput()
+        if (lostOutput) recordingEncoder?.abandonOutput()
         val terminal = stopping || releasing || releaseRequested || reason == "STOP"
         pendingTimeLapseFinalize?.let {
             it.reason = RecorderClosePolicy.mergeReason(it.reason, reason, terminal)
             if (forcedError != null) it.forcedError = forcedError
-            closeTransaction?.merge(terminal = terminal, outputLost = outputLost,
-                requireDeviceClose = RecorderClosePolicy.isInterruption(reason))
+            closeTransaction?.merge(terminal = terminal, outputLost = lostOutput,
+                requireDeviceClose = RecorderClosePolicy.isInterruption(reason) ||
+                    terminal && terminalCloseTrial?.order == TerminalCloseOrder.DEVICE_FIRST)
             return
         }
         val closeRequestedElapsedMs = SystemClock.elapsedRealtime()
@@ -3438,7 +3651,12 @@ class RecorderSession(
         // A replaced preview session can still be using this encoder. If it has
         // not drained, require a device fence rather than releasing its input.
         val otherProducerInFlight = captureLedger.hasOtherInFlight(session)
+        val deviceFirst = terminalCloseTrial?.needsDeviceFence(BuildConfig.RECORDER_SUPPORT_ENABLED,
+            terminal, reason, otherProducerInFlight) ?: RecorderClosePolicy.needsDeviceFence(reason, otherProducerInFlight)
         val camera = cameraDevice
+        val retainedTransfer = if (terminal && retainOnManualStop && reason == "STOP" && forcedError == null &&
+            !lostOutput && !releasing && !releaseRequested && !deviceFirst && session != null)
+            camera?.let(RetainedCameraConnection::prepare) else null
         val recorder = recordingEncoder
         val output = currentOutput
         val encoder = activeEncoderSurface
@@ -3452,7 +3670,16 @@ class RecorderSession(
             "deviceOwnerId" to (camera?.let { System.identityHashCode(it).toString() } ?: "NONE"),
             "recordingSessionId" to (closeSessionId ?: "NONE"),
             "generation" to manualSessionGeneration.toString(), "cameraGeneration" to openGeneration.toString(),
-            "closeRequestedElapsedMs" to closeRequestedElapsedMs.toString(), "finalizeReason" to reason)
+            "closeRequestedElapsedMs" to closeRequestedElapsedMs.toString(), "finalizeReason" to reason,
+            "cameraId" to (config?.cameraId ?: "NONE"), "channelId" to (channelIdentity?.channelId ?: "NONE"),
+            "effectiveCloseOrder" to if (deviceFirst) "DEVICE_FIRST" else "DRAIN_FIRST") +
+            (terminalCloseTrial?.let { mapOf("trialId" to it.id, "requestedCloseOrder" to it.order.name) } ?: emptyMap())
+        val inputTrace: (String) -> Unit = { step -> if (BuildConfig.RECORDER_SUPPORT_ENABLED) runCatching {
+            EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CLOSE_PROGRESS", payload = closeFacts +
+                mapOf("closeStep" to step, "stepElapsedMs" to SystemClock.elapsedRealtime().toString()))
+        }; Unit }
+        (recorder as? ProductContinuousRecorder)?.closeTrace = inputTrace
+        (recorder as? ContinuousVideoRecorder)?.closeTrace = inputTrace
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CLOSE_REQUESTED", payload = closeFacts)
         val tx = CaptureCloseTransaction(
             control = CaptureCleanupRuntime.control,
@@ -3470,7 +3697,7 @@ class RecorderSession(
                     if (recorder !is ContinuousVideoRecorder && recorder !is ProductContinuousRecorder) encoder?.release()
                 }
                 override fun closeOutput(lost: Boolean) {
-                    if (recorder is ProductContinuousRecorder) Unit
+                    if (recorder is ProductContinuousRecorder || recorder is ContinuousVideoRecorder) Unit
                     else if (recorder is NativeFileRecordingEncoder) recorder.closeOutputs(lost)
                     else if (lost && output is UsbMediaStoreRecordingOutputHandle) output.abandonUnavailableTarget()
                     else output?.close()
@@ -3478,8 +3705,9 @@ class RecorderSession(
             },
             hasSession = session != null, hasDevice = camera != null, wasRecording = recording,
             sequences = captureLedger.pending(session),
-            terminal = terminal || otherProducerInFlight, lost = outputLost,
-            preferDeviceClose = RecorderClosePolicy.needsDeviceFence(reason, otherProducerInFlight),
+            terminal = terminal && retainedTransfer == null || otherProducerInFlight, lost = lostOutput,
+            preferDeviceClose = deviceFirst,
+            requireSessionCloseAck = retainedTransfer != null,
             mediaReleaseTimeoutMs = RecorderCloseTiming.mediaReleaseMs(recorder?.name),
             trace = { step, detail ->
                 CaptureCleanupRuntime.trace(traceId, step, detail)
@@ -3492,9 +3720,14 @@ class RecorderSession(
                 }
                 if (edge != null) EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CLOSE_PROGRESS",
                     payload = closeFacts + mapOf("closeStep" to edge, "stepElapsedMs" to SystemClock.elapsedRealtime().toString()))
+                else if (BuildConfig.RECORDER_SUPPORT_ENABLED) RecorderCloseTrace.facts(step, detail)?.let { facts ->
+                    EventLogger.logEvent(Categories.SYSTEM, "RECORDER_CLOSE_PROGRESS", payload = closeFacts + facts +
+                        mapOf("stepElapsedMs" to SystemClock.elapsedRealtime().toString()))
+                }
             },
             unconfirmed = unconfirmed@{ failure ->
                 if (!statePublication.isCurrent(closeSessionId)) return@unconfirmed
+                terminalCloseTrial?.fail(failure)
                 // Revoke continuation on the control thread, even if native work is blocked.
                 cleanupUnconfirmed = true
                 stopping = true
@@ -3517,13 +3750,27 @@ class RecorderSession(
                         "safeToContinue" to result.safeToContinue.toString(), "deviceClosed" to result.deviceClosed.toString(),
                         "terminal" to (result.terminal || stopping).toString(), "outputLost" to result.outputLost.toString(),
                         "closeDurationMs" to (SystemClock.elapsedRealtime() - closeRequestedElapsedMs).toString()))
-                    completedEncodedSegment = (recorder as? ContinuousVideoRecorder)?.lastCompleted
+                    (recorder as? ContinuousVideoRecorder)?.terminalUnwrittenFrames?.let { missing ->
+                        val reason = "CONTINUOUS_TAIL_OUTPUT_MISSING:$missing"
+                        terminalCloseTrial?.fail("CONTINUOUS_TAIL_OUTPUT_MISSING")
+                        pending.forcedError = pending.forcedError ?: reason
+                        updateState(state.copy(lastError = reason))
+                        EventLogger.logEvent(Categories.SYSTEM, "RECORDER_TERMINAL_UNWRITTEN_SAMPLES",
+                            severity = com.dante.zeekrcapabilitylab.data.Severity.ERROR,
+                            payload = closeFacts + mapOf("acceptedUnwrittenFrames" to missing.toString()))
+                        com.dante.zeekrcapabilitylab.diagnostic.ShortRecorderDiagnostics.recordFault(context, state)
+                    }
                     latestCapture = latestCapture.copy(encoder = (recorder as? ProductContinuousRecorder)?.evidence()
                         ?: (recorder as? ContinuousVideoRecorder)?.evidence() ?: latestCapture.encoder)
                     if (!auxiliaryChannel) RecorderCaptureEvidence.update(latestCapture)
                     recordingEncoder = null
                     if (captureSession === session) captureSession = null
                     if (result.deviceClosed && cameraDevice === camera) cameraDevice = null
+                    else if (retainedTransfer != null && camera != null && cameraDevice === camera &&
+                        RetainedCameraConnection.producerReleased(camera, retainedTransfer,
+                            healthy = !result.terminal && result.errors.isEmpty() && pending.forcedError == null)) {
+                        cameraDevice = null // Explicit transfer; never report a fabricated device close.
+                    }
                     if (activeEncoderSurface === encoder) activeEncoderSurface = null
                     pacedCaptureInFlightSequenceId = null
                     pacedCaptureInFlightSession = null
@@ -3536,12 +3783,12 @@ class RecorderSession(
                         if (!result.outputLost) flushNativeFilesAfterStop(recorder, output)
                         else nativeSidecars.clear() // Durable checkpoints retain the disconnected USB files.
                     }
-                    if (recorder is ProductContinuousRecorder) {
+                    if (recorder is ProductContinuousRecorder || recorder is ContinuousVideoRecorder) {
                         currentPartial = null; currentOutput = null; recording = false; currentSegmentCanary = false
                         productNextPreparing = false
                         segmentStartedAtEpochMs = null; segmentStartedAtElapsedMs = null
                         segmentRecordingStartedAtEpochMs = null; segmentRecordingStartedAtElapsedMs = null
-                        productFiles.clear()
+                        continuousFiles.clear()
                         val nextReason = if (RecorderClosePolicy.isInterruption(pending.reason) && result.errors.isNotEmpty())
                             "RECOVERY_ATTEMPT_TERMINAL" else pending.reason
                         afterFinalize(nextReason, result.errors.isEmpty(), pending.forcedError ?: result.errors.values.firstOrNull())
@@ -3564,6 +3811,10 @@ class RecorderSession(
             },
         )
         closeTransaction = tx
+        if (output != null && storageUnavailable(output.storage)) {
+            recorder?.abandonOutput()
+            tx.merge(outputLost = true)
+        }
         CaptureCleanupRuntime.trace(traceId, "CONTEXT",
             "reason=" + reason + " mode=" + config?.recordingMode + " segment=" + segmentNumber +
                 " sessionGeneration=" + manualSessionGeneration + " segmentGeneration=" + segmentGeneration +
@@ -3571,7 +3822,9 @@ class RecorderSession(
                 " recorder=" + System.identityHashCode(recorder) + " storage=" + output?.storage?.kind +
                 " recording=" + recording + " frames=" + frameStats.count + " lastFrameAgeMs=" + lastFrameAgeMs)
         CaptureCleanupRuntime.retain(hold, camera?.id ?: config?.cameraId ?: "default", camera, tx)
-        updateState(state.copy(status = RecorderStatus.FINALIZING, message = Utils.t("Finishing recording and releasing the camera", "正在确认相机与录像收尾")))
+        updateState(state.copy(status = RecorderStatus.FINALIZING, message = if (retainedTransfer != null)
+            Utils.t("Saving recording and returning to preview", "正在保存录像并返回预览")
+            else Utils.t("Finishing recording and releasing the camera", "正在确认相机与录像收尾")))
         tx.begin()
     }
 
@@ -3625,12 +3878,10 @@ class RecorderSession(
         }
         val cfg = config
         val output = currentOutput
-        val encodedSummary = completedEncodedSegment?.takeIf { it.output === output }
-        completedEncodedSegment = null
         val requestedAtEpoch = segmentStartedAtEpochMs
         val requestedAtElapsed = segmentStartedAtElapsedMs
-        val actualStartedEpoch = encodedSummary?.firstEpochMs ?: segmentRecordingStartedAtEpochMs ?: requestedAtEpoch
-        val actualStartedElapsed = encodedSummary?.firstElapsedMs ?: segmentRecordingStartedAtElapsedMs ?: requestedAtElapsed
+        val actualStartedEpoch = segmentRecordingStartedAtEpochMs ?: requestedAtEpoch
+        val actualStartedElapsed = segmentRecordingStartedAtElapsedMs ?: requestedAtElapsed
         val stats = frameStats
         val protected = protectedPending
         val incidentTag = currentIncidentTag
@@ -3662,17 +3913,15 @@ class RecorderSession(
         )
         currentPartial = null
         currentOutput = null
-        val captureContinues = recordingEncoder is ContinuousVideoRecorder
-        recording = captureContinues
+        recording = false
         segmentStartedAtEpochMs = null
         segmentStartedAtElapsedMs = null
         segmentRecordingStartedAtEpochMs = null
         segmentRecordingStartedAtElapsedMs = null
-        updateState(state.copy(status = if (captureContinues) RecorderStatus.RECORDING else RecorderStatus.FINALIZING))
+        updateState(state.copy(status = RecorderStatus.FINALIZING))
 
         val recorderStopError = recorderErrors["stop"] ?: recorderErrors["reset"] ?: recorderErrors["outputSync"]
-        // Either the close transaction settled all resources, or the continuous writer
-        // acknowledged this file's muxer/descriptor while retaining the camera and encoder.
+        // Legacy recorder publication runs only after the native close transaction settled.
         if (output is UsbMediaStoreRecordingOutputHandle) {
             finalizeUsbSegment(
                 reason = reason,
@@ -3689,14 +3938,12 @@ class RecorderSession(
                 incidentTag = incidentTag,
                 consumesPendingIncident = consumesPendingIncident,
                 finalizeEnteredElapsed = finalizeEnteredElapsed,
-                stoppedEpoch = encodedSummary?.endedEpochMs ?: System.currentTimeMillis(),
-                stoppedElapsed = encodedSummary?.endedElapsedMs ?: SystemClock.elapsedRealtime(),
-                videoClockAnchor = encodedSummary?.videoClockAnchor,
-                continuousTimeline = encodedSummary?.continuousTimeline,
+                stoppedEpoch = System.currentTimeMillis(),
+                stoppedElapsed = SystemClock.elapsedRealtime(),
             )
             return
         }
-        if (recordingEncoder !is ContinuousVideoRecorder) activeEncoderSurface = null
+        activeEncoderSurface = null
 
         val finalFile = SegmentNaming.finalFileFor(partial)
         val partialExists = partial.exists()
@@ -3726,8 +3973,8 @@ class RecorderSession(
         val success = outcome.success
         val effectiveFile = if (success) finalFile else quarantine(partial) ?: partial
         val fileBytes = if (effectiveFile.exists()) effectiveFile.length() else 0L
-        val stoppedEpoch = encodedSummary?.endedEpochMs ?: System.currentTimeMillis()
-        val stoppedElapsed = encodedSummary?.endedElapsedMs ?: SystemClock.elapsedRealtime()
+        val stoppedEpoch = System.currentTimeMillis()
+        val stoppedElapsed = SystemClock.elapsedRealtime()
         val gap = SegmentGapPolicy.gapMs(previousSegmentStoppedElapsedMs, actualStartedElapsed)
         previousSegmentStoppedElapsedMs = stoppedElapsed
 
@@ -3768,8 +4015,6 @@ class RecorderSession(
             storageLimitBytes = cfg?.storageLimitBytes ?: state.storageLimitBytes,
             channelId = channelIdentity?.channelId,
             sessionStartedElapsedMs = channelIdentity?.sessionStartedElapsedMs,
-            videoClockAnchor = encodedSummary?.videoClockAnchor,
-            continuousTimeline = encodedSummary?.continuousTimeline,
         )
         if (success) {
             pendingSidecarFiles += snapshot.finalPath!!.name
@@ -3906,6 +4151,15 @@ class RecorderSession(
         source: String,
     ) {
         if (currentOutput !== output) return
+        if (reason.startsWith("USB_VOLUME_UNAVAILABLE")) {
+            val id = state.recordingSessionId
+            val group = groupStorageLost
+            if (id != null && group != null) {
+                markConcurrentStorageLost(id, output.storage)
+                group(id, output.storage, reason)
+                return // Group marks every same-volume member before starting any teardown.
+            }
+        }
         if (recordingEncoder is NativeFileRecordingEncoder) {
             failContinuousRun("NATIVE_USB_OUTPUT_LOST", outputLost = true)
             return
@@ -3926,6 +4180,10 @@ class RecorderSession(
         if (stopping || releasing || releaseRequested || cleanupUnconfirmed) return false
         if (reconcileVehiclePowerSnapshot(source = "USB_FALLBACK", usbFallbackReason = reason)) return false
         if (stopping || releasing || releaseRequested || cleanupUnconfirmed) return false
+        if (groupEnded != null && sessionStoragePlan?.active?.kind == RecordingStorageKind.USB_MEDIASTORE) {
+            stopSessionOnCameraThread("STOP", "GROUP_STORAGE_UNAVAILABLE", "USB_TARGET_UNAVAILABLE:$reason", false)
+            return false // A prepared camera group cannot silently split across different storage targets.
+        }
         if (sessionStoragePlan?.active?.kind == RecordingStorageKind.USB_MEDIASTORE &&
             ProductContinuousPolicy.blocksUsbFallback(config?.sharedInputRecordingEnabled == true, cameraRecovery.snapshot.phase)) {
             stopSessionOnCameraThread("STOP", "USB_CONTINUATION_BLOCKED", "USB_TARGET_UNAVAILABLE:$reason", false)
@@ -4073,7 +4331,7 @@ class RecorderSession(
             updateState(state.copy(status = if (recordingEncoder is ContinuousVideoRecorder) RecorderStatus.RECORDING else RecorderStatus.FINALIZING,
                 message = "Verifying first USB segment"))
         }
-        runIo {
+        val publish = { runIo {
             val outcome = runCatching {
                 usbCommitEngine.commitDirect(
                     pending = output.pendingVideo,
@@ -4100,6 +4358,7 @@ class RecorderSession(
             }.onFailure { output.abort() }
             cameraHandler?.post {
                 pendingUsbCommits = (pendingUsbCommits - 1).coerceAtLeast(0)
+                try {
                 if (outcome.isSuccess) {
                     if (canary) {
                         usbCapabilityStore.markPassed(
@@ -4131,11 +4390,12 @@ class RecorderSession(
                     // A failed canary is a storage degradation, not a camera/encoder failure.
                     afterFinalize(reason, success = true, error = forcedError)
                 }
+                } finally { maybeFinishDisposal() }
             }
         }
-        if (!canary) {
-            afterFinalize(reason, success = true, error = forcedError)
         }
+        publish()
+        if (!canary) afterFinalize(reason, success = true, error = forcedError)
         EventLogger.logEvent(
             Categories.SYSTEM,
             "RECORDER_USB_SEGMENT_SUBMITTED",
@@ -4314,6 +4574,12 @@ class RecorderSession(
         startInFlight = false
         cameraOpenInFlight = false
         val token = manualSessionGeneration
+        if (groupEnded != null) {
+            // A member cannot reopen behind already-configured siblings. The existing
+            // group owner ends this intent and each session drains its own outputs.
+            stopSessionOnCameraThread("CAMERA_LOSS", "CONCURRENT_CAMERA_LOSS", message, false)
+            return
+        }
         // Camera loss is the most important arbitration point. Never route it using
         // a snapshot cached before a missed power/display callback.
         if (reconcileVehiclePowerSnapshot(source = "CAMERA_LOSS")) return
@@ -4360,7 +4626,7 @@ class RecorderSession(
             }
             return
         }
-        val recoveryArmed = diagnosticScope == null && BuildConfig.CAMERA_INTERRUPTION_RECOVERY_ENABLED &&
+        val recoveryArmed = diagnosticScope == null && terminalCloseTrial == null && BuildConfig.CAMERA_INTERRUPTION_RECOVERY_ENABLED &&
             recoverableContention &&
             cameraRecovery.beginRecoverableLoss(token, message, SystemClock.elapsedRealtime())
         EventLogger.logEvent(

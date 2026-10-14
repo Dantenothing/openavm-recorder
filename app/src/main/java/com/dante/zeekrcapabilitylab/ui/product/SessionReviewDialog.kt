@@ -26,6 +26,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dante.zeekrcapabilitylab.product.AppLanguage
+import com.dante.zeekrcapabilitylab.product.FourLaneLensMode
 import com.dante.zeekrcapabilitylab.product.SettingsStore
 import com.dante.zeekrcapabilitylab.service.recorder.PlaybackPinRegistry
 import com.dante.zeekrcapabilitylab.service.recorder.RecordingLayoutKind
@@ -46,12 +47,23 @@ import kotlin.math.abs
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 
+import android.os.SystemClock
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import com.dante.zeekrcapabilitylab.player.SessionSelection
+import com.dante.zeekrcapabilitylab.player.SessionSelectionWindow
+import com.dante.zeekrcapabilitylab.transfer.DriveDataSelection
+
 /** Normal recordings only. Parallel camera files share one clock, with at most three decoders. */
 @Composable
 internal fun SessionReviewDialog(
     files: List<File>,
     initialFile: File? = null,
-    onSendToPhone: (suspend (List<File>, Boolean) -> Boolean)? = null,
+    onSendToPhone: (suspend (List<File>, com.dante.zeekrcapabilitylab.transfer.DriveDataSelection) -> Boolean)? = null,
     onTimingUnavailable: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
@@ -74,6 +86,8 @@ internal fun SessionReviewDialog(
         failed = loaded == null
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+      MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF0866F5), secondaryContainer = Color(0xFFE4EEFF),
+          onSecondaryContainer = Color(0xFF0757CB), surface = Color.White, surfaceContainer = Color(0xFFF0F4FA))) {
         Surface(Modifier.fillMaxWidth(0.98f).fillMaxHeight(0.96f), shape = MaterialTheme.shapes.large) {
             val data = loaded
             if (data == null) Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center,
@@ -90,202 +104,286 @@ internal fun SessionReviewDialog(
                 SessionReviewContent(data, initialFile, onSendToPhone, onDismiss)
             }
         }
+      }
     }
 }
 
+
 @Composable
 private fun SessionReviewContent(data: SessionReviewData, initialFile: File?,
-    onSendToPhone: (suspend (List<File>, Boolean) -> Boolean)?, onDismiss: () -> Unit) {
+    onSendToPhone: (suspend (List<File>, DriveDataSelection) -> Boolean)?, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val settings = remember { SettingsStore.get(context) }
     val timeline = data.timeline
-    val initial = data.entries[initialFile?.absolutePath] ?: timeline.segments.firstOrNull()?.let { data.entries[it.id] }
-    var channel by remember { mutableStateOf(initial?.segment?.channelId ?: timeline.channelIds.first()) }
-    var position by remember { mutableLongStateOf(initial?.segment?.let { timeline.mediaToSession(it.id, 0) } ?: 0L) }
+    val settings = remember { SettingsStore.get(context) }
+    val clips = remember(data) { SessionSelection.clips(timeline) }
+    val initial = data.entries[initialFile?.absolutePath]?.segment ?: clips.first()
+    var position by remember { mutableLongStateOf(timeline.mediaToSession(initial.id, 0) ?: 0L) }
     var seekSerial by remember { mutableIntStateOf(0) }
     var wantsPlay by remember { mutableStateOf(true) }
-    var overview by remember { mutableStateOf(false) }
-    // This is an opening preference; the player's temporary toggle does not change it.
-    var showDetails by remember { mutableStateOf(settings.playbackMapDefaultOpen) }
+    var hasVideoFrame by remember { mutableStateOf(false) }
+    val videoReady = remember { mutableStateMapOf<String, Boolean>() }
     var dragging by remember { mutableStateOf(false) }
     var dragged by remember { mutableFloatStateOf(0f) }
-    val hudPrefs = remember { context.getSharedPreferences("playback_ui", android.content.Context.MODE_PRIVATE) }
-    var hudVisible by remember { mutableStateOf(hudPrefs.getBoolean("drive_hud", true)) }
+    var focus by remember { mutableStateOf<String?>(null) }
+    var lensMode by remember { mutableStateOf(settings.lensMode) }
+    var showMap by remember { mutableStateOf(settings.playbackMapDefaultOpen) }
+    var mapExpanded by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
+    var saveRange by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(setOf(clips.firstOrNull { position >= it.mediaStartElapsedMs!! - timeline.originElapsedMs && position < it.mediaEndElapsedMs!! - timeline.originElapsedMs }?.id ?: clips.first().id)) }
+    var sendingWindows by remember { mutableStateOf<List<SessionSelectionWindow>?>(null) }
+    var sendingAll by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("playback_ui", 0) }
+    var showPeaks by remember { mutableStateOf(prefs.getBoolean("show_pedal_peaks", true)) }
+    val scale by produceState(RelativePedalScale(), data) {
+        value = withContext(Dispatchers.IO) { runCatching { RecordedPedalHistory.observe(context, data.vehicle) }.getOrDefault(RelativePedalScale()) }
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var foreground by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, _ -> foreground = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
+        lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) }
     }
     val view = LocalView.current
-    DisposableEffect(view, wantsPlay, foreground) {
-        val old = view.keepScreenOn; view.keepScreenOn = wantsPlay && foreground
-        onDispose { view.keepScreenOn = old }
+    DisposableEffect(view, foreground, wantsPlay) {
+        val previous = view.keepScreenOn; view.keepScreenOn = foreground && wantsPlay
+        onDispose { view.keepScreenOn = previous }
     }
-    val seek: (Long) -> Unit = { next -> position = next.coerceIn(0, timeline.durationMs); seekSerial++ }
-    val active = timeline.seek(channel, position)
-    val entry = active?.let { data.entries[it.segmentId] }
+    val seek: (Long) -> Unit = { value -> position = value.coerceIn(0, timeline.durationMs); seekSerial++ }
+    // A session clock survives a missing/failed camera. Each decoder follows the same target.
+    LaunchedEffect(wantsPlay, foreground, dragging, seekSerial, details, saveRange, sendingWindows != null, hasVideoFrame) {
+        if (wantsPlay && hasVideoFrame && foreground && !dragging && !details && !saveRange && sendingWindows == null) {
+            val started = SystemClock.elapsedRealtime(); val origin = position
+            while (true) {
+                position = (origin + SystemClock.elapsedRealtime() - started).coerceAtMost(timeline.durationMs)
+                if (position >= timeline.durationMs) { wantsPlay = false; break }
+                // Native video keeps its own frame cadence. The timeline/HUD does not need
+                // to recompose this large dashboard for every video frame.
+                delay(100)
+            }
+        }
+    }
+    val playing = wantsPlay && foreground && !dragging && !details && !saveRange && sendingWindows == null
     val clock = timeline.originElapsedMs + position
     val gps = TelemetryPlayback.sampleAt(data.gps, clock).takeIf { position < timeline.durationMs }
     val vehicle = VehicleTelemetryPlayback.sampleAt(data.vehicle, clock).takeIf { position < timeline.durationMs }
     val frame = recordedDriveHudFrame(clock, vehicle, gps)
-    LaunchedEffect(active?.segmentId, position >= timeline.durationMs) { if (active == null) wantsPlay = false }
+    val windows = remember(selected, data) { SessionSelection.windows(timeline, selected) }
+    val selectedFiles = remember(selected, clips) { clips.filter { it.id in selected }.map { it.id } }
+    val selectionBytes = selectedFiles.sumOf { data.entries[it]?.file?.length() ?: 0L }
     val chinese = AppLanguage.usesChinese()
+    val exportChannel = when (focus) { "FRONT_CABIN", "REAR_CABIN" -> focus!!; else -> if ("SURROUND" in timeline.channelIds) "SURROUND" else timeline.channelIds.first() }
+    val activeVideos = timeline.channelIds.mapNotNull { timeline.seek(it, position)?.segmentId }
+    val thumbnailsMayDecode = foreground && !dragging && activeVideos.isNotEmpty() && activeVideos.all { videoReady[it] == true }
 
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(Utils.t("Session playback", "行程回放"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = { overview = !overview }) { Text(if (overview) Utils.t("One camera", "单摄像头") else Utils.t("Overview", "多画面")) }
-            TextButton(onClick = { showDetails = !showDetails }) { Text(if (showDetails) Utils.t("Hide details", "收起详情") else Utils.t("Map & events", "地图与事件")) }
+    Column(Modifier.fillMaxSize().background(Color(0xFFF5F7FC)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(Utils.t("Session playback", "行程回放"), style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.width(18.dp))
+            Text(data.entries.values.minOfOrNull { it.sidecar.startedAtEpochMs ?: 0L }?.takeIf { it > 0 }?.let { Utils.formatEpoch(it) }.orEmpty() +
+                "  ·  " + sessionTime(timeline.durationMs), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            if ("SURROUND" in timeline.channelIds) Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(end = 12.dp)) {
+                FilterChip(selected = lensMode == FourLaneLensMode.FISHEYE,
+                    onClick = { lensMode = FourLaneLensMode.FISHEYE; settings.setLensMode(lensMode) },
+                    label = { Text(Utils.t("Original / Wide", "原始 / 广角")) })
+                FilterChip(selected = lensMode == FourLaneLensMode.STANDARD,
+                    onClick = { lensMode = FourLaneLensMode.STANDARD; settings.setLensMode(lensMode) },
+                    label = { Text(Utils.t("Corrected", "标准修正")) })
+            }
+            FilterChip(selected = focus == null && !mapExpanded, onClick = { focus = null; mapExpanded = false }, label = { Text(Utils.t("Overview", "总览")) })
+            TextButton(onClick = { showMap = !showMap; mapExpanded = false }) { Text(if (showMap) Utils.t("Hide map", "收起地图") else Utils.t("Map", "地图")) }
+            TextButton(onClick = { details = true }) { Text(Utils.t("Details", "详情")) }
             TextButton(onClick = onDismiss) { Text(Utils.t("Close", "关闭")) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SessionPlaybackTimeline.CHANNELS.forEach { id ->
-                FilterChip(selected = channel == id, onClick = { channel = id; seekSerial++ },
-                    enabled = id in timeline.channelIds, label = { Text(sessionChannelLabel(id)) })
-            }
-        }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
-            val wide = maxWidth >= 800.dp
-            val detailsHeight = maxHeight * 0.38f
-            val compactHud = overview || maxHeight < 300.dp || maxWidth < 600.dp
-            val video: @Composable (Modifier) -> Unit = { modifier ->
-                Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
-                        if (entry != null && active != null && foreground) {
-                            SessionCameraPane(entry, active.mediaPositionMs, seekSerial,
-                                wantsPlay && !dragging, true,
-                                onProgress = { local -> if (!dragging) timeline.mediaToSession(entry.segment.id, local)?.let { position = it } },
-                                onCompleted = {
-                                    position = timeline.mediaToSession(entry.segment.id, entry.segment.mediaDurationMs) ?: position
-                                    if (timeline.seek(channel, position) == null) wantsPlay = false
-                                }, onError = { wantsPlay = false }, modifier = Modifier.fillMaxSize(), overlay = {
-                                    DriveHud(frame, hudVisible, { hudVisible = it; hudPrefs.edit().putBoolean("drive_hud", it).apply() },
-                                        Modifier.align(Alignment.BottomStart).padding(6.dp).widthIn(max = 330.dp), chinese, compact = compactHud)
-                                })
-                        } else Text(if (!foreground) Utils.t("Playback paused", "回放已暂停")
-                            else if (position >= timeline.durationMs) Utils.t("End of session", "行程结束")
-                            else Utils.t("No video from this camera at this time", "此时没有该摄像头的录像"),
-                            Modifier.align(Alignment.Center).padding(12.dp), color = Color.White)
-                        if (entry == null) DriveHud(frame, hudVisible, { hudVisible = it; hudPrefs.edit().putBoolean("drive_hud", it).apply() },
-                            Modifier.align(Alignment.BottomStart).padding(6.dp).widthIn(max = 330.dp), chinese, compact = compactHud)
-                    }
-                    if (overview) Row(Modifier.fillMaxWidth().height(if (wide) 116.dp else 90.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        timeline.channelIds.filter { it != channel }.take(2).forEach { other ->
-                            val selection = timeline.seek(other, position)
-                            val otherEntry = selection?.let { data.entries[it.segmentId] }
-                            Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black)) {
-                                if (otherEntry != null && selection != null && foreground) SessionCameraPane(otherEntry,
-                                    selection.mediaPositionMs, seekSerial, wantsPlay && !dragging, false, {}, {}, {}, Modifier.fillMaxSize())
-                                else Text(Utils.t("No video", "无录像"), Modifier.align(Alignment.Center), color = Color.White)
-                                Text(sessionChannelLabel(other), Modifier.align(Alignment.TopStart).background(Color.Black.copy(alpha = 0.6f)).padding(4.dp),
-                                    color = Color.White, style = MaterialTheme.typography.labelSmall)
-                            }
+            val wide = maxWidth >= 900.dp
+            val railWidth = (maxWidth * 0.14f).coerceIn(160.dp, 280.dp)
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (wide && focus == null && !mapExpanded) SessionClipRail(data, clips, selected, position,
+                    { id -> selected = if (id in selected) selected - id else selected + id },
+                    { selected = clips.map { it.id }.toSet() }, { selected = emptySet() }, seek, Modifier.width(railWidth).fillMaxHeight(),
+                    allowThumbnailExtraction = thumbnailsMayDecode)
+                if (!mapExpanded) Column(Modifier.weight(if (showMap && focus == null) 0.65f else 1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PlaybackHudStrip(frame, scale, showPeaks, { showPeaks = !showPeaks; prefs.edit().putBoolean("show_pedal_peaks", showPeaks).apply() },
+                        Modifier.fillMaxWidth(), chinese)
+                    SessionCameraGrid(data, position, seekSerial, playing, foreground, focus, { focus = it },
+                        { id, ready -> videoReady[id] = ready; if (ready) hasVideoFrame = true }, lensMode, Modifier.fillMaxWidth().weight(1f))
+                }
+                if (showMap && focus == null) Surface(Modifier.weight(if (mapExpanded) 1f else 0.35f).fillMaxHeight(), shape = RoundedCornerShape(12.dp)) {
+                    Column(Modifier.padding(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(Utils.t("Recorded route", "录像路线"), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            TextButton(onClick = { mapExpanded = !mapExpanded }) { Text(if (mapExpanded) Utils.t("Restore", "还原") else Utils.t("Expand", "放大")) }
                         }
+                        RecordedRoadMap(data.route, gps?.let { RoadMapPoint(it.latitude, it.longitude, it.elapsedMs - timeline.originElapsedMs) },
+                            Modifier.fillMaxWidth().weight(1f), chinese, seek)
                     }
                 }
             }
-            if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                video(Modifier.weight(1f).fillMaxHeight())
-                if (showDetails) SessionReviewDetails(data, channel, position, gps, seek,
-                    onLeave = { wantsPlay = false }, onSendToPhone, Modifier.width(350.dp).fillMaxHeight())
-            } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                video(Modifier.fillMaxWidth().weight(1f))
-                if (showDetails) SessionReviewDetails(data, channel, position, gps, seek,
-                    onLeave = { wantsPlay = false }, onSendToPhone, Modifier.fillMaxWidth().height(detailsHeight))
+        }
+        SessionTimeline(data, if (dragging) dragged.toLong() else position, { dragging = true; dragged = it.toFloat() },
+            { seek(dragged.toLong()); dragging = false }, seek)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { seek(position - 10_000) }) { Text(Utils.t("Back 10s", "后退 10 秒")) }
+            Spacer(Modifier.width(16.dp))
+            Button(onClick = { if (position >= timeline.durationMs) seek(0); wantsPlay = !wantsPlay }, Modifier.height(48.dp)) {
+                Text(if (wantsPlay) Utils.t("Pause", "暂停") else Utils.t("Play", "播放"))
+            }
+            Spacer(Modifier.width(16.dp))
+            OutlinedButton(onClick = { seek(position + 10_000) }) { Text(Utils.t("Forward 10s", "前进 10 秒")) }
+        }
+        HorizontalDivider()
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(Utils.t("{0} selected", "已选 {0} 段", selected.size), style = MaterialTheme.typography.titleSmall)
+                Text(sessionBytes(selectionBytes) + " · " + Utils.t("Source clips", "原始分段"), style = MaterialTheme.typography.labelSmall)
+            }
+            OutlinedButton(enabled = selected.isNotEmpty() && onSendToPhone != null, onClick = { sendingAll = false; sendingWindows = windows }) { Text(Utils.t("Send selected", "发送选中")) }
+            OutlinedButton(enabled = onSendToPhone != null, onClick = { sendingAll = true; sendingWindows = listOf(SessionSelectionWindow(0, timeline.durationMs)) }) { Text(Utils.t("Send all", "发送全部")) }
+            OutlinedButton(onClick = { saveRange = true }) { Text(Utils.t("Save range", "保存范围")) }
+            SessionMoreActions(data, { details = true })
+        }
+        SessionTransferProgress(data)
+    }
+    if (details) Dialog(onDismissRequest = { details = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxWidth(0.65f).fillMaxHeight(0.85f), shape = RoundedCornerShape(16.dp)) {
+            Column(Modifier.padding(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Text(Utils.t("Session details", "行程详情"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    TextButton(onClick = { details = false }) { Text(Utils.t("Close", "关闭")) } }
+                SessionReviewDetails(data, exportChannel, position, gps, seek, { wantsPlay = false }, null, Modifier.fillMaxWidth().weight(1f))
             }
         }
-        Slider(value = if (dragging) dragged else position.toFloat(), onValueChange = { dragging = true; dragged = it },
-            onValueChangeFinished = { seek(dragged.toLong()); dragging = false }, valueRange = 0f..timeline.durationMs.toFloat())
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { if (position >= timeline.durationMs) seek(0); wantsPlay = !wantsPlay },
-                enabled = active != null || position >= timeline.durationMs) { Text(if (wantsPlay) Utils.t("Pause", "暂停") else Utils.t("Play", "播放")) }
-            TextButton(onClick = { seek(position - 10_000) }) { Text("−10s") }
-            TextButton(onClick = { seek(position + 10_000) }) { Text("+10s") }
-            Text(sessionTime(position) + " / " + sessionTime(timeline.durationMs), style = MaterialTheme.typography.bodyMedium)
-            if (active == null && position < timeline.durationMs) timeline.segments.firstOrNull {
-                it.channelId == channel && it.mediaStartElapsedMs!! > clock
-            }?.let { next -> TextButton(onClick = { seek(next.mediaStartElapsedMs!! - timeline.originElapsedMs) }) {
-                Text(Utils.t("Next available video", "下一段可用录像"))
-            } }
-        }
+    }
+    if (saveRange) SessionSaveRangeDialog(data, exportChannel, position, { saveRange = false })
+    sendingWindows?.let { selection -> SessionSendDialog(data, selection, sendingAll, onSendToPhone!!, { sendingWindows = null }) }
+}
+
+@Composable
+private fun SessionCameraGrid(data: SessionReviewData, position: Long, seekSerial: Int, playing: Boolean,
+    foreground: Boolean, focus: String?, onFocus: (String?) -> Unit, onReady: (String, Boolean) -> Unit, lensMode: FourLaneLensMode, modifier: Modifier) {
+    val runs = remember(data) { sessionCameraRuns(data) }
+    BoxWithConstraints(modifier.background(Color(0xFF10151F), RoundedCornerShape(12.dp))) {
+        val cellWidth = (maxWidth - 8.dp) / 3
+        val cellHeight = (maxHeight - 8.dp) / 2
+        listOf("SURROUND", "FRONT_CABIN", "REAR_CABIN").forEach { channel -> key(channel) {
+            val focused = focus == channel || (channel == "SURROUND" && focus?.startsWith("lane:") == true)
+            val selected = data.timeline.seek(channel, position)
+            val entry = selected?.let { data.entries[it.segmentId] }
+            val bounds = if (focused) Modifier.fillMaxSize() else when (channel) {
+                "SURROUND" -> Modifier.width(cellWidth * 2 + 4.dp).fillMaxHeight()
+                "FRONT_CABIN" -> Modifier.offset(x = cellWidth * 2 + 8.dp).width(cellWidth).height(cellHeight)
+                else -> Modifier.offset(x = cellWidth * 2 + 8.dp, y = cellHeight + 8.dp).width(cellWidth).height(cellHeight)
+            }
+            Box(bounds.alpha(if (focus == null || focused) 1f else 0f).zIndex(if (focused) 1f else 0f)) {
+                if (entry != null && selected != null && foreground) SessionCameraPane(runs.getValue(entry.segment.id), entry, selected.mediaPositionMs, seekSerial,
+                    playing, if (channel == "SURROUND") focus?.removePrefix("lane:")?.toIntOrNull() else null,
+                    onLane = { lane -> onFocus(if (focus != null) null else "lane:$lane") }, onReady, lensMode, Modifier.fillMaxSize())
+                else Text(if (!foreground) Utils.t("Playback paused", "回放已暂停") else Utils.t("Camera unavailable", "此时无该路录像"),
+                    Modifier.align(Alignment.Center).padding(12.dp), color = Color(0xFFB9C3D2))
+                if (channel != "SURROUND") {
+                    Text(sessionChannelLabel(channel), Modifier.align(Alignment.TopStart).padding(6.dp).background(Color(0xBB111722), RoundedCornerShape(12.dp)).padding(6.dp), color = Color.White)
+                    TextButton(onClick = { onFocus(if (focused) null else channel) }, Modifier.align(Alignment.TopEnd).padding(4.dp).size(48.dp)
+                        .background(Color(0xAA111722), RoundedCornerShape(8.dp))
+                        .semantics { contentDescription = (if (focused) "Restore " else "Expand ") + channel }) { Text(if (focused) "↙" else "⛶", color = Color.White) }
+                }
+            }
+        } }
     }
 }
 
-/** The established raster-aware renderer is retained; one ordinary decoder per visible channel. */
+/** At most one decoder per physical stream; changing its viewport never adds a decoder. */
 @Composable
-private fun SessionCameraPane(entry: SessionReviewEntry, targetMs: Long, seekSerial: Int, playing: Boolean,
-    primary: Boolean, onProgress: (Long) -> Unit, onCompleted: () -> Unit, onError: () -> Unit, modifier: Modifier,
-    overlay: @Composable BoxScope.() -> Unit = {}) {
-    key(entry.segment.id) {
-        val context = LocalContext.current
-        val settings = remember { SettingsStore.get(context) }
-        val container = remember { FourLaneTextureContainer(context) }
-        val texture = remember { TextureView(context) }
-        var controls by remember { mutableStateOf<PlaybackControls?>(null) }
-        var firstFrame by remember { mutableStateOf(false) }
+private fun SessionCameraPane(playlist: List<SessionReviewEntry>, entry: SessionReviewEntry, targetMs: Long, seekSerial: Int, playing: Boolean,
+    lane: Int?, onLane: (Int) -> Unit, onReady: (String, Boolean) -> Unit, lensMode: FourLaneLensMode, modifier: Modifier) {
+    key(playlist.first().segment.id) {
+        var attempt by remember { mutableIntStateOf(0) }
         var error by remember { mutableStateOf<String?>(null) }
-        var mode by remember { mutableStateOf(FourLaneDisplayMode.FOUR_GRID) }
-        var lensMode by remember { mutableStateOf(settings.lensMode) }
-        var zoom by remember { mutableFloatStateOf(1f) }
-        val fourLane = entry.sidecar.layoutKind != RecordingLayoutKind.SINGLE_V1
-        val fallbackAspect = if (fourLane) 1f else sessionVideoAspect(
-            entry.sidecar.actualTrack?.width?.takeIf { it > 0 } ?: entry.sidecar.profile.size.width,
-            entry.sidecar.actualTrack?.height?.takeIf { it > 0 } ?: entry.sidecar.profile.size.height, 0)
-        val aspect by produceState(fallbackAspect, entry.file.absolutePath, fourLane) {
-            if (!fourLane) value = withContext(Dispatchers.IO) {
-                val reader = MediaMetadataRetriever()
-                try {
-                    reader.setDataSource(entry.file.absolutePath)
-                    val width = reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                    val height = reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-                    val rotation = reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-                    if (width > 0 && height > 0) sessionVideoAspect(width, height, rotation) else fallbackAspect
-                } catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { fallbackAspect }
-                finally { runCatching { reader.release() } }
-            }
+        LaunchedEffect(error) {
+            if (error != null && attempt == 0) { delay(900); attempt++; error = null }
         }
-        val currentTarget by rememberUpdatedState(targetMs)
-        val currentPlaying by rememberUpdatedState(playing)
-        val currentProgress by rememberUpdatedState(onProgress)
-        val currentCompleted by rememberUpdatedState(onCompleted)
-        val currentError by rememberUpdatedState(onError)
-        val callbacks = PlaybackSurfaceCallbacks(onControlsReady = { value ->
-            controls = value; value?.setPlaying(false); value?.seekToSegmentPosition?.invoke(0, currentTarget)
-            value?.setPlaying(currentPlaying)
-        }, onPrepared = {}, onFirstFrame = { firstFrame = true }, onCompleted = { if (primary) currentCompleted() },
-            onError = { message -> error = message; currentError() })
-        LaunchedEffect(controls, seekSerial) { controls?.seekToSegmentPosition?.invoke(0, currentTarget) }
-        LaunchedEffect(controls, playing) { controls?.setPlaying(playing && error == null) }
-        LaunchedEffect(controls) {
-            val active = controls ?: return@LaunchedEffect
-            while (true) {
-                val actual = active.currentPosition()
-                if (primary) currentProgress(actual)
-                else if (abs(actual - currentTarget) > if (currentPlaying) 350L else 60L) active.seekToSegmentPosition(0, currentTarget)
-                delay(100)
+        key(attempt) {
+            val context = LocalContext.current
+            val settings = remember { SettingsStore.get(context) }
+            val container = remember { FourLaneTextureContainer(context) }
+            val texture = remember { TextureView(context) }
+            var controls by remember { mutableStateOf<PlaybackControls?>(null) }
+            var firstFrame by remember { mutableStateOf(false) }
+            DisposableEffect(entry.segment.id, firstFrame) {
+                onReady(entry.segment.id, firstFrame)
+                onDispose { onReady(entry.segment.id, false) }
             }
-        }
-        BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
-            val size = fitSessionPreview(maxWidth.value, maxHeight.value, aspect)
-            Box(Modifier.size(size.width.dp, size.height.dp).clip(RoundedCornerShape(14.dp)).background(Color.Black)) {
-                val hints = remember(entry) { mapOf(entry.file.absolutePath to entry.segment.mediaDurationMs) }
-                if (fourLane) {
-                    FourLanePlaybackSurface(listOf(entry.file), hints, container,
-                        entry.sidecar.profile.size.width, entry.sidecar.profile.size.height, mode, lensMode,
-                        settings.fisheyeCorrection, callbacks, Modifier.fillMaxSize())
-                    if (primary) FourLaneDirectionOverlay(productDirectionLabels(), mode, firstFrame,
-                        zoom = zoom, onLaneTapped = { mode = mode.toggleLane(it); zoom = container.resetViewport() },
-                        onTransformGesture = { z, x, y -> zoom = container.applyViewportGesture(z, x, y) })
-                    if (primary) FourLaneLensToggle(lensMode, { selected -> lensMode = selected; settings.setLensMode(selected) },
-                        Modifier.align(Alignment.TopEnd).padding(6.dp))
-                } else SinglePlaybackSurface(listOf(entry.file), hints, texture, callbacks, Modifier.fillMaxSize())
-                if (!firstFrame || error != null) Text(error ?: Utils.t("Loading video…", "载入画面…"),
-                    Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = 0.75f)).padding(8.dp), color = Color.White,
-                    style = MaterialTheme.typography.bodySmall)
-                overlay()
+            var zoom by remember { mutableFloatStateOf(1f) }
+            val fourLane = entry.sidecar.layoutKind != RecordingLayoutKind.SINGLE_V1
+            val mode = lane?.let(FourLaneDisplayMode::forLane) ?: FourLaneDisplayMode.FOUR_GRID
+            val fallback = if (fourLane) 1f else sessionVideoAspect(entry.sidecar.actualTrack?.width ?: entry.sidecar.profile.size.width,
+                entry.sidecar.actualTrack?.height ?: entry.sidecar.profile.size.height, 0)
+            val aspect by produceState(fallback, playlist.first().file.absolutePath) {
+                if (!fourLane) value = withContext(Dispatchers.IO) {
+                    val reader = MediaMetadataRetriever()
+                    try { reader.setDataSource(playlist.first().file.absolutePath)
+                        sessionVideoAspect(reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0,
+                            reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0,
+                            reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0)
+                    } catch (_: Exception) { fallback } finally { runCatching { reader.release() } }
+                }
+            }
+            val currentTarget by rememberUpdatedState(targetMs)
+            val currentIndex by rememberUpdatedState(playlist.indexOfFirst { it.segment.id == entry.segment.id })
+            val currentPlaying by rememberUpdatedState(playing)
+            val callbacks = PlaybackSurfaceCallbacks(onControlsReady = { value -> controls = value; value?.setPlaying(false)
+                value?.seekToSegmentPosition?.invoke(currentIndex, currentTarget); value?.setPlaying(currentPlaying) },
+                onPrepared = {}, onFirstFrame = { firstFrame = true; onReady(entry.segment.id, true) }, onCompleted = {},
+                onError = { error = it; onReady(entry.segment.id, false) })
+            LaunchedEffect(attempt) {
+                delay(8_000)
+                if (!firstFrame && error == null) error = "FIRST_FRAME_TIMEOUT"
+            }
+            LaunchedEffect(controls, seekSerial) { controls?.seekToSegmentPosition?.invoke(currentIndex, currentTarget) }
+            LaunchedEffect(controls, playing) { controls?.setPlaying(playing) }
+            LaunchedEffect(controls) {
+                val player = controls ?: return@LaunchedEffect
+                while (true) {
+                    val target = player.segmentDurations().take(currentIndex).sum() + currentTarget
+                    if (firstFrame && abs(player.currentPosition() - target) > if (currentPlaying) 450L else 60L)
+                        player.seekToSegmentPosition(currentIndex, currentTarget)
+                    delay(1_000)
+                }
+            }
+            BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+                val size = fitSessionPreview(maxWidth.value, maxHeight.value, aspect)
+                Box(Modifier.size(size.width.dp, size.height.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black)) {
+                    if (error == null) {
+                        val media = remember(playlist) { playlist.map { it.file } }
+                        val hints = remember(playlist) { playlist.associate { it.file.absolutePath to it.segment.mediaDurationMs } }
+                        val rasters = remember(playlist) { playlist.mapNotNull { it.raster }.takeIf { it.size == playlist.size } }
+                        if (fourLane) {
+                            FourLanePlaybackSurface(media, hints, container, entry.sidecar.profile.size.width,
+                                entry.sidecar.profile.size.height, mode, lensMode, settings.fisheyeCorrection, callbacks, Modifier.fillMaxSize(),
+                                knownRasterMetadata = rasters)
+                            FourLaneDirectionOverlay(productDirectionLabels(), mode, firstFrame, zoom = zoom,
+                                onLaneTapped = { onLane(it); zoom = container.resetViewport() },
+                                onTransformGesture = { z, x, y -> zoom = container.applyViewportGesture(z, x, y) })
+                            BoxWithConstraints(Modifier.fillMaxSize()) {
+                                if (lane != null) TextButton(onClick = { onLane(lane) }, Modifier.align(Alignment.BottomEnd).size(48.dp)
+                                    .background(Color(0xAA111722), RoundedCornerShape(8.dp))
+                                    .semantics { contentDescription = "Restore surround grid" }) { Text("↙", color = Color.White) }
+                                else (1..4).forEach { direction ->
+                                    val x = if (direction % 2 == 1) maxWidth / 2 - 48.dp else maxWidth - 48.dp
+                                    val y = if (direction <= 2) maxHeight / 2 - 48.dp else maxHeight - 48.dp
+                                    TextButton(onClick = { onLane(direction) }, Modifier.offset(x, y).size(48.dp)
+                                        .background(Color(0x77111722), RoundedCornerShape(8.dp))
+                                        .semantics { contentDescription = "Expand surround " + productDirectionLabels()[direction - 1] }) {
+                                        Text("⛶", color = Color.White)
+                                    }
+                                }
+                            }
+                        } else SinglePlaybackSurface(media, hints, texture, callbacks, Modifier.fillMaxSize(), knownRasterMetadata = rasters)
+                        if (!firstFrame) Text(Utils.t("Loading video…", "载入画面…"), Modifier.align(Alignment.Center), color = Color.White)
+                    } else Column(Modifier.align(Alignment.Center).padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(Utils.t("This camera could not play", "此路画面暂时无法播放"), color = Color.White)
+                        TextButton(onClick = { attempt++; error = null }) { Text(Utils.t("Retry camera", "重试此路")) }
+                    }
+                }
             }
         }
     }
@@ -321,9 +419,7 @@ private fun SessionReviewDetails(data: SessionReviewData, channel: String, posit
         }
     }
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(Utils.t("Map & recorded data", "地图与录像数据"), style = MaterialTheme.typography.titleMedium)
-        RecordedRoadMap(data.route, gps?.let { RoadMapPoint(it.latitude, it.longitude, it.elapsedMs - data.timeline.originElapsedMs) },
-            Modifier.fillMaxWidth().height(270.dp), AppLanguage.usesChinese(), seek)
+        Text(Utils.t("Recorded data", "录像数据"), style = MaterialTheme.typography.titleMedium)
         if (data.route.isEmpty()) Text(Utils.t(
             "No GPS route is available for this session. Enable Location & speed before your next recording; video playback is still available.",
             "这次录像没有可用的 GPS 轨迹。下次录像前可开启“位置与速度”；当前视频仍可正常回放。"), style = MaterialTheme.typography.bodySmall)
@@ -422,8 +518,8 @@ internal fun sessionChannelLabel(channel: String) = when (channel) {
     else -> Utils.t("Surround", "环视")
 }
 
-private fun sessionTime(ms: Long): String = "%02d:%02d".format(Locale.ROOT, ms.coerceAtLeast(0) / 60_000, ms.coerceAtLeast(0) / 1000 % 60)
-private fun sessionEventLabel(event: DriveReviewEvent): String = when (event.kind) {
+internal fun sessionTime(ms: Long): String = "%02d:%02d".format(Locale.ROOT, ms.coerceAtLeast(0) / 60_000, ms.coerceAtLeast(0) / 1000 % 60)
+internal fun sessionEventLabel(event: DriveReviewEvent): String = when (event.kind) {
     DriveEventKind.TURN -> Utils.t("Indicators: ", "转向灯：") + when (event.value) {
         "left" -> Utils.t("left", "左"); "right" -> Utils.t("right", "右"); "hazard" -> Utils.t("hazard", "双闪"); else -> Utils.t("off", "关闭") }
     DriveEventKind.BRAKE -> if (event.value == "pressed") Utils.t("Brake pressed", "踩下制动") else Utils.t("Brake released", "松开制动")

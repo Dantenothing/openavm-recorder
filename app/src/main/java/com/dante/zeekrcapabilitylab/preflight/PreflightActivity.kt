@@ -37,6 +37,10 @@ class PreflightActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (BuildConfig.RECORDER_SUPPORT_ENABLED) {
+            setContent { com.dante.zeekrcapabilitylab.diagnostic.SupportScreen() }
+            return
+        }
         setContent {
             MaterialTheme(colorScheme=darkColorScheme(primary=Color(0xffa5c9dc),surface=Color(0xff182127),background=Color(0xff0e151a))) {
                 val state by PreflightRuntime.state.collectAsState()

@@ -36,6 +36,23 @@ class DriveDataUploadTest {
         ReliableUploadStore.complete(id, car, videoSha, "drive.mp4", auth)
     private fun received(name: String = "drive.mp4") = File(temp.root, "received/" + name)
 
+    @Test fun selectiveV2GpsOnlySurvivesCommitAndReload() = selectiveV2(gps = true, vehicle = false)
+    @Test fun selectiveV2HudOnlySurvivesCommitAndReload() = selectiveV2(gps = false, vehicle = true)
+
+    private fun selectiveV2(gps: Boolean, vehicle: Boolean) {
+        val original = requireNotNull(DriveDataCodec.decode(data()))
+        val selected = original.copy(schemaVersion = 2, gps = if (gps) original.gps else emptyList(),
+            vehicle = if (vehicle) original.vehicle else emptyList())
+        val bytes = DriveDataCodec.encode(selected)
+        val id = prepare(request().copy(driveData = DriveDataCodec.descriptor(bytes)))
+        assertTrue(ReliableUploadStore.storeDriveData(id, "car-1", bytes))
+        assertTrue(complete(id) is ReliableCommitResult.Success)
+        ReliableUploadStore.initForTests(temp.root)
+        assertEquals(selected, DriveDataFiles.load(received()))
+        assertEquals(gps, DriveDataFiles.load(received())!!.gps.isNotEmpty())
+        assertEquals(vehicle, DriveDataFiles.load(received())!!.vehicle.isNotEmpty())
+    }
+
     @Test fun requestedAttachmentIsRequiredBeforeCommitAndSurvivesRestart() {
         val id = prepare()
         assertFalse(ReliableUploadStore.status(id, "car-1")!!.driveDataReceived)

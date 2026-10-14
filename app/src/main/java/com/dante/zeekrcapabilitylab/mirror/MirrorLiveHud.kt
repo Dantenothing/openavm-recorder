@@ -12,18 +12,27 @@ import android.widget.TextView
 import com.dante.zeekrcapabilitylab.product.AppLanguage
 import com.dante.zeekrcapabilitylab.telemetry.RecordingTelemetry
 import com.dante.zeekrcapabilitylab.telemetry.RecordingVehicleTelemetry
+import com.dante.zeekrcapabilitylab.telemetry.RecordingVehicleTelemetryCapture
+import com.dante.zeekrcapabilitylab.telemetry.VehicleTelemetryCaptureState
+import com.dante.zeekrcapabilitylab.product.SettingsStore
+import com.dante.zeekrcapabilitylab.service.CameraRecordingService
 import com.dante.zeekrcapabilitylab.ui.product.OverlayChrome
 import com.dante.zeekrcapabilitylab.util.Utils
 import io.github.dantenothing.drivemap.DriveHudFrame
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Native overlay presentation. Collectors and expiry redraws exist only while this HUD is visible. */
 internal class MirrorLiveHud(context: Context) : LinearLayout(context) {
     private val settings = context.getSharedPreferences("drive-hud", Context.MODE_PRIVATE)
     private var hostActive = false
     private var collection: CoroutineScope? = null
+    private var previewCapture: RecordingVehicleTelemetryCapture? = null
+    private var previewReads: AtomicBoolean? = null
     private var expanded = false
     private val readings = LinearLayout(context).apply { orientation = VERTICAL }
     private val primary = label(14f)
@@ -83,9 +92,37 @@ internal class MirrorLiveHud(context: Context) : LinearLayout(context) {
 
     private fun startObserving() {
         if (collection != null) return
+        // The native-read owner captures only this generation's gate/flow, never the View. A
+        // blocked SDK call must not retain an old overlay or publish into its replacement.
+        val allowed = AtomicBoolean(false).also { previewReads = it }
+        val previewState = MutableStateFlow(VehicleTelemetryCaptureState())
+        val previewSelected = MutableStateFlow(false)
+        val capture = RecordingVehicleTelemetryCapture(context, enabled = allowed::get,
+            liveOnly = true, publishLive = { previewState.value = it })
+        previewCapture = capture
         collection = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).also { scope ->
             scope.launch {
-                combine(RecordingVehicleTelemetry.state, RecordingTelemetry.state) { vehicle, gps -> vehicle to gps }
+                // The window can survive display-off. Stop its reads even before window teardown.
+                while (isActive) {
+                    val selected = mayReadPreview()
+                    allowed.set(selected)
+                    previewSelected.value = selected
+                    capture.follow(null, selected)
+                    delay(500)
+                }
+            }
+            scope.launch {
+                CameraRecordingService.state.collect {
+                    val selected = mayReadPreview()
+                    allowed.set(selected)
+                    previewSelected.value = selected
+                    capture.follow(null, selected)
+                }
+            }
+            scope.launch {
+                combine(RecordingVehicleTelemetry.state, previewState, previewSelected, RecordingTelemetry.state) { recorded, preview, usePreview, gps ->
+                    (if (usePreview) preview else recorded) to gps
+                }
                     .collectLatest { (vehicle, gps) ->
                         val now = SystemClock.elapsedRealtime()
                         render(mirrorHudFrame(now, vehicle, gps))
@@ -100,8 +137,16 @@ internal class MirrorLiveHud(context: Context) : LinearLayout(context) {
 
     private fun stopObserving() {
         collection?.cancel(); collection = null
+        previewReads?.set(false); previewReads = null
+        previewCapture?.close(); previewCapture = null
         render(DriveHudFrame())
     }
+
+    private fun mayReadPreview(): Boolean = MirrorHudSourcePolicy.previewReads(
+        hostActive && isAttachedToWindow && settings.getBoolean("live-visible", true),
+        MirrorDisplayState.usable(context), SettingsStore.get(context).recordingVehicleTelemetryEnabled,
+        CameraRecordingService.state.value.status,
+    )
 
     private fun render(frame: DriveHudFrame) {
         val value = mirrorHudText(frame, AppLanguage.usesChinese())

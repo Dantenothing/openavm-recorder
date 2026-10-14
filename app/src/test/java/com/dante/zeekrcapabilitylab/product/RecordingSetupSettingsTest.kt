@@ -48,7 +48,7 @@ class RecordingSetupSettingsTest {
     private val allEnabled = RecordingSetupOptions(frontCabin = true, rearCabin = true,
         vehicleHud = true, gpsRoute = true, playbackMap = true)
 
-    @Test fun freshInstallDefaultsDoNotOptIntoCaptureOrMaps() {
+    @Test fun freshInstallOpensPlaybackMapWithoutOptingIntoCapture() {
         val prefs = Preferences()
         val settings = prefs.store()
         assertEquals(RecordingSetupOptions(), settings.recordingSetupOptions)
@@ -56,7 +56,7 @@ class RecordingSetupSettingsTest {
         assertFalse(settings.recordRearCabin)
         assertFalse(settings.recordingVehicleTelemetryEnabled)
         assertFalse(settings.recordingTelemetryEnabled)
-        assertFalse(settings.playbackMapDefaultOpen)
+        assertTrue(settings.playbackMapDefaultOpen)
         assertEquals(0, prefs.edits)
         assertTrue(prefs.values.isEmpty())
     }
@@ -65,9 +65,10 @@ class RecordingSetupSettingsTest {
         val previous = mapOf(SettingsStore.KEY_RECORD_FRONT_CABIN to true,
             SettingsStore.KEY_RECORD_REAR_CABIN to false,
             SettingsStore.KEY_RECORDING_VEHICLE_TELEMETRY to true,
-            SettingsStore.KEY_RECORDING_TELEMETRY to true)
+            SettingsStore.KEY_RECORDING_TELEMETRY to true,
+            SettingsStore.KEY_PLAYBACK_MAP_DEFAULT_OPEN to false)
         val prefs = Preferences(previous)
-        assertEquals(RecordingSetupOptions(frontCabin = true, vehicleHud = true, gpsRoute = true),
+        assertEquals(RecordingSetupOptions(frontCabin = true, vehicleHud = true, gpsRoute = true, playbackMap = false),
             prefs.store().recordingSetupOptions)
         assertEquals(previous, prefs.values)
         assertEquals(0, prefs.edits)
@@ -153,7 +154,7 @@ class RecordingSetupSettingsTest {
         settings.setPlaybackMapDefaultOpen(true)
         assertEquals(RecordingSetupOptions(playbackMap = true), prefs.store().recordingSetupOptions)
         settings.setPlaybackMapDefaultOpen(false)
-        assertEquals(RecordingSetupOptions(), prefs.store().recordingSetupOptions)
+        assertEquals(RecordingSetupOptions(playbackMap = false), prefs.store().recordingSetupOptions)
         assertTrue(prefs.values.keys.none { it in setOf(SettingsStore.KEY_RECORD_FRONT_CABIN,
             SettingsStore.KEY_RECORD_REAR_CABIN, SettingsStore.KEY_RECORDING_VEHICLE_TELEMETRY,
             SettingsStore.KEY_RECORDING_TELEMETRY) })

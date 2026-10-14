@@ -6,7 +6,7 @@ data class RecordingSetupOptions(
     val rearCabin: Boolean = false,
     val vehicleHud: Boolean = false,
     val gpsRoute: Boolean = false,
-    val playbackMap: Boolean = false,
+    val playbackMap: Boolean = true,
 ) {
     internal fun changesCaptureFrom(other: RecordingSetupOptions): Boolean =
         frontCabin != other.frontCabin || rearCabin != other.rearCabin ||

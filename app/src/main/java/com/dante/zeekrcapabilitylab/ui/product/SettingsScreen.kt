@@ -70,7 +70,7 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
     var mirrorRight by remember { mutableStateOf(mirrorPresentation.rightLane) }
     var rightHandDrive by remember { mutableStateOf(mirrorPresentation.rightHandDrive) }
     val languageMode by AppLanguage.mode.collectAsState()
-    var showDiagnostics by remember { mutableStateOf(false) }
+    var showDiagnostics by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var showGuide by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var setupRevision by remember { mutableStateOf(0) }
     if (showGuide) QuickStartGuide(onDismiss = { showGuide = false })
@@ -117,7 +117,7 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
     }
     var correction by remember { mutableStateOf(settings.fisheyeCorrection) }
     var developerModeEnabled by remember { mutableStateOf(settings.developerModeEnabled) }
-    if (developerModeEnabled && showDiagnostics) {
+    if (showDiagnostics) {
         RecorderDiagnosticsDialog(onDismiss = { showDiagnostics = false })
     }
     var developerModeMessage by remember { mutableStateOf("") }
@@ -436,9 +436,6 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
                     Text(Utils.t("On by default for supported surround cameras. Keeps recording and preview running between files. Turn off if compatibility problems occur; applies to the next recording start.",
                         "支持的环视摄像头默认开启，分段时保持录像和预览连续。出现兼容问题时可关闭，下次开始录像生效。"), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { showDiagnostics = true }) {
-                        Text(Utils.t("Recording diagnostics", "录像诊断"))
-                    }
                     if (BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) OutlinedButton(onClick = {
                         context.startActivity(android.content.Intent(context, com.dante.zeekrcapabilitylab.runtime.ParkingDiagnosticsActivity::class.java))
                     }) { Text("离车与后台相机诊断 / Parking diagnostics") }
@@ -585,6 +582,9 @@ fun SettingsScreen(onOpenUsbManagement: () -> Unit = {}) {
             Column(Modifier.padding(16.dp)) {
                 Text(Utils.t("About & privacy", "关于与隐私"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
+                OutlinedButton(onClick = { showDiagnostics = true }) {
+                    Text(Utils.t("Recording diagnostics", "录像诊断"))
+                }
                 if (BuildConfig.EXPERIMENTAL_TOOLS_ENABLED) Text(
                     Utils.t(
                         "Videos stay on the head unit or USB and transfer over your local network. Online diagnostic upload and remote lab sessions require separate activation in developer tools. Checking releases contacts GitHub.",

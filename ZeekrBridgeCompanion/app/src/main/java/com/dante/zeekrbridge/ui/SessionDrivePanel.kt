@@ -23,7 +23,7 @@ internal fun SessionDrivePanel(
     positionMs: Long, channel: String, seekCount: Int, frames: Int, failures: Int, onSeek: (Long) -> Unit,
 ) {
     val context = LocalContext.current
-    var showMap by rememberSaveable(data.timeline.sessionId) { mutableStateOf(false) }
+    var showMap by rememberSaveable(data.timeline.sessionId) { mutableStateOf(true) }
     var showEvents by rememberSaveable(data.timeline.sessionId) { mutableStateOf(false) }
     var eventLimit by remember(data.timeline.sessionId) { mutableIntStateOf(20) }
     val review = data.review

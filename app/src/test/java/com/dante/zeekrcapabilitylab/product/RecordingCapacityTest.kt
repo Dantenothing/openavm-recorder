@@ -39,12 +39,12 @@ class RecordingCapacityTest {
         assertTrue(combined!! < RecordingCapacityMath.minutes(1_188_000_001, 14_000_000, 1)!!)
     }
 
-    @Test fun usbSurroundAndInternalCabinsHaveSeparateBudgets() {
+    @Test fun usbCapacityIncludesCabinChannelsOnTheSameDestination() {
         val usb = RecordingStorageKind.USB_MEDIASTORE
         val internal = RecordingStorageKind.INTERNAL
-        assertEquals(14_000_000L, RecordingCapacityMath.bitrateForStorage(usb, 14_000_000, usb, 2))
-        assertEquals(8_000_000L, RecordingCapacityMath.bitrateForStorage(usb, 14_000_000, internal, 2))
-        assertEquals(4_000_000L, RecordingCapacityMath.bitrateForStorage(usb, null, internal, 1))
+        assertEquals(22_000_000L, RecordingCapacityMath.bitrateForStorage(usb, 14_000_000, usb, 2))
+        assertNull(RecordingCapacityMath.bitrateForStorage(usb, 14_000_000, internal, 2))
+        assertNull(RecordingCapacityMath.bitrateForStorage(usb, null, internal, 1))
         assertNull(RecordingCapacityMath.bitrateForStorage(usb, 14_000_000, internal, 0))
     }
 

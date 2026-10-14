@@ -46,6 +46,7 @@ data class TransferTask(
     val sidecarJson: String? = null,
     /** Frozen user choice for this transfer; never inherited by existing queued tasks. */
     val includeDriveData: Boolean = false,
+    val driveSelection: DriveDataSelection? = null,
     val driveData: io.github.dantenothing.avmtransfer.protocol.DriveDataDescriptor? = null,
     val state: TransferTaskState = TransferTaskState.QUEUED,
     val reason: String? = null,
@@ -186,7 +187,9 @@ object TransferRepository {
         recordingSessionId: String?,
         files: List<File>,
         includeDriveData: Boolean = false,
+        driveSelection: DriveDataSelection? = null,
     ): Result<TransferSelectionResult> {
+        if (driveSelection?.valid() == false) return Result.failure(IllegalArgumentException("Invalid drive-data selection"))
         val decision = TransferEnqueuePolicy.decide(_connection.value.connected)
         val result = synchronized(lock) {
             val uniqueFiles = files.distinctBy { it.absolutePath }
@@ -234,7 +237,8 @@ object TransferRepository {
                         fileName = file.name,
                         sizeBytes = file.length(),
                         sidecarJson = sidecarJson,
-                        includeDriveData = includeDriveData,
+                        includeDriveData = driveSelection?.enabled ?: includeDriveData,
+                        driveSelection = driveSelection,
                         state = decision.initialState,
                         reason = decision.reason,
                         selectionId = selectionId,
@@ -344,7 +348,9 @@ object TransferRepository {
         recordingSessionId: String,
         files: List<File>,
         includeDriveData: Boolean = false,
+        driveSelection: DriveDataSelection? = null,
     ): Result<TransferSelectionResult> {
+        if (driveSelection?.valid() == false) return Result.failure(IllegalArgumentException("Invalid drive-data selection"))
         val target = UsbExportVolumeResolver.mountedTargets(ZeekrApp.appContext).singleOrNull {
             it.storageUuid.equals(storageUuid, ignoreCase = true)
         } ?: return Result.failure(IllegalStateException("Reconnect the same USB before sending"))
@@ -390,7 +396,8 @@ object TransferRepository {
                     fileName = file.name,
                     sizeBytes = file.length(),
                     sidecarJson = sidecarJson,
-                    includeDriveData = includeDriveData,
+                    includeDriveData = driveSelection?.enabled ?: includeDriveData,
+                        driveSelection = driveSelection,
                     state = decision.initialState,
                     reason = decision.reason,
                     selectionId = selectionId,

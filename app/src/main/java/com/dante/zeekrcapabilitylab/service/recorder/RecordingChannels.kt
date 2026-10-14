@@ -4,15 +4,18 @@ import android.content.Context
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import android.util.AtomicFile
+import android.view.Surface
+import com.dante.zeekrcapabilitylab.BuildConfig
+import com.dante.zeekrcapabilitylab.data.Categories
+import com.dante.zeekrcapabilitylab.diagnostic.RecordingGroupFailureEvidence
+import com.dante.zeekrcapabilitylab.event.EventLogger
+import com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock
 import com.dante.zeekrcapabilitylab.product.ProductRecorderConfigFactory
 import com.dante.zeekrcapabilitylab.product.CameraRuntime
 import com.dante.zeekrcapabilitylab.probe.camera.ProfileSize
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
-import java.io.File
 
 /** One process-wide admission owner. Native cleanup timeouts retain the owner; no replacement threads are spawned. */
 object RecordingChannels {
@@ -29,9 +32,7 @@ object RecordingChannels {
     private var primaryState = RecorderState()
     private var primaryEvidence: CaptureEvidence? = null
     private var primaryRecorder: RecorderSession? = null
-    private var activeConfig: RecorderConfig? = null
     private var currentContext: Context? = null
-    private var attempted = false
     private var revoked = false
     private var metadataBusy = false
     private var metadataGeneration = 0L
@@ -40,10 +41,52 @@ object RecordingChannels {
     private var journalRevision = 0L
     private var primarySettleUntilMs = 0L
     private var primaryReferenceReleased = false
+    private var startGroup: StartGroup? = null
+
+    // One start intent on the existing control queue, not another camera/resource owner.
+    // Every actual CameraDevice, encoder, file and late close stays with RecorderSession.
+    private class Member(val config: RecorderConfig, val session: RecorderSession, var prepared: Boolean = false) {
+        var reservation = Any()
+    }
+    private class StartGroup(val config: RecorderConfig, val primary: RecorderSession,
+                             val storage: RecordingStorageIdentity, val identity: RecordingChannelIdentity,
+                             val closeTrial: TerminalCloseTrial?) {
+        val members = linkedMapOf(config.cameraId to Member(config, primary, true))
+        val opened = mutableSetOf<String>()
+        var submitted = false
+        var cancelled = false
+        var deadline: Runnable? = null
+    }
 
     private class Owner(val identity: RecordingChannelIdentity, val session: RecorderSession, val requestedAt: Long, val token: Any) {
         var closing = false
         var lastState = RecorderState(status = RecorderStatus.STARTING)
+    }
+
+    /** Freeze auxiliary configuration and storage before opening any member of the requested set. */
+    fun start(context: Context, config: RecorderConfig, primary: RecorderSession, preview: Surface? = null,
+              requiredStorage: RecordingStorageIdentity? = null, previewReleased: (() -> Unit)? = null,
+              closeTrial: TerminalCloseTrial? = null) {
+        if (RecordingChannelPolicy.roles(config).isEmpty()) {
+            primary.start(config, preview, requiredStorage, previewReleased = previewReleased, closeTrial = closeTrial)
+            return
+        }
+        var requestedGroup: StartGroup? = null
+        primary.start(config, preview, requiredStorage, previewReleased = previewReleased, closeTrial = closeTrial, prepared = { storage, identity ->
+            follow(context, config, primary.stateSnapshot(), primary)
+            control.post {
+                if (!primary.preparedStartAllowed(identity.sessionId) || revoked || activeSession != identity.sessionId) return@post
+                startGroup?.let { cancelStart(it, "GROUP_REPLACED", stopPrimary = true) }
+                val group = StartGroup(config, primary, storage, identity, closeTrial)
+                requestedGroup = group
+                startGroup = group
+                begin(context.applicationContext, group)
+            }
+        }, groupEnded = { id, error -> control.post {
+            startGroup?.takeIf { it.identity.sessionId == id }?.let { cancelStart(it, error, stopPrimary = true) }
+        } }, groupStorageLost = { id, storage, reason -> control.post {
+            requestedGroup?.takeIf { it.identity.sessionId == id }?.let { storageLost(it, storage, reason) }
+        } })
     }
 
     /** Caller supplies cached evidence only; this method never waits for cameras, SDK getters or storage. */
@@ -53,8 +96,9 @@ object RecordingChannels {
             val id = primary.recordingSessionId ?: return@post
             currentContext = app
             if (activeSession != id) {
+                startGroup?.let { cancelStart(it, "GROUP_REPLACED", stopPrimary = true) }
                 owners.values.toList().forEach(::release)
-                activeSession = id; attempted = false; revoked = false; metadataGeneration++; primarySettleUntilMs = 0L
+                activeSession = id; revoked = false; metadataGeneration++; primarySettleUntilMs = 0L
                 primaryReferenceReleased = false
                 history.getOrPut(id) { linkedMapOf() }
                 while (history.size > 3) history.remove(history.keys.first())
@@ -64,7 +108,6 @@ object RecordingChannels {
             }
             primaryState = primary
             if (!primaryReferenceReleased) {
-                activeConfig = config
                 primaryRecorder = recorder
             }
             primaryEvidence = recorder.captureEvidence().takeIf { it.sessionId == id }
@@ -78,7 +121,6 @@ object RecordingChannels {
                     put(it.copy(status = "UNAVAILABLE", errorCode = "PRIMARY_INTERRUPTED"))
                 }
             }
-            beginIfReady()
             releasePrimaryReferenceIfDone()
             publish(); scheduleTick()
         }
@@ -86,6 +128,10 @@ object RecordingChannels {
 
     fun stop(sessionId: String?) {
         control.post {
+            startGroup?.takeIf { sessionId == null || it.identity.sessionId == sessionId }?.let {
+                // The Service owns the primary Stop/mode-switch operation. Do not race its handoff.
+                cancelStart(it, null, stopPrimary = false)
+            }
             if (sessionId == null || activeSession == sessionId) {
                 if (!revoked) primarySettleUntilMs = SystemClock.elapsedRealtime() + 20_000L
                 revoked = true; metadataGeneration++
@@ -99,22 +145,26 @@ object RecordingChannels {
         }
     }
 
-    private fun begin(context: Context, config: RecorderConfig, primary: RecorderState) {
-        val id = primary.recordingSessionId ?: return
-        val origin = primary.sessionStartedElapsedMs ?: return
+    private fun begin(context: Context, group: StartGroup) {
+        val config = group.config
+        val id = group.identity.sessionId
+        val origin = group.identity.sessionStartedElapsedMs
         val roles = RecordingChannelPolicy.roles(config)
-        if (roles.isEmpty()) return
         if (metadataBusy) {
-            roles.forEach { unavailable(id, it, "CAMERA_METADATA_BUSY") }; return
+            roles.forEach { unavailable(id, it, "CAMERA_METADATA_BUSY") }
+            cancelStart(group, "CAMERA_METADATA_BUSY", stopPrimary = true)
+            return
         }
         val generation = ++metadataGeneration
         metadataBusy = true
         val timeout = Runnable {
-            if (metadataGeneration == generation) {
-                metadataGeneration++
-                roles.forEach { unavailable(id, it, "CAMERA_METADATA_TIMEOUT") }; publish()
+            if (startGroup === group && !group.cancelled) {
+                roles.filter { role -> health(RecordingChannelIdentity(id, origin, RecordingChannelId.forRole(role))).writtenFrames == 0L }
+                    .forEach { unavailable(id, it, "GROUP_START_TIMEOUT") }
+                cancelStart(group, "GROUP_START_TIMEOUT", stopPrimary = true)
             }
         }
+        group.deadline = timeout
         control.postDelayed(timeout, RecordingChannelPolicy.START_TIMEOUT_MS)
         metadata.post {
             val resolved = roles.associateWith { role -> runCatching {
@@ -123,14 +173,11 @@ object RecordingChannels {
                 val profile = requireNotNull(CabinRecordingProfile.choose(
                     CameraRuntime.videoSizeCandidates(context, source.cameraId).map { ProfileSize(it.width, it.height) }
                 )) { "CABIN_SIZE_UNAVAILABLE" }
-                config.copy(source = source.copy(profile = profile, layoutKind = RecordingLayoutKind.SINGLE_V1, laneLayout = null),
-                    requestedFrameRate = RecordingChannelPolicy.FPS, strictFrameRate = false,
-                    sharedInputRecordingEnabled = false, mirrorPreviewEnabled = false, auxiliaryChannels = emptyList(),
-                    storagePreference = RecordingStoragePreference.INTERNAL_ONLY)
+                RecordingChannelPolicy.configuration(config, source, profile, group.storage.kind)
             } }
             control.post {
-                metadataBusy = false; control.removeCallbacks(timeout)
-                if (generation != metadataGeneration || activeSession != id || revoked) return@post
+                metadataBusy = false
+                if (generation != metadataGeneration || startGroup !== group || group.cancelled || revoked) return@post
                 val ids = mutableSetOf(config.cameraId)
                 for (role in roles) {
                     val cfg = resolved.getValue(role).getOrNull()
@@ -141,15 +188,20 @@ object RecordingChannels {
                     }
                     val identity = RecordingChannelIdentity(id, origin, RecordingChannelId.forRole(role))
                     lateinit var owner: Owner
-                    val session = runCatching { RecorderSession(context, { value -> control.post {
+                    val session = runCatching { group.primary.auxiliarySession({ value -> control.post {
                         if (owners[cfg.cameraId] !== owner) return@post
                         owner.lastState = value
                         updateOwner(owner)
                         if (value.lastError != null || value.cleanupUnconfirmed || value.status in
-                            setOf(RecorderStatus.ERROR, RecorderStatus.CAMERA_UNAVAILABLE, RecorderStatus.WAITING_CAMERA)) release(owner)
+                            setOf(RecorderStatus.ERROR, RecorderStatus.CAMERA_UNAVAILABLE, RecorderStatus.WAITING_CAMERA)) {
+                            cancelStart(group, value.lastError ?: "GROUP_CHANNEL_INTERRUPTED", stopPrimary = true)
+                            release(owner)
+                        }
                         publish()
-                    } }, { control.post { if (owners[cfg.cameraId] === owner) release(owner) } },
-                        externallyManagedPresence = true, auxiliaryChannel = true) }.getOrNull()
+                    } }, { control.post { if (owners[cfg.cameraId] === owner) {
+                        cancelStart(group, owner.lastState.lastError ?: "GROUP_CHANNEL_STOPPED", stopPrimary = true)
+                        release(owner)
+                    } } }) }.getOrNull()
                     if (session == null) {
                         admission.release(cfg.cameraId, token, true)
                         unavailable(id, role, "AUXILIARY_OWNER_UNAVAILABLE")
@@ -157,11 +209,93 @@ object RecordingChannels {
                     }
                     owner = Owner(identity, session, SystemClock.elapsedRealtime(), token)
                     owners[cfg.cameraId] = owner
-                    session.start(cfg, sharedIdentity = identity)
+                    group.members[cfg.cameraId] = Member(cfg, session)
+                    session.start(cfg, requiredStorage = group.storage, sharedIdentity = identity, closeTrial = group.closeTrial,
+                        prepared = { storage, _ -> control.post {
+                            if (group.cancelled || startGroup !== group) return@post
+                            if (!RecordingModeSwitchGate.storageMatches(group.storage, storage)) {
+                                cancelStart(group, "GROUP_STORAGE_CHANGED", stopPrimary = true)
+                            } else {
+                                group.members.getValue(cfg.cameraId).prepared = true
+                                openPreparedSet(group)
+                            }
+                        } }, groupEnded = { _, error -> control.post {
+                            cancelStart(group, error, stopPrimary = true)
+                        } }, groupStorageLost = { _, storage, reason -> control.post {
+                            storageLost(group, storage, reason)
+                        } })
                 }
+                openPreparedSet(group)
                 publish(); scheduleTick()
             }
         }
+    }
+
+    private fun openPreparedSet(group: StartGroup) {
+        if (startGroup !== group || group.cancelled || group.submitted || group.members.values.any { !it.prepared }) return
+        val id = group.identity.sessionId
+        if (group.members.values.any { !it.session.preparedStartAllowed(id) }) {
+            cancelStart(group, "GROUP_START_REVOKED", stopPrimary = true); return
+        }
+        val retained = group.primary.retainedReservation(group.config.cameraId)
+        if (retained != null) group.members.getValue(group.config.cameraId).reservation = retained
+        val tokens = group.members.values.associate { it.reservation to it.config.cameraId }
+        val reserved = if (tokens.size == 1) CanaryCameraInterlock.beginNormalOpen(tokens.keys.single(), tokens.values.single())
+            else CanaryCameraInterlock.beginNormalGroup(tokens, retained?.let { setOf(it) } ?: emptySet())
+        if (!reserved) { cancelStart(group, "CAMERA_RELEASE_PENDING", stopPrimary = true); return }
+        group.submitted = true
+        EventLogger.logEvent(Categories.SYSTEM, "RECORDER_GROUP_OPEN_REQUEST", payload = mapOf(
+            "recordingSessionId" to id, "cameraIds" to group.members.keys.joinToString(",")))
+        // Every reservation is handed to exactly one camera worker. Only an unsubmitted
+        // request or its own adapter's real onClosed may release that reservation.
+        group.members.forEach { (cameraId, member) ->
+            member.session.openPreparedCamera(id, member.reservation) { control.post {
+                if (startGroup !== group || group.cancelled || !group.opened.add(cameraId)) return@post
+                EventLogger.logEvent(Categories.SYSTEM, "RECORDER_GROUP_MEMBER_OPENED", payload = mapOf(
+                    "recordingSessionId" to id, "cameraId" to cameraId))
+                if (group.opened.size == group.members.size) {
+                    group.deadline?.let(control::removeCallbacks); group.deadline = null
+                    EventLogger.logEvent(Categories.SYSTEM, "RECORDER_GROUP_ALL_OPENED", payload = mapOf("recordingSessionId" to id))
+                    group.members.values.forEach { it.session.configurePreparedCamera(id) }
+                }
+            } }
+        }
+    }
+
+    private fun storageLost(group: StartGroup, storage: RecordingStorageIdentity, reason: String) {
+        if (storage.kind != RecordingStorageKind.USB_MEDIASTORE ||
+            !RecordingModeSwitchGate.storageMatches(group.storage, storage)) return
+        // Only latch loss here; no native close, provider call or wait on the control queue.
+        // Mark ALL members before any stop can reach a queued recorder/muxer finalization.
+        // A late loss after manual Stop still merges into its existing cleanup transaction.
+        group.members.values.forEach { it.session.markConcurrentStorageLost(group.identity.sessionId, storage) }
+        cancelStart(group, reason, stopPrimary = true)
+    }
+
+    private fun cancelStart(group: StartGroup, error: String?, stopPrimary: Boolean) {
+        if (group.cancelled) return
+        group.cancelled = true
+        if (error != null) {
+            // Freeze every member before stop/release can erase encoder state or create teardown failures.
+            val context = currentContext
+            val snapshot = runCatching { RecordingGroupFailureEvidence.capture(
+                group.identity.sessionId, error, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
+                BuildConfig.VERSION_NAME, group.members.values.map { member ->
+                    RecordingGroupFailureEvidence.Member(member.config, member.session.stateSnapshot(), member.session.captureEvidence())
+                }) }.getOrNull()
+            // Diagnostics must never prevent a requested group Stop, including a serialization/IO failure.
+            if (context != null && snapshot != null) journal.post { runCatching { RecordingChannelJournal.writeFailure(context, snapshot) } }
+        }
+        group.deadline?.let(control::removeCallbacks); group.deadline = null
+        if (startGroup === group) {
+            startGroup = null; metadataGeneration++; revoked = true
+            primarySettleUntilMs = SystemClock.elapsedRealtime() + 20_000L
+        }
+        EventLogger.logEvent(Categories.SYSTEM, "RECORDER_GROUP_STOP", payload = mapOf(
+            "recordingSessionId" to group.identity.sessionId, "errorCode" to (error ?: "NONE")))
+        if (stopPrimary) group.primary.stopConcurrentGroup(group.identity.sessionId, error)
+        owners.values.filter { it.identity.sessionId == group.identity.sessionId }.toList().forEach(::release)
+        publish(); scheduleTick()
     }
 
     private fun unavailable(id: String, role: RecordingSourceRole, reason: String) {
@@ -170,6 +304,11 @@ object RecordingChannels {
 
     private fun release(owner: Owner) {
         if (owner.closing) return
+        startGroup?.takeIf { !it.cancelled && it.identity.sessionId == owner.identity.sessionId }?.let {
+            // Revoke the whole intent before an individual member starts native teardown.
+            cancelStart(it, health(owner.identity).errorCode ?: "GROUP_CHANNEL_INTERRUPTED", stopPrimary = true)
+            return
+        }
         owner.closing = true
         val old = health(owner.identity)
         put(old.copy(status = if (old.status in setOf("UNAVAILABLE", "INTERRUPTED")) old.status else "STOPPING", cleanupPending = true))
@@ -209,17 +348,6 @@ object RecordingChannels {
         put(RecordingChannelPolicy.update(old, primaryState, primaryEvidence, SystemClock.elapsedRealtime()))
     }
 
-    private fun beginIfReady() {
-        val context = currentContext ?: return
-        val config = activeConfig ?: return
-        val started = (primaryEvidence?.encoder?.writtenFrames ?: 0) > 0 ||
-            primaryState.recordingBackend == "MEDIA_RECORDER" && (primaryEvidence?.frames?.count ?: 0) >= 2
-        if (!attempted && !revoked && primaryState.status == RecorderStatus.RECORDING && started) {
-            attempted = true
-            begin(context, config, primaryState)
-        }
-    }
-
     private fun releasePrimaryReferenceIfDone() {
         if (primaryRecorder == null || RecordingChannelRetention.retainPrimary(revoked, primaryState.status,
                 primaryState.cleanupPending, primaryState.cleanupUnconfirmed, primarySettleUntilMs,
@@ -227,7 +355,6 @@ object RecordingChannels {
         // This is only the presentation observer. Native/IO ownership remains with the
         // recorder's existing close transaction and CaptureCleanupRuntime until acknowledged.
         primaryRecorder = null
-        activeConfig = null
         primaryReferenceReleased = true
     }
 
@@ -243,7 +370,6 @@ object RecordingChannels {
             tickScheduled = false
             updatePrimary()
             releasePrimaryReferenceIfDone()
-            beginIfReady()
             owners.values.toList().forEach { owner ->
                 updateOwner(owner)
                 val sample = health(owner.identity)
@@ -276,26 +402,15 @@ object RecordingChannels {
         writePending = true
         val revision = journalRevision
         val saved = history.values.flatMap { it.values }.takeLast(9)
-        journal.post { runCatching {
-            val target = AtomicFile(File(context.filesDir, "recordings/channel-health.json"))
-            target.baseFile.parentFile?.mkdirs()
-            val out = target.startWrite()
-            try { out.write(json.encodeToString(saved).toByteArray()); target.finishWrite(out) }
-            catch (error: Throwable) { target.failWrite(out); throw error }
-        }; control.post { writePending = false; if (journalRevision != revision) publish() } }
+        journal.post { runCatching { RecordingChannelJournal.write(context, saved) }
+            control.post { writePending = false; if (journalRevision != revision) publish() } }
     }
 
     /** Invoke on the diagnostic journal worker. No camera queries, coordinates or private file paths. */
     fun inspect(context: Context, sessionId: String): JsonObject = buildJsonObject {
         val current = state.value.filter { it.recordingSessionId == sessionId }
-        val values = if (current.isNotEmpty()) current else runCatching {
-            val file = AtomicFile(File(context.filesDir, "recordings/channel-health.json"))
-            file.openRead().use { input ->
-                require(input.channel.size() <= 32 * 1024)
-                json.decodeFromString<List<RecordingChannelHealth>>(input.bufferedReader().readText())
-                    .takeLast(9).filter { it.recordingSessionId == sessionId }
-            }
-        }.getOrDefault(emptyList())
+        val values = if (current.isNotEmpty()) current else RecordingChannelJournal.read(context).channels
+            .filter { it.recordingSessionId == sessionId }
         put("status", if (values.isEmpty()) "NOT_RECORDED" else "OBSERVED")
         put("channels", JsonArray(values.take(3).map { json.encodeToJsonElement(it) }))
     }

@@ -51,7 +51,7 @@ internal object DiagnosticPolicy {
         require(uuid.matches(run)) { "REPORT_RUN_INVALID" }
         check(expectedRun == null || run == expectedRun) { "CURRENT_RUN_REPORT_UNAVAILABLE" }
         val version = value["version"]?.jsonPrimitive?.content.orEmpty()
-        require(Regex("4\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.]+)?").matches(version)) { "REPORT_VERSION_INVALID" }
+        require(Regex("[45]\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.]+)?").matches(version)) { "REPORT_VERSION_INVALID" }
         return DiagnosticIdentity(run,version,value["startEpochMs"]?.jsonPrimitive?.longOrNull ?: 0,
             value["phase"]?.jsonPrimitive?.content.orEmpty(),sha(bytes),bytes.size)
     }

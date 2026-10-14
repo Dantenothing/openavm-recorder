@@ -65,7 +65,11 @@ class RecordingPlaylistPlayer(
         }
         override fun onVideoSizeChanged(videoSize: VideoSize) { if (!closed) validateRaster() }
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (!closed) validateRaster()
+            if (!closed) {
+                EventLogger.logEvent(Categories.SYSTEM, "RECORDER_PLAYBACK_SEGMENT", payload = mapOf(
+                    "index" to segmentIndex().toString(), "reason" to reason.toString()))
+                validateRaster()
+            }
         }
         override fun onPlayerError(error: PlaybackException) {
             if (closed) return

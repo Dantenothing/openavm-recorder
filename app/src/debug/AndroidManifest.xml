@@ -13,6 +13,9 @@
         <receiver android:name=".preflight.remote.LabUpdateReceiver" android:process=":remoteLab" android:exported="false">
             <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
         </receiver>
+        <receiver android:name=".preflight.remote.SupportUpdateReceiver" android:process=":remoteLab" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
         <activity android:name=".preflight.PreflightActivity" android:exported="false" android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />

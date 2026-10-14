@@ -79,8 +79,14 @@ private object VehicleTelemetryThreads {
     fun reader(context: Context): VehicleSignalReader = reader ?: EcarxSignalReader(context).also { reader = it }
 }
 
-/** Optional read-only recorder sidecar. Neither lifecycle methods nor video callbacks wait for SDK or disk IO. */
-internal class RecordingVehicleTelemetryCapture(context: Context, private val enabled: () -> Boolean) : Closeable {
+/** Optional sidecar or visible-preview telemetry. Lifecycle and video callbacks never wait for SDK/disk IO. */
+internal class RecordingVehicleTelemetryCapture(
+    context: Context,
+    private val enabled: () -> Boolean,
+    private val liveOnly: Boolean = false,
+    private val publishLive: ((VehicleTelemetryCaptureState) -> Unit)? = null,
+    private val sampleReader: (() -> VehicleTelemetrySample?)? = null,
+) : Closeable {
     private val appContext = context.applicationContext ?: context
     private val store by lazy { RecordingVehicleTelemetry.store(appContext) }
     private val generation = AtomicLong()
@@ -98,8 +104,17 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
     private var scheduled: ScheduledFuture<*>? = null
     private var flight: Flight? = null
     private var snapshot = VehicleTelemetryCaptureState()
+    private val healthOwner = Any() // Diagnostic ownership must not retain a capture or its UI callback.
 
-    init { RecordingVehicleTelemetry.claim(this) }
+    init {
+        require(!liveOnly || publishLive != null)
+        VehicleTelemetryHealth.claim(healthOwner, liveOnly)
+        if (!liveOnly) RecordingVehicleTelemetry.claim(this)
+    }
+    private fun publish(value: VehicleTelemetryCaptureState) {
+        VehicleTelemetryHealth.observe(healthOwner, liveOnly, value)
+        if (liveOnly) publishLive?.invoke(value) else RecordingVehicleTelemetry.publish(this, value)
+    }
     private fun optedIn() = runCatching(enabled).getOrDefault(false)
     private fun now() = SystemClock.elapsedRealtime()
     private fun current(token: Long) = !closed && generation.get() == token
@@ -118,7 +133,9 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
             snapshot = VehicleTelemetryCaptureState()
             when {
                 !next.enabled -> emit(token, VehicleTelemetryStatus.DISABLED)
-                !next.recording || next.sessionId == null || !VehicleTelemetryStore.validId(next.sessionId) -> emit(token, VehicleTelemetryStatus.IDLE)
+                !next.recording -> emit(token, VehicleTelemetryStatus.IDLE)
+                liveOnly -> { emit(token, VehicleTelemetryStatus.WAITING); poll(token) }
+                next.sessionId == null || !VehicleTelemetryStore.validId(next.sessionId) -> emit(token, VehicleTelemetryStatus.IDLE)
                 else -> start(token, next.sessionId)
             }
         }
@@ -134,7 +151,7 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
     }
 
     private fun poll(token: Long) {
-        if (!current(token) || writer == null) return
+        if (!current(token) || (!liveOnly && writer == null)) return
         if (!optedIn()) { release(now()); emit(token, VehicleTelemetryStatus.DISABLED); return }
         if (fieldTestBusy()) {
             if (snapshot.status != VehicleTelemetryStatus.SDK_BUSY) writeGap(now())
@@ -147,6 +164,7 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
         flight = request
         fun valid() = current(token) && request.valid.get() && optedIn()
         val accepted = VehicleTelemetryThreads.reads.submit(::valid, {
+            sampleReader?.let { return@submit it() }
             val reader = VehicleTelemetryThreads.reader(appContext)
             if (!valid()) return@submit null
             if (fieldTestBusy()) { request.busy.set(true); return@submit null }
@@ -190,21 +208,30 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
         }
         request.timeout = VehicleTelemetryThreads.control.schedule({
             if (current(token) && flight === request && request.valid.compareAndSet(true, false)) {
-                // This thread is separate from the stuck getter. Close the journal now, keep the SDK
-                // slot occupied until the actual call returns, and never retry this recording.
+                // Invalidate the late result, but keep the single native slot occupied until the
+                // getter actually returns. One bounded retry timer can then recover this same run.
                 flight = null
-                release(now())
+                writeGap(now())
                 emit(token, if (optedIn()) VehicleTelemetryStatus.SDK_TIMEOUT else VehicleTelemetryStatus.DISABLED)
+                if (optedIn()) schedule(token, 5_000) else release(now())
             }
         }, VehicleTelemetryPolicy.SDK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
     private fun schedule(token: Long, delayMs: Long) {
-        if (current(token) && writer != null) scheduled = VehicleTelemetryThreads.control.schedule({ poll(token) }, delayMs, TimeUnit.MILLISECONDS)
+        scheduled?.cancel(false)
+        if (current(token) && (liveOnly || writer != null)) scheduled = VehicleTelemetryThreads.control.schedule({ poll(token) }, delayMs, TimeUnit.MILLISECONDS)
     }
     private fun append(token: Long, sample: VehicleTelemetrySample): Boolean {
         if (!current(token) || !optedIn()) return false
-        try { writer?.append(sample) ?: return false; lastStoredMs = sample.elapsedMs; return true }
+        if (liveOnly) return true // No journal, GPS subscription, or persistent pedal learning for preview.
+        try {
+            writer?.append(sample) ?: return false
+            lastStoredMs = sample.elapsedMs
+            // Optional display learning must never turn a preferences failure into a recording fault.
+            runCatching { RecordedPedalHistory.observe(appContext, listOf(sample)) }
+            return true
+        }
         catch (error: Exception) { storageFailure(token, error); return false }
     }
     private fun emit(token: Long, status: VehicleTelemetryStatus) {
@@ -213,7 +240,7 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
             gear = snapshot.gear.takeIf { status == VehicleTelemetryStatus.RECORDING },
             validSignals = snapshot.validSignals.takeIf { status == VehicleTelemetryStatus.RECORDING } ?: 0,
             latestSample = snapshot.latestSample.takeIf { status == VehicleTelemetryStatus.RECORDING })
-        if (current(token)) RecordingVehicleTelemetry.publish(this, snapshot)
+        if (current(token)) publish(snapshot)
     }
     private fun storageFailure(token: Long, error: Exception) {
         release(now())
@@ -241,7 +268,7 @@ internal class RecordingVehicleTelemetryCapture(context: Context, private val en
         val stoppedAt = now()
         VehicleTelemetryThreads.control.execute {
             release(stoppedAt)
-            RecordingVehicleTelemetry.publish(this, VehicleTelemetryCaptureState(
+            publish(VehicleTelemetryCaptureState(
                 status = if (optedIn()) VehicleTelemetryStatus.IDLE else VehicleTelemetryStatus.DISABLED))
         }
     }

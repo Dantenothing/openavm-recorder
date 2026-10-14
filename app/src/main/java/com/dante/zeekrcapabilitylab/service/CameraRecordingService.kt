@@ -73,8 +73,10 @@ class CameraRecordingService : Service() {
     private val presentationHandler = android.os.Handler(android.os.Looper.getMainLooper())
     @Volatile private var sessionEpoch = 0L
     private var activeConfig: RecorderConfig? = null
+    @Volatile private var cameraHandoffTicket: String? = null
     private val modeSwitchGate = RecordingModeSwitchGate()
     private var handoffSession: RecorderSession? = null
+    private var modeSwitchAfterRelease: (() -> Unit)? = null
     private var requiredModeStorage: RecordingStorageIdentity? = null
     private val modeSwitchWatchdog = object : Runnable {
         override fun run() {
@@ -83,6 +85,7 @@ class CameraRecordingService : Service() {
                 cancelModeSwitch("DEADLINE")
             } else {
                 cancelModeSwitchIfUnsafe()
+                modeSwitchAfterRelease?.invoke()
                 if (modeSwitchGate.pending != null) presentationHandler.postDelayed(this, 250)
             }
         }
@@ -94,7 +97,7 @@ class CameraRecordingService : Service() {
             presentationHandler.post { if (instance === this && sessionEpoch == epoch) publishState(value) }
         }, {
             presentationHandler.post { if (instance === this && sessionEpoch == epoch) onStopped() }
-        })
+        }, cameraHandoffTicket = { cameraHandoffTicket })
     }
 
     override fun onCreate() {
@@ -127,28 +130,46 @@ class CameraRecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             RecorderCommands.ACTION_START -> {
+                val previewReleased = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(RecorderCommands.EXTRA_PREVIEW_RELEASED, android.os.ResultReceiver::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(RecorderCommands.EXTRA_PREVIEW_RELEASED) as? android.os.ResultReceiver
+                }
                 val previewSurface = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(RecorderCommands.EXTRA_PREVIEW_SURFACE, Surface::class.java)
                 } else {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(RecorderCommands.EXTRA_PREVIEW_SURFACE) as? Surface
                 }
+                fun rejectPreview() { runCatching { previewSurface?.release() }; previewReleased?.send(0, null) }
+                // Even a queued START whose handoff has been cancelled must fulfil
+                // startForegroundService before stopping. This admits no camera work;
+                // the existing token, owner and configuration checks still run below.
+                try { goForeground() } catch (error: Exception) {
+                    rejectPreview()
+                    EventLogger.markError(Categories.SYSTEM, "RECORDER_FOREGROUND_REJECTED", "FOREGROUND_CAMERA_PERMISSION", error)
+                    publishState(RecorderState(status = RecorderStatus.ERROR, lastError = "FOREGROUND_CAMERA_PERMISSION"))
+                    com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.previewFailed("OPEN_APP_TO_CONTINUE")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 val configJson = intent.getStringExtra(RecorderCommands.EXTRA_CONFIG_JSON)
                 // Each service lifetime accepts one manual START. Mode handoff is internal;
                 // a delayed duplicate intent cannot overwrite the accepted camera/configuration.
                 if (activeConfig != null || _modeSwitchProgress.value != null || handoffSession != null) {
-                    runCatching { previewSurface?.release() }
+                    rejectPreview()
                     return START_NOT_STICKY
                 }
                 val floatingToken = intent.getStringExtra(EXTRA_FLOATING_HANDOFF)
                 if (floatingToken != null &&
                     !com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.admitsRecordingStart(floatingToken)) {
-                    runCatching { previewSurface?.release() }
+                    rejectPreview()
                     stopSelf()
                     return START_NOT_STICKY
                 }
                 if (com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.active) {
-                    runCatching { previewSurface?.release() }
+                    rejectPreview()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -158,7 +179,7 @@ class CameraRecordingService : Service() {
                     }.getOrNull()
                 }
                 if (config == null) {
-                    runCatching { previewSurface?.release() }
+                    rejectPreview()
                     EventLogger.markError(
                         Categories.SYSTEM,
                         "RECORDER_INVALID_START_INTENT",
@@ -170,23 +191,18 @@ class CameraRecordingService : Service() {
                     return START_NOT_STICKY
                 }
                 if (!BrowserShareManager.stopForRecording()) {
-                    runCatching { previewSurface?.release() }
+                    rejectPreview()
                     publishState(RecorderState(status = RecorderStatus.ERROR, lastError = "DOWNLOAD_READER_PENDING"))
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                try { goForeground() } catch (error: Exception) {
-                    runCatching { previewSurface?.release() }
-                    EventLogger.markError(Categories.SYSTEM, "RECORDER_FOREGROUND_REJECTED", "FOREGROUND_CAMERA_PERMISSION", error)
-                    publishState(RecorderState(status = RecorderStatus.ERROR, lastError = "FOREGROUND_CAMERA_PERMISSION"))
-                    com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.previewFailed("OPEN_APP_TO_CONTINUE")
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
                 activeConfig = config
+                cameraHandoffTicket = floatingToken
                 mirrorConfig = config.takeIf { it.mirrorPreviewEnabled }
-                session.start(config, previewSurface, requiredStorage = floatingToken?.let {
+                com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.start(applicationContext, config, session, previewSurface, requiredStorage = floatingToken?.let {
                     com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.recordingStartStorage(it)
+                }, previewReleased = { previewReleased?.send(0, null) }, closeTrial = floatingToken?.let {
+                    com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.recordingStartCloseTrial(it)
                 })
                 replayVehicleEnvironment(session)
             }
@@ -275,7 +291,7 @@ class CameraRecordingService : Service() {
             val current = state.value
             if (current.lastError != null || current.cleanupUnconfirmed) {
                 cancelModeSwitch(current.lastError ?: "CLEANUP_UNCONFIRMED")
-            } else if (!progress.releasing && !progress.cancelled && current.status == RecorderStatus.RECORDING) {
+            } else if (!progress.releasing && !progress.cancelled && current.status == RecorderStatus.RECORDING && current.videoFlowConfirmed) {
                 _modeSwitchProgress.value = null
                 requiredModeStorage = null
                 toast(Utils.t("Recording mode switched.", "录像模式已切换。"))
@@ -315,6 +331,8 @@ class CameraRecordingService : Service() {
     }
 
     private fun onStopped() {
+        modeSwitchAfterRelease = null
+        handoffSession = null
         com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.stop(state.value.recordingSessionId)
         telemetryStopped = true
         telemetry?.follow(null, false, false)
@@ -376,7 +394,10 @@ class CameraRecordingService : Service() {
         com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.stop(expectedSessionId)
         owner.releaseForRecordingModeSwitch(expectedSessionId) { result ->
             presentationHandler.post {
-                if (instance === this && handoffSession === owner) finishModeSwitch(request, owner, next, storage, result)
+                if (instance === this && handoffSession === owner) {
+                    modeSwitchAfterRelease = { finishModeSwitch(request, owner, next, storage, result) }
+                    modeSwitchAfterRelease?.invoke()
+                }
             }
         }
     }
@@ -384,9 +405,10 @@ class CameraRecordingService : Service() {
     private fun finishModeSwitch(request: RecordingModeSwitchGate.Request, owner: RecorderSession,
                                  next: RecorderConfig, storage: RecordingStorageIdentity,
                                  result: RecordingModeHandoffResult) {
-        presentationHandler.removeCallbacks(modeSwitchWatchdog)
-        handoffSession = null
         if (!result.released) {
+            presentationHandler.removeCallbacks(modeSwitchWatchdog)
+            modeSwitchAfterRelease = null
+            handoffSession = null
             val cancelled = _modeSwitchProgress.value?.cancelled == true
             modeSwitchGate.cancel(); _modeSwitchProgress.value = null; requiredModeStorage = null
             if (cancelled) stopRecording(manual = false)
@@ -400,7 +422,15 @@ class CameraRecordingService : Service() {
             interactive = power.interactive, displayOn = power.mainDisplayState == "ON",
             storageMatches = storageAvailable(storage), ownerCurrent = session === owner &&
                 !com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.active,
+            nativeIdle = com.dante.zeekrcapabilitylab.sentry.CanaryCameraInterlock.normalIdle(),
+            glIdle = com.dante.zeekrcapabilitylab.mirror.MirrorGlPreview.isIdle(),
         ))
+        // The existing watchdog retries this completion while the same gesture is
+        // pending; it never clears another owner's native/GL release fence.
+        if (accepted == null && modeSwitchGate.pending?.token == request.token) return
+        presentationHandler.removeCallbacks(modeSwitchWatchdog)
+        modeSwitchAfterRelease = null
+        handoffSession = null
         if (accepted == null) {
             if (_modeSwitchProgress.value?.cancelled != true) cancelModeSwitch(result.failure ?: "CONDITIONS_CHANGED")
             onStopped()
@@ -415,7 +445,7 @@ class CameraRecordingService : Service() {
         if (next.recordingMode == RecordingMode.TIME_LAPSE) SettingsStore.get(this).setTimeLapseMultiplier(next.timeLapseMultiplier)
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MODE_SWITCH_RELEASE_CONFIRMED", payload = mapOf(
             "previousSession" to request.sessionId, "mode" to next.recordingMode.name))
-        session.start(next, requiredStorage = storage)
+        com.dante.zeekrcapabilitylab.service.recorder.RecordingChannels.start(applicationContext, next, session, requiredStorage = storage)
         replayVehicleEnvironment(session)
     }
 
@@ -445,6 +475,9 @@ class CameraRecordingService : Service() {
         if (!progress.releasing) session.stop()
         EventLogger.logEvent(Categories.SYSTEM, "RECORDER_MODE_SWITCH_CANCELLED", payload = mapOf("reason" to reason))
         if (notify) toast(Utils.t("Mode switch cancelled. Check recording status before starting again.", "模式切换已取消，请检查录像状态后再手动开始。"))
+        // If the primary is already disposed, Stop must finish the service now.
+        // A later auxiliary acknowledgement must not revive this cancelled gesture.
+        modeSwitchAfterRelease?.invoke()
     }
 
     private fun toast(message: String) = android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
@@ -461,6 +494,7 @@ class CameraRecordingService : Service() {
         sessionEpoch++
         modeSwitchGate.cancel()
         handoffSession = null
+        modeSwitchAfterRelease = null
         _modeSwitchProgress.value = null
         keepFloatingControls = false
         mirrorConfig = null
@@ -498,18 +532,26 @@ class CameraRecordingService : Service() {
 
         /** UI-visible Activity calls this after the user explicitly taps Start. */
         private const val EXTRA_FLOATING_HANDOFF = "openavm.record.FLOATING_HANDOFF"
-        fun start(context: Context, config: RecorderConfig, previewSurface: Surface? = null, floatingHandoffToken: String? = null) {
+        fun start(context: Context, config: RecorderConfig, previewSurface: Surface? = null, floatingHandoffToken: String? = null,
+                  previewReleased: (() -> Unit)? = null) {
+            val acknowledged = java.util.concurrent.atomic.AtomicBoolean()
+            fun releasePreview() {
+                if (acknowledged.compareAndSet(false, true)) {
+                    runCatching { previewSurface?.release() }
+                    previewReleased?.invoke()
+                }
+            }
             if (config.mirrorPreviewEnabled && com.dante.zeekrcapabilitylab.mirror.StandaloneMirrorService.isRunning() &&
                 com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.active()) {
-                runCatching { previewSurface?.release() }
+                releasePreview()
                 com.dante.zeekrcapabilitylab.mirror.FloatingMirrorService.startRecording(config)
                 return
             }
             if (com.dante.zeekrcapabilitylab.enhancement.CameraWorkCoordinator.state.value.active) {
-                runCatching { previewSurface?.release() }; return
+                releasePreview(); return
             }
             if (!BrowserShareManager.stopForRecording()) {
-                runCatching { previewSurface?.release() }
+                releasePreview()
                 android.widget.Toast.makeText(context, Utils.t("Finishing active downloads…", "正在结束下载…"), android.widget.Toast.LENGTH_LONG).show()
                 return
             }
@@ -523,8 +565,15 @@ class CameraRecordingService : Service() {
                 )
             if (previewSurface != null) {
                 intent.putExtra(RecorderCommands.EXTRA_PREVIEW_SURFACE, previewSurface)
+                // The service receives a parcelled Surface wrapper. Return the
+                // sender's consumer lease only when that native producer is done.
+                intent.putExtra(RecorderCommands.EXTRA_PREVIEW_RELEASED,
+                    object : android.os.ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                        override fun onReceiveResult(resultCode: Int, resultData: android.os.Bundle?) { releasePreview() }
+                    })
             }
-            ContextCompat.startForegroundService(context, intent)
+            try { ContextCompat.startForegroundService(context, intent) }
+            catch (failure: Exception) { releasePreview(); throw failure }
         }
 
         fun stop(context: Context) {
@@ -583,13 +632,14 @@ class CameraRecordingService : Service() {
         }
 
         /** Replaces a destroyed UI preview without restarting MediaRecorder. */
-        fun replacePreviewSurface(surface: Surface) {
+        fun replacePreviewSurface(surface: Surface, afterRelease: (() -> Unit)? = null) {
             val active = instance
             if (active == null) {
                 runCatching { surface.release() }
+                afterRelease?.invoke()
                 return
             }
-            active.session.replacePreviewSurface(surface)
+            active.session.replacePreviewSurface(surface, afterRelease = afterRelease)
         }
 
         fun isRunning(): Boolean = instance != null

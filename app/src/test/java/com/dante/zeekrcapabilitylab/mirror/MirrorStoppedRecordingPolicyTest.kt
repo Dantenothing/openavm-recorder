@@ -5,6 +5,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MirrorStoppedRecordingPolicyTest {
+    @Test fun unexpectedRecorderEndPreservesAnExistingPreviewIntent() {
+        for (status in listOf(RecorderStatus.STOPPED, RecorderStatus.ERROR, RecorderStatus.CAMERA_UNAVAILABLE)) {
+            assertTrue(MirrorStoppedRecordingPolicy.restoreRequestedPreview(
+                RecorderState(status = status, lastError = "PRODUCT_SOURCE_WAIT_TIMEOUT"), true, true, true))
+        }
+    }
+
+    @Test fun hiddenPreviewSleepAndClosedControlsNeverAuthorizePreviewReturn() {
+        val stopped = RecorderState(status = RecorderStatus.ERROR)
+        assertFalse(MirrorStoppedRecordingPolicy.restoreRequestedPreview(stopped, false, true, true))
+        assertFalse(MirrorStoppedRecordingPolicy.restoreRequestedPreview(stopped, true, false, true))
+        assertFalse(MirrorStoppedRecordingPolicy.restoreRequestedPreview(stopped, true, true, false))
+        for (status in listOf(RecorderStatus.STARTING, RecorderStatus.RECORDING, RecorderStatus.FINALIZING, RecorderStatus.IDLE))
+            assertFalse(MirrorStoppedRecordingPolicy.restoreRequestedPreview(RecorderState(status = status), true, true, true))
+    }
+
     private fun stoppedAfterLateAcknowledgement(): RecorderState {
         val publication = RecorderStatePublication({ false }, {}, {})
         publication.begin("manual-stop")

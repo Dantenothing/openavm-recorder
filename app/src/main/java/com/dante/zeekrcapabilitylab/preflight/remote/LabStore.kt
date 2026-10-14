@@ -30,7 +30,8 @@ internal class LabStore(context:Context) {
         change("armed" to true,"sessionId" to UUID.randomUUID().toString(),"boot" to boot,"startedElapsed" to now,
             "deadlineElapsed" to now+LabPolicy.DURATION_MS,"serverOpened" to false,"allowUpdates" to updates,
             "commands" to obj(),"events" to emptyList<JsonObject>(),"eventSeq" to 0,"eventAck" to 0,"prepared" to null,"installerSession" to null,
-            "updatingCommand" to null,"updateFrom" to null,"updateTarget" to null,"installerCallback" to null)
+            "updatingCommand" to null,"updateFrom" to null,"updateTarget" to null,"installerCallback" to null,
+            "supportPrepared" to null,"supportUpdate" to null,"updateResumeError" to null)
     }
     fun record(id:String,value:JsonObject) {
         require(LabPolicy.uuid.matches(id))

@@ -28,6 +28,7 @@ internal class ContinuousCameraInput(
     private val failure = AtomicReference<Throwable?>()
     private val ready = CountDownLatch(1)
     private val ended = CountDownLatch(1)
+    private val producerFence = CountDownLatch(1)
     private val clock = ContinuousSourceClock()
     private val readers = mutableListOf<Consumer>()
     private var writing: SharedInputFramePool.Write? = null
@@ -111,7 +112,7 @@ internal class ContinuousCameraInput(
         finally {
             ready.countDown()
             // An input failure cannot destroy a Surface that Camera2 may still be writing.
-            while (!producerEnded) Thread.sleep(2)
+            producerFence.await()
             try {
                 if (root.usable) root.finish()
                 writing?.let { pool.cancelWrite(it, true); writing = null }
@@ -134,6 +135,7 @@ internal class ContinuousCameraInput(
     /** Only RecorderSession's acknowledged Camera2 producer fence may call this. */
     fun stopAfterCameraFence() {
         producerEnded = true
+        producerFence.countDown()
         check(ended.await(5, TimeUnit.SECONDS) && closed) { "PRODUCT_GL_RELEASE_UNCONFIRMED" }
         inputThread.join(500)
         check(!inputThread.isAlive) { "PRODUCT_INPUT_THREAD_UNCONFIRMED" }

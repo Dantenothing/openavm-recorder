@@ -173,8 +173,8 @@ internal fun MirrorReturnSetupDialog(store: MirrorReturnSettings, installationPr
                             Utils.t("Include the mapped cabin camera with normal surround recording.", "环视普通录像时，同时录制映射的舱内摄像头。"))
                         SetupToggle(infrared, { infrared = it }, !busy, "setup-infrared", Utils.t("Infrared camera", "红外摄像头"),
                             Utils.t("Include infrared with normal surround recording. Its view depends on your camera mapping.", "环视普通录像时同时录制红外；实际视角取决于相机映射。"))
-                        Text(Utils.t("Extra camera files use internal storage. Unavailable cameras do not stop surround recording.",
-                            "额外相机的视频使用内部存储；不可用时不影响环视录像。"), style = MaterialTheme.typography.bodySmall)
+                        Text(Utils.t("Extra cameras use the main recording destination, including USB. If a running camera or its storage fails, the recording group stops together; completed files remain available.",
+                            "额外相机使用主录像的存储位置（包括 USB）。录像中的相机或存储发生故障时，整组停止，已完成的文件仍可查看。"), style = MaterialTheme.typography.bodySmall)
                         HorizontalDivider()
                         SetupToggle(vehicleHud, { vehicleHud = it }, !busy, "setup-vehicle-hud", Utils.t("Record vehicle data for HUD", "记录 HUD 车辆数据"),
                             Utils.t("Save read-only speed, gear, indicators and braking with video. Missing readings remain unknown; GPS is separate.",
@@ -192,8 +192,8 @@ internal fun MirrorReturnSetupDialog(store: MirrorReturnSettings, installationPr
                         }
                         HorizontalDivider()
                         SetupToggle(playbackMap, { playbackMap = it }, true, "setup-playback-map", Utils.t("Open map in playback", "回放时默认打开地图"),
-                            Utils.t("Expand the recorded route and events. Street map stays an explicit online choice; the provider receives the viewed area.",
-                                "展开已记录轨迹与事件。道路地图仍需手动选择联网，服务商会获知查看区域。"))
+                            Utils.t("Expand the recorded route and events. Your Street map choice is remembered; online maps share the viewed area with the provider.",
+                                "展开已记录轨迹与事件，并记住是否加载道路地图。联网加载时，服务商会获知查看区域。"))
                         Text(Utils.t("A route needs GPS recorded at the time. This choice does not collect location or add a route to old videos.",
                             "轨迹需要录像时已有 GPS 记录；此选项不会采集位置，也不能为旧视频补出轨迹。"), style = MaterialTheme.typography.bodySmall)
                         Text(Utils.t("Review after each install or update; change anytime in Settings.", "每次安装或升级后确认；随时可在设置中更改。"),

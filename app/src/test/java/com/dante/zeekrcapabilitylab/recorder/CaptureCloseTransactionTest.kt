@@ -80,6 +80,7 @@ class CaptureCloseTransactionTest {
                           lost: Boolean = false, session: Boolean = true, device: Boolean = true,
                           recording: Boolean = true, deviceFence: Boolean = false,
                           mediaBudgetMs: Long = RecorderCloseTiming.DEFAULT_MEDIA_MS,
+                          retainedHandoff: Boolean = false,
                           onFault: (String) -> Unit = {}, onComplete: (CaptureCloseResult) -> Unit = {}) {
         val control = Queue(); val native = Queue(); val io = Queue()
         val calls = mutableListOf<String>(); val faults = mutableListOf<String>()
@@ -101,7 +102,8 @@ class CaptureCloseTransactionTest {
             }
         }, session, device, recording, sequences, terminal, lost,
             { name, detail -> traces.add(name + ":" + detail) }, { faults.add(it); onFault(it) }, { result = it; onComplete(it) },
-            preferDeviceClose = deviceFence, mediaReleaseTimeoutMs = mediaBudgetMs)
+            preferDeviceClose = deviceFence, mediaReleaseTimeoutMs = mediaBudgetMs,
+            requireSessionCloseAck = retainedHandoff)
         fun pump() {
             repeat(200) { if (!(control.one() or native.one() or io.one())) return }
             error("unbounded work")
@@ -118,6 +120,45 @@ class CaptureCloseTransactionTest {
         assertTrue(h.result!!.safeToContinue)
         assertEquals(listOf("stopRepeating", "abort", "stop", "reset", "release", "sessionClose", "closeOutput"), h.calls)
         assertFalse(h.result!!.terminal)
+    }
+    @Test fun retainedHandoffWaitsForSessionCloseAckAsWellAsEverySequenceAndOutput() {
+        val h = Harness(setOf(7), retainedHandoff = true)
+        h.start(); h.ready(); h.tx.sequenceEnded(7); h.pump()
+        assertNull(h.result)
+        assertTrue("release" in h.calls)
+        assertFalse("deviceClose" in h.calls)
+        assertFalse("closeOutput" in h.calls)
+        h.tx.sessionClosed(); h.pump()
+        assertTrue(h.result!!.safeToContinue)
+        assertFalse(h.result!!.deviceClosed)
+        assertFalse(h.result!!.terminal)
+        assertTrue("closeOutput" in h.calls)
+    }
+    @Test fun missingSessionCloseAckCancelsRetentionAndWaitsForActualDeviceClose() {
+        val h = Harness(retainedHandoff = true)
+        h.start(); h.ready(); h.advance(3_000)
+        assertTrue("deviceClose" in h.calls)
+        assertNull(h.result)
+        assertFalse("closeOutput" in h.calls)
+        h.closed()
+        assertTrue(h.result!!.safeToContinue)
+        assertTrue(h.result!!.terminal)
+        assertTrue(h.result!!.deviceClosed)
+    }
+    @Test fun earlyOnClosedCannotHandOffBeforeTheQueuedNativeCloseCallReturns() {
+        val h = Harness(retainedHandoff = true)
+        h.start()
+        h.tx.sessionReady()
+        assertTrue(h.control.one()) // Producer proof queues recorder stop/release.
+        assertTrue(h.native.one())
+        assertTrue(h.control.one()) // Media completion queues native session.close().
+        h.native.blocked = true
+        h.tx.sessionClosed(); h.pump()
+        assertNull("A native call still queued/running belongs to the old owner", h.result)
+        assertFalse("closeOutput" in h.calls)
+        h.native.blocked = false; h.pump()
+        assertTrue(h.result!!.safeToContinue)
+        assertFalse(h.result!!.deviceClosed)
     }
     @Test fun continuousMainReleaseAtNineSecondsDoesNotInventPermanentCleanupFailure() {
         val h = Harness(mediaBudgetMs = RecorderCloseTiming.mediaReleaseMs("SHARED_INPUT_CONTINUOUS_CODEC"))
@@ -198,6 +239,22 @@ class CaptureCloseTransactionTest {
         assertTrue("deviceClose" in h.calls); assertNull(h.result)
         assertFalse("closeOutput" in h.calls)
         h.closed(); assertTrue(h.result!!.safeToContinue)
+    }
+    @Test fun comparisonChangesOnlyTheTerminalFenceAndRetainsMediaOnLateCancellation() {
+        val ordinary = Harness(terminal = true)
+        ordinary.start(); ordinary.ready()
+        assertTrue(ordinary.calls.indexOf("release") < ordinary.calls.indexOf("deviceClose"))
+        ordinary.closed(); assertTrue(ordinary.result!!.safeToContinue)
+        val held = Harness(terminal = true, deviceFence = true, sequences = setOf(11))
+        held.start(); held.ready(); held.tx.sequenceEnded(11); held.pump()
+        held.tx.merge(terminal = true); held.pump(); held.advance(3_000)
+        assertEquals(listOf("deviceClose"), held.calls)
+        assertEquals(listOf("CAMERA_CLOSE_UNCONFIRMED"), held.faults)
+        assertNull(held.result)
+        held.closed()
+        assertTrue(held.calls.indexOf("deviceClose") < held.calls.indexOf("stop"))
+        assertEquals("CAMERA_DEVICE_CLOSED", held.result!!.producerEvidence)
+        assertTrue(held.result!!.safeToContinue); assertTrue(held.result!!.terminal)
     }
     @Test fun noCallbacksNeverReleaseRecorderOrDescriptor() {
         val h = Harness(); h.start(); h.advance(2_000); h.advance(2_000); h.advance(3_000)

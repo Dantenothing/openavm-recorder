@@ -33,6 +33,7 @@ google-services.json
 /.wrangler/
 /diagnostic-relay/.wrangler/
 /diagnostic-relay/.dev.vars*
+/diagnostic-relay/node_modules/
 # Paused, independent location experiment; not part of the V5 car release.
 /location-probe/
 

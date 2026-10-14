@@ -25,17 +25,18 @@ internal class LabWire(private val connection:DiagnosticConnection) {
         check(!source.request(131073)) { "RESPONSE_TOO_LARGE" }
         Json.parseToJsonElement(source.readUtf8()).jsonObject
     }
-    fun download(session:String,hash:String,destination:File) {
+    fun download(session:String,hash:String,destination:File,maxBytes:Long=LabPolicy.MAX_APK) {
         require(LabPolicy.uuid.matches(session) && LabPolicy.hash.matches(hash))
         val temp=File(destination.path+".part")
         try {
-            client.newCall(request("/v1/lab/sessions/$session/apks/$hash").get().build()).execute().use { response ->
+            val downloader=client.newBuilder().callTimeout(120,TimeUnit.SECONDS).build()
+            downloader.newCall(request("/v1/lab/sessions/$session/apks/$hash").get().build()).execute().use { response ->
                 if(!response.isSuccessful)throw LabHttpFailure(response.code)
                 val body=response.body ?: error("EMPTY_APK")
-                check(body.contentLength()<=LabPolicy.MAX_APK) { "APK_SIZE_LIMIT" }
+                check(body.contentLength()<=maxBytes) { "APK_SIZE_LIMIT" }
                 body.byteStream().use { input -> FileOutputStream(temp).use { output ->
                     val buffer=ByteArray(65536);var count=0L
-                    while(true) { val n=input.read(buffer);if(n<0)break;count+=n;check(count<=LabPolicy.MAX_APK) { "APK_SIZE_LIMIT" };output.write(buffer,0,n) }
+                    while(true) { val n=input.read(buffer);if(n<0)break;count+=n;check(count<=maxBytes) { "APK_SIZE_LIMIT" };output.write(buffer,0,n) }
                     output.fd.sync()
                 } }
             }

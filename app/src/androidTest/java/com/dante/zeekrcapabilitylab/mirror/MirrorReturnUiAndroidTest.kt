@@ -47,8 +47,9 @@ class MirrorReturnUiAndroidTest {
         compose.onNodeWithTag("return-auto-record").assertIsOff()
         compose.onNodeWithTag("return-auto-record").performClick().assertIsOn()
         compose.onNodeWithTag("return-next").performClick()
-        listOf("setup-cabin", "setup-infrared", "setup-vehicle-hud", "setup-gps-route", "setup-playback-map")
+        listOf("setup-cabin", "setup-infrared", "setup-vehicle-hud", "setup-gps-route")
             .forEach { compose.onNodeWithTag(it).performScrollTo().assertIsOff() }
+        compose.onNodeWithTag("setup-playback-map").performScrollTo().assertIsOn()
         compose.onNodeWithTag("return-save").performClick()
         compose.runOnIdle {
             assertTrue(saved); assertFalse(store.needsReview)
@@ -112,14 +113,15 @@ class MirrorReturnUiAndroidTest {
         var saved = false
         compose.setContent { ZeekrCapabilityLabTheme { MirrorReturnSetupDialog(store, false, {}, { saved = true }) } }
         compose.onNodeWithTag("return-next").performClick()
-        listOf("setup-cabin", "setup-infrared", "setup-vehicle-hud", "setup-playback-map").forEach {
+        listOf("setup-cabin", "setup-infrared", "setup-vehicle-hud").forEach {
             compose.onNodeWithTag(it).performScrollTo().performClick().assertIsOn()
         }
+        compose.onNodeWithTag("setup-playback-map").performScrollTo().performClick().assertIsOff()
         compose.runOnIdle { assertEquals(RecordingSetupOptions(), SettingsStore.get(context).recordingSetupOptions) }
         compose.onNodeWithTag("return-save").performClick()
         compose.runOnIdle {
             assertTrue(saved)
-            assertEquals(RecordingSetupOptions(true, true, true, false, true), SettingsStore.get(context).recordingSetupOptions)
+            assertEquals(RecordingSetupOptions(true, true, true, false, false), SettingsStore.get(context).recordingSetupOptions)
             assertFalse(CameraRecordingService.isRunning()); assertFalse(StandaloneMirrorService.isRunning())
         }
     }

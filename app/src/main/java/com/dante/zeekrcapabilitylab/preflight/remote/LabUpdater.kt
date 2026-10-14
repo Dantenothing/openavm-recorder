@@ -69,6 +69,7 @@ internal class LabUpdater(private val context:Context,private val store:LabStore
 
 class LabUpdateReceiver:BroadcastReceiver() {
     override fun onReceive(context:Context,intent:Intent) {
+        if(BuildConfig.RECORDER_SUPPORT_ENABLED)return // Support updates have stricter exact-build resume rules.
         if(intent.action==LabUpdater.INSTALL_RESULT) {
             val store=LabStore(context)
             val id=intent.getStringExtra("commandId").orEmpty()

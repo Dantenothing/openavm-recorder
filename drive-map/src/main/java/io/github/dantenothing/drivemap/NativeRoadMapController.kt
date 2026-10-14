@@ -43,6 +43,8 @@ internal class NativeRoadMapController(
     private var geometry = RoadGeometry(emptyList(), false)
     private var lastGeometry: RoadGeometry? = null
     private var current: RoadMapPoint? = null
+    private var lastPublishedMarker: RoadMapPoint? = null
+    private var markerPublished = false
     private var following = true
     private var positioned = false
     private var followZoomChosen = false
@@ -155,9 +157,15 @@ internal class NativeRoadMapController(
             loaded.getSourceAs<GeoJsonSource>(ROUTE_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(features))
             lastGeometry = geometry
         }
-        val marker = current?.let { Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude)) }
-        loaded.getSourceAs<GeoJsonSource>(MARKER_SOURCE)?.setGeoJson(
-            FeatureCollection.fromFeatures(marker?.let(::listOf) ?: emptyList()))
+        // A video UI tick is not a new GPS observation. Republishing unchanged GeoJSON
+        // makes the map renderer rebuild its source and redraw alongside every video frame.
+        if (!markerPublished || lastPublishedMarker != current) {
+            val marker = current?.let { Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude)) }
+            loaded.getSourceAs<GeoJsonSource>(MARKER_SOURCE)?.setGeoJson(
+                FeatureCollection.fromFeatures(marker?.let(::listOf) ?: emptyList()))
+            lastPublishedMarker = current
+            markerPublished = true
+        }
     }
 
     private fun seekNearest(location: LatLng): Boolean {

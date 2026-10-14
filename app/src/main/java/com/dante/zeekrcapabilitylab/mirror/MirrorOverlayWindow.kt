@@ -21,6 +21,7 @@ data class MirrorOverlayState(
     val zoom: Float = 1f, val canStopWhileBusy: Boolean = false, val elapsedMs: Long = 0,
     val cabin: Boolean = false, val canCabin: Boolean = true, val error: Boolean = false,
     val canSaveEmergency: Boolean = false,
+    val canStartWhileBusy: Boolean = false,
 )
 
 /** Presentation only. Layout, grid and popovers never acquire a camera or recording permit. */
@@ -270,6 +271,7 @@ class MirrorOverlayWindow(
         if (value.busy || value.error) dismissPopup()
         title.showText(when {
             value.error -> value.status
+            value.busy && value.canStartWhileBusy -> Utils.t("Waiting for preview", "等待预览画面")
             value.busy -> Utils.t("Switching…", "切换中…")
             value.recording -> "● ${MirrorRecordingClock.text(value.elapsedMs)}" + if (value.cabin) Utils.t(" Cabin", " 车内") else ""
             value.cabin -> Utils.t("Cabin preview", "车内预览")
@@ -302,7 +304,8 @@ class MirrorOverlayWindow(
         lens.isEnabled = !value.cabin && !value.busy
         listOf(record, headerRecord).forEach {
             it.contentDescription = if (value.recording) Utils.t("Stop recording", "停止录像") else Utils.t("Start recording", "开始录像")
-            it.tooltipText = it.contentDescription; it.isEnabled = value.canRecord && (!value.busy || value.recording && value.canStopWhileBusy)
+            it.tooltipText = it.contentDescription
+            it.isEnabled = value.canRecord && (!value.busy || value.recording && value.canStopWhileBusy || !value.recording && value.canStartWhileBusy)
         }
         headerRecord.showText(if (value.recording) "■" else "●")
         photo.isEnabled = !value.busy && value.canPhoto; tools.isEnabled = !value.busy

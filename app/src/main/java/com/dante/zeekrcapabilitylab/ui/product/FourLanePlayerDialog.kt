@@ -1015,6 +1015,7 @@ internal fun FourLanePlaybackSurface(
     correctionConfig: FisheyeCorrectionConfig,
     callbacks: PlaybackSurfaceCallbacks,
     modifier: Modifier = Modifier,
+    knownRasterMetadata: List<RecordingRasterMetadata>? = null,
 ) {
     DisposableEffect(files.map { it.absolutePath }, container) {
         container.blockPlaybackRaster()
@@ -1032,7 +1033,8 @@ internal fun FourLanePlaybackSurface(
     )
 
     PlaybackMediaBinding(files, segmentDurationHintsMs, container.textureView, callbacks,
-        onVideoFormat = { metadata, width, height -> container.setPlaybackRaster(metadata, width, height) })
+        onVideoFormat = { metadata, width, height -> container.setPlaybackRaster(metadata, width, height) },
+        knownRasterMetadata = knownRasterMetadata)
 }
 
 @Composable
@@ -1042,9 +1044,10 @@ internal fun SinglePlaybackSurface(
     textureView: TextureView,
     callbacks: PlaybackSurfaceCallbacks,
     modifier: Modifier = Modifier,
+    knownRasterMetadata: List<RecordingRasterMetadata>? = null,
 ) {
     AndroidView(factory = { textureView }, modifier = modifier)
-    PlaybackMediaBinding(files, segmentDurationHintsMs, textureView, callbacks)
+    PlaybackMediaBinding(files, segmentDurationHintsMs, textureView, callbacks, knownRasterMetadata = knownRasterMetadata)
 }
 
 @Composable
@@ -1054,14 +1057,16 @@ private fun PlaybackMediaBinding(
     textureView: TextureView,
     callbacks: PlaybackSurfaceCallbacks,
     onVideoFormat: ((RecordingRasterMetadata, Int, Int) -> Boolean)? = null,
+    knownRasterMetadata: List<RecordingRasterMetadata>? = null,
 ) {
     val context = LocalContext.current
     val paths = remember(files) { files.map { it.absolutePath } }
     val timeline = remember(paths) { PlaybackTimeline(paths.size) }
     val latestCallbacks by rememberUpdatedState(callbacks)
     val latestVideoFormat by rememberUpdatedState(onVideoFormat)
-    val rasterMetadata by produceState<PlaybackRasterBatch?>(null, paths) {
-        value = withContext(Dispatchers.IO) { PlaybackRasterBatch(paths, files.map(RecordingRasterReader::read)) }
+    val rasterMetadata by produceState<PlaybackRasterBatch?>(null, paths, knownRasterMetadata) {
+        value = if (knownRasterMetadata?.size == paths.size) PlaybackRasterBatch(paths, knownRasterMetadata)
+            else withContext(Dispatchers.IO) { PlaybackRasterBatch(paths, files.map(RecordingRasterReader::read)) }
     }
     SideEffect {
         paths.forEachIndexed { index, path -> timeline.hint(index, segmentDurationHintsMs[path] ?: 0L) }

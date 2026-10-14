@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Private, owner-opted-in same-package update session. Public releases omit these. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <application>
+        <activity android:name=".preflight.PreflightActivity" android:exported="false" android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <service android:name=".preflight.cloud.DiagnosticUploadJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".preflight.remote.RemoteLabService" android:process=":remoteLab" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".preflight.remote.SupportUpdateReceiver" android:process=":remoteLab" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
+    </application>
+</manifest>

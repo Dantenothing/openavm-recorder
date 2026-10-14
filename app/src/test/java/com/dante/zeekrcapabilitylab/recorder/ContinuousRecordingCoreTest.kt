@@ -22,6 +22,13 @@ class ContinuousRecordingCoreTest {
         assertEquals(KeyframeSegmentPlanner.Placement(1_000, false), p.accept(3_000, true))
     }
 
+    @Test fun stopCancelsAnUncommittedCutWithoutResettingCurrentFilePts() {
+        val planner = KeyframeSegmentPlanner()
+        planner.accept(1_000, true); planner.requestCut(); planner.cancelCut()
+        assertEquals(KeyframeSegmentPlanner.Placement(500, false), planner.accept(1_500, true))
+        assertEquals(KeyframeSegmentPlanner.Placement(1_000, false), planner.accept(2_000, false))
+    }
+
     @Test fun repeatedCutsDoNotDuplicateOrDropAnyAcceptedFrame() {
         val p = KeyframeSegmentPlanner()
         val files = mutableListOf(mutableListOf<Long>())
@@ -76,13 +83,13 @@ class ContinuousRecordingCoreTest {
         assertTrue(q.offer(10) { "ok" })
     }
 
-    @Test fun stopOrChangedOwnershipRejectsDelayedRolloverCallback() {
-        assertTrue(ContinuousRecordingPolicy.mayCommitRotation(true, true, true, false, false))
-        assertFalse(ContinuousRecordingPolicy.mayCommitRotation(true, true, true, true, false))
-        assertFalse(ContinuousRecordingPolicy.mayCommitRotation(true, true, true, false, true))
-        assertFalse(ContinuousRecordingPolicy.mayCommitRotation(false, true, true, false, false))
-        assertFalse(ContinuousRecordingPolicy.mayCommitRotation(true, false, true, false, false))
-        assertFalse(ContinuousRecordingPolicy.mayCommitRotation(true, true, false, false, false))
+    @Test fun stopOrChangedOwnershipRejectsLateDestinationAdmission() {
+        assertTrue(ContinuousRecordingPolicy.mayAdmitCut(true, true, true, false, false))
+        assertFalse(ContinuousRecordingPolicy.mayAdmitCut(true, true, true, true, false))
+        assertFalse(ContinuousRecordingPolicy.mayAdmitCut(true, true, true, false, true))
+        assertFalse(ContinuousRecordingPolicy.mayAdmitCut(false, true, true, false, false))
+        assertFalse(ContinuousRecordingPolicy.mayAdmitCut(true, false, true, false, false))
+        assertFalse(ContinuousRecordingPolicy.mayAdmitCut(true, true, false, false, false))
     }
 
     @Test fun timelapseAndOtherCamerasKeepExistingRecorder() {

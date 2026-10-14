@@ -1,5 +1,18 @@
 # OpenAVM changelog
 
+## 5.1.0 — 2026-10-14
+
+- Recorder 5.1.0 / 134 and Phone 5.1.0 / 56: optional multi-camera recording, recorded GPS/vehicle data, HUD and route playback.
+- Session playback with persistent players across compatible segments, improved entry speed, selection and export.
+- Retained camera handoffs, bounded post-stop preview recovery and safe cabin format rollover; private remote support is disabled in public builds.
+- Both apps retain local secure pairing. Phone still requires user-imported configuration for optional cloud controls.
+- [Release notes and known limits](docs/v5/RELEASE_NOTES.md).
+
+## 5.0.1 — 2026-09-26
+
+- Phone-only update: removes bundled protocol parameters and introduces optional local configuration import with safe upgrade migration. Recorder remains 5.0.0 / 102.
+- The original bundled Phone 5.0.0 APK was withdrawn. [Archived notes](docs/v5/RELEASE_NOTES_5_0_1.md).
+
 ## 5.0.0 — 2026-09-26
 
 - Vehicle Recorder: continuous surround segmentation, floating mirror and return recovery, date/grouped recording management, emergency clips, and secure phone transfer.

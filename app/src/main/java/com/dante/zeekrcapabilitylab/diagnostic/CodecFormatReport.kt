@@ -28,6 +28,7 @@ internal object CodecFormatReport {
             put("compatibleRepeats", safe["formatCompatibleRepeats"]?.toLongOrNull())
             put("observedAtElapsedMs", safe["formatObservedElapsedMs"]?.toLongOrNull())
             put("cutPending", safe["formatCutPending"]?.toBooleanStrictOrNull())
+            put("discardedTransitionFrames", safe["formatDiscardedTransitionFrames"]?.toLongOrNull())
             put("fieldsOmitted", safe["formatFieldsOmitted"]?.toLongOrNull() ?: 0)
             if (compact) put("fieldDetailsOmittedForSize", true)
             put(if (compact) "fieldKinds" else "fields", buildJsonObject {

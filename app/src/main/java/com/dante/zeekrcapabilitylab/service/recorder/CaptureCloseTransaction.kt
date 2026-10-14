@@ -39,6 +39,7 @@ class CaptureCloseTransaction(
     private val completed: (CaptureCloseResult) -> Unit,
     private var preferDeviceClose: Boolean = false,
     private val mediaReleaseTimeoutMs: Long = RecorderCloseTiming.DEFAULT_MEDIA_MS,
+    private val requireSessionCloseAck: Boolean = false,
 ) {
     init { require(mediaReleaseTimeoutMs in RecorderCloseTiming.DEFAULT_MEDIA_MS..25_000L) }
     private val outstanding = sequences.toMutableSet()
@@ -51,6 +52,7 @@ class CaptureCloseTransaction(
     private var evidence: String? = null
     private var deviceAck = !hasDevice
     private var sessionCloseIssued = false
+    private var sessionCloseCallPending = false
     private var deviceCloseIssued = false
     private var mediaStarted = false
     private var mediaDone = false
@@ -126,6 +128,7 @@ class CaptureCloseTransaction(
             trace("CLOSED_WAITING_FOR_SEQUENCES", outstanding.sorted().toString())
             phase("DRAINING_CLOSED_SESSION", 2_000) { fail("CAPTURE_DRAIN_UNCONFIRMED") }
         }
+        if (mediaDone && !sessionCloseCallPending) afterSessionClose()
     }
     fun deviceClosed() = submit {
         if (deviceAck) return@submit
@@ -170,25 +173,33 @@ class CaptureCloseTransaction(
     private fun requestSessionClose() {
         if (mediaStarted || finished || sessionCloseIssued) return
         sessionCloseIssued = true
+        sessionCloseCallPending = true
         phase("CLOSING_SESSION", 2_000) { requestDeviceClose() }
         work(native, "SESSION_CLOSE", {
             linkedMapOf<String, String>().also { attempt(it, "sessionClose") { resources.closeSession() } }
         }) { result ->
+            sessionCloseCallPending = false
             errors.putAll(result)
             if (result.isNotEmpty() && !mediaStarted) requestDeviceClose()
+            if (mediaDone) afterSessionClose()
         }
     }
     private fun closeSessionAfterMedia() {
         if (sessionCloseIssued || !hasSession) { afterSessionClose(); return }
         sessionCloseIssued = true
+        sessionCloseCallPending = true
         phase("CLOSING_SESSION_AFTER_MEDIA", 3_000) { fail("SESSION_CLOSE_CALL_TIMEOUT") }
         work(native, "SESSION_CLOSE", {
             linkedMapOf<String, String>().also { attempt(it, "sessionClose") { resources.closeSession() } }
-        }) { result -> errors.putAll(result); afterSessionClose() }
+        }) { result -> sessionCloseCallPending = false; errors.putAll(result); afterSessionClose() }
     }
     private fun afterSessionClose() {
         if (terminal || lost || !mediaReleased || "sessionClose" in errors || deviceCloseIssued) {
             if (deviceAck) finishOutput() else requestDeviceClose()
+        } else if (requireSessionCloseAck && hasSession && (!sessionClosedAck || sessionCloseCallPending)) {
+            // Source handoff crosses owner boundaries. A drained producer and a
+            // returning close() call are insufficient: wait for its actual callback.
+            phase("AWAITING_SESSION_CLOSED", 3_000) { fail("SESSION_CLOSE_UNCONFIRMED") }
         } else finishOutput()
     }
     private fun requestDeviceClose() {

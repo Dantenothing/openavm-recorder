@@ -49,9 +49,16 @@ fun RecordedRoadMap(
     chinese: Boolean = false,
     onSeek: (Long) -> Unit,
 ) {
+    val context = LocalContext.current
+    val preferences = remember(context) {
+        context.applicationContext.getSharedPreferences("recorded_road_map", android.content.Context.MODE_PRIVATE)
+    }
     val geometry = remember(points) { RoadMapGeometry.prepare(points) }
     val marker = current?.takeIf(RoadMapGeometry::valid)
-    var roads by rememberSaveable { mutableStateOf(false) }
+    // Playback opens the road map by default; an explicit offline choice remains respected.
+    var roads by rememberSaveable {
+        mutableStateOf(runCatching { preferences.getBoolean("street_tiles_enabled", true) }.getOrDefault(true))
+    }
     var following by rememberSaveable { mutableStateOf(true) }
     var retry by remember { mutableIntStateOf(0) }
     var fitRequest by remember { mutableIntStateOf(0) }
@@ -85,11 +92,15 @@ fun RecordedRoadMap(
             Text(label("Street tiles share the viewed area with OpenFreeMap. No route file is uploaded.",
                 "街道底图会向 OpenFreeMap 请求当前查看区域；不会上传轨迹文件。"), style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(roads, onClick = { roads = !roads }, label = { Text(label("Street map", "街道地图")) })
+                FilterChip(roads, onClick = {
+                    roads = !roads
+                    preferences.edit().putBoolean("street_tiles_enabled", roads).apply()
+                }, label = { Text(label("Street map", "街道地图")) })
                 Spacer(Modifier.width(6.dp))
-                TextButton(onClick = { following = true; recenterRequest++; native?.recenter() }, enabled = marker != null) {
-                    Text(if (following) label("Following", "跟随中") else label("Recenter", "跟随位置"))
-                }
+                FilterChip(selected = following, onClick = {
+                    following = !following
+                    if (following) { recenterRequest++; native?.recenter() }
+                }, enabled = marker != null, label = { Text(label("Follow vehicle", "跟随车辆")) })
                 TextButton(onClick = { following = false; fitRequest++; native?.fit() }) { Text(label("Fit route", "全程")) }
             }
             Box(Modifier.fillMaxWidth().then(if (bounded && !smallPanel) Modifier.weight(1f) else Modifier.height(if (smallPanel) 180.dp else 260.dp))) {
@@ -104,7 +115,7 @@ fun RecordedRoadMap(
                             onRetry = { retry++ }, modifier = Modifier.fillMaxSize())
                     }
                 }
-                if (geometry.points.isEmpty()) Text(label("No recorded GPS points", "没有已记录的 GPS 点"), Modifier.align(Alignment.Center))
+                if (geometry.points.isEmpty()) Text(label("No GPS route available", "没有可用的 GPS 路线"), Modifier.align(Alignment.Center))
                 Surface(Modifier.align(Alignment.CenterEnd).padding(6.dp), shape = MaterialTheme.shapes.small,
                     color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
                     Column {
@@ -158,6 +169,13 @@ private fun NativeRoadSurface(
     }
     if (error == null) {
         AndroidView(factory = { context -> object : FrameLayout(context) {
+            override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+                    val delta = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                    if (delta != 0f) { gesture(); controller.zoom(delta > 0f); return true }
+                }
+                return super.dispatchGenericMotionEvent(event)
+            }
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 // Keep map pan/pinch gestures inside the map instead of the surrounding details scroller.
                 if (event.actionMasked == MotionEvent.ACTION_DOWN) parent?.requestDisallowInterceptTouchEvent(true)

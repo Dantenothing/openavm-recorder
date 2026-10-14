@@ -172,21 +172,25 @@ internal class ContinuousTrackFormatException(val errorCode: String, val fields:
     IllegalStateException(errorCode)
 internal data class ContinuousFormatObservation(val notificationCount: Long = 0, val compatibleRepeats: Long = 0,
                                                 val decision: String = "NOT_RECEIVED",
-                                                val fields: List<ContinuousTrackFieldEvidence> = emptyList())
+                                                val fields: List<ContinuousTrackFieldEvidence> = emptyList(),
+                                                val discardedTransitionFrames: Long = 0)
 
-/** Codec-worker state. Strict by default; only direct cabin recording opts into an existing cut. */
+/** Codec-worker state. Strict by default; direct cabin recording can request its own safe cut. */
 internal class ContinuousTrackFormatState {
     private var first: ContinuousTrackFormatSpec? = null
-    private var pending: ContinuousTrackFormatSpec? = null
+    @Volatile private var pending: ContinuousTrackFormatSpec? = null
+    private var independentRollover = false
+    val hasPendingBoundary: Boolean get() = pending != null
     var discardTerminalMedia = false; private set
     @Volatile private var observation = ContinuousFormatObservation()
     fun snapshot(): ContinuousFormatObservation = observation
 
-    fun accept(spec: ContinuousTrackFormatSpec, cutPending: Boolean = false, terminal: Boolean = false): ContinuousFormatDecision {
+    fun accept(spec: ContinuousTrackFormatSpec, cutPending: Boolean = false, terminal: Boolean = false,
+               allowIndependentRollover: Boolean = false): ContinuousFormatDecision {
         observation = observation.copy(notificationCount = observation.notificationCount + 1)
         if (terminal) cancelPending()
         pending?.let { candidate ->
-            if (!cutPending || !candidate.compatibleWith(spec)) reject(candidate.differences(spec))
+            if ((!cutPending && !independentRollover) || !candidate.compatibleWith(spec)) reject(candidate.differences(spec))
             pending = candidate.includingHintsFrom(spec)
             observation = observation.copy(compatibleRepeats = observation.compatibleRepeats + 1, decision = "ROLLOVER_PENDING")
             return ContinuousFormatDecision.KEEP
@@ -205,9 +209,10 @@ internal class ContinuousTrackFormatState {
                 observation = observation.copy(decision = "INCOMPATIBLE", fields = differences)
                 return ContinuousFormatDecision.DISCARD_TERMINAL
             }
-            if (!cutPending || !previous.sameLayoutAs(spec)) reject(differences)
+            if ((!cutPending && !allowIndependentRollover) || !previous.sameLayoutAs(spec)) reject(differences)
+            independentRollover = allowIndependentRollover
             pending = spec
-            observation = observation.copy(decision = "ROLLOVER_PENDING", fields = differences)
+            observation = observation.copy(decision = "ROLLOVER_PENDING", fields = differences, discardedTransitionFrames = 0)
             return ContinuousFormatDecision.STAGE_ROLLOVER
         }
         first = previous.includingHintsFrom(spec)
@@ -216,8 +221,14 @@ internal class ContinuousTrackFormatState {
     }
 
     /** Must run before a planner could drop a non-keyframe or mutate its cut request. */
-    fun beforeMediaSample(keyframe: Boolean) {
-        if (pending != null && !keyframe) rejectTransition()
+    fun beforeMediaSample(keyframe: Boolean, boundaryReady: Boolean = true): Boolean {
+        if (pending != null && (!keyframe || !boundaryReady)) {
+            // The new contract is already in effect. These frames cannot enter the old track,
+            // nor start an independently decodable new file. The owner bounds this wait.
+            observation = observation.copy(discardedTransitionFrames = observation.discardedTransitionFrames + 1)
+            return false
+        }
+        return true
     }
     fun commitBoundary(cutBefore: Boolean): Boolean {
         val candidate = pending ?: return false

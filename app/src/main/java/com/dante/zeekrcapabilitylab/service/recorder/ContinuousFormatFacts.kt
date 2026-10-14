@@ -9,13 +9,15 @@ internal object ContinuousFormatFacts {
         "COLOR_RANGE", "COLOR_TRANSFER", "ROTATION", "CROP_LEFT", "CROP_TOP", "CROP_RIGHT", "CROP_BOTTOM",
         "SAR_WIDTH", "SAR_HEIGHT", "FORMAT_KEYS", "FORMAT_COPY", "FORMAT_TRANSITION") + (0..7).map { "CSD_$it" }
     val kinds = setOf("CHANGED", "MISSING", "TYPE_MISMATCH", "EMPTY", "INVALID", "OUT_OF_RANGE", "COPY_FAILED")
-    private val counts = setOf("formatNotifications", "formatCompatibleRepeats", "formatObservedElapsedMs", "formatFieldsOmitted")
+    private val counts = setOf("formatNotifications", "formatCompatibleRepeats", "formatObservedElapsedMs", "formatFieldsOmitted",
+        "formatDiscardedTransitionFrames")
     val keys = counts + setOf("formatDecision", "formatCutPending") + fields.map { "formatField_$it" }
 
     fun observation(value: ContinuousFormatObservation, cutPending: Boolean?, elapsedMs: Long): Map<String, String> =
         sanitize(mapOf("formatDecision" to value.decision, "formatNotifications" to value.notificationCount.toString(),
             "formatCompatibleRepeats" to value.compatibleRepeats.toString(), "formatObservedElapsedMs" to elapsedMs.toString(),
-            "formatCutPending" to (cutPending?.toString() ?: "UNKNOWN")) + differences(value.fields))
+            "formatCutPending" to (cutPending?.toString() ?: "UNKNOWN"),
+            "formatDiscardedTransitionFrames" to value.discardedTransitionFrames.toString()) + differences(value.fields))
 
     fun differences(values: List<ContinuousTrackFieldEvidence>): Map<String, String> {
         val selected = values.asSequence().filter { it.field in fields && it.kind in kinds }

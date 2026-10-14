@@ -16,9 +16,15 @@ object CanaryCameraInterlock {
         return true
     }
     /** All-or-nothing group reservation. No partially reserved camera set is observable. */
-    @Synchronized fun beginNormalGroup(tokens: Map<Any, String>): Boolean {
+    @Synchronized fun beginNormalGroup(tokens: Map<Any, String>, retained: Set<Any> = emptySet()): Boolean {
         if (tokens.size !in 2..3 || tokens.values.any(String::isBlank) || tokens.values.distinct().size != tokens.size ||
-            canaryToken != null || normalGroup != null || !normalIdle()) return false
+            canaryToken != null || cleanup.isNotEmpty()) return false
+        // A retained connection remains a real native owner. Reuse its exact token;
+        // every other member of the previous group must have actually closed.
+        if (retained.isEmpty()) {
+            if (normalGroup != null || !normalIdle()) return false
+        } else if (retained.size != 1 || retained.any { tokens[it] == null || normalOpens[it] != tokens[it] } ||
+            normalOpens.keys != retained) return false
         normalGroup = tokens.keys.toSet(); normalOpens.putAll(tokens); return true
     }
     @Synchronized fun ownsNormalReservation(token: Any, id: String) = normalOpens[token] == id
@@ -29,6 +35,8 @@ object CanaryCameraInterlock {
     @Synchronized fun beginCleanup(token: Any, cameraId: String) { cleanup[token] = cameraId }
     @Synchronized fun cleanupComplete(token: Any) { cleanup.remove(token) }
     @Synchronized fun normalIdle(): Boolean = normalOpens.isEmpty() && cleanup.isEmpty()
+    @Synchronized fun normalIdleExcept(retained: Any): Boolean =
+        canaryToken == null && cleanup.isEmpty() && normalOpens.keys == setOf(retained)
     @Synchronized fun cameraIdle(cameraId: String): Boolean = cameraId !in normalOpens.values && cameraId !in cleanup.values
     @Synchronized fun reserveCanary(token: Any): Boolean {
         if (canaryToken != null || !normalIdle()) return false

@@ -36,8 +36,8 @@ fun RecordingChannelSettings() {
                 Switch(rear, { rear = it; settings.setRecordRearCabin(it) }, enabled = !busy,
                     modifier = Modifier.testTag("record-rear-cabin"))
             }
-            Text(Utils.t("Cabin streams use a camera-declared size up to 720p, requesting 15 fps and 2–4 Mb/s each. Saved internally under your quota; surround keeps your storage choice. Older recordings keep their original quality. Unsupported channels stop independently. Time-lapse uses only its selected camera.",
-                "车内每路使用相机支持的分辨率，最高 720p，请求 15 帧及 2–4 Mb/s，保存到内部存储并遵守容量上限；环视沿用所选存储。旧录像保持原有画质。不可用通道独立停止。延时录像仅录制所选相机。"), style = MaterialTheme.typography.bodySmall)
+            Text(Utils.t("Cabin streams use a camera-declared size up to 720p, requesting 15 fps and 2–4 Mb/s each. All channels use the main recording's destination and quota. If a running camera or its storage fails, the recording group stops together; completed files remain available. Existing recordings stay in their original location. Time-lapse uses only its selected camera.",
+                "车内每路使用相机支持的分辨率，最高 720p，请求 15 帧及 2–4 Mb/s。所有通道使用主录像的存储位置和容量上限。录像中的相机或存储发生故障时，整组停止，已完成的文件仍可查看。已有录像保留在原位置。延时录像仅录制所选相机。"), style = MaterialTheme.typography.bodySmall)
             if (busy) Text(Utils.t("Stop recording before changing channels.", "停止录像后可修改通道。"), style = MaterialTheme.typography.bodySmall)
             RecordingChannelStatus()
         }
@@ -76,7 +76,7 @@ fun RecordingChannelStatus(modifier: Modifier = Modifier) {
             channel.errorCode?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         }
         if (channels.any { it.status in setOf("UNAVAILABLE", "INTERRUPTED") && !it.cleanupUnconfirmed })
-            Text(Utils.t("Stop recording, check camera settings and storage, then start again. If it repeats, copy the test report.",
-                "停止录像，检查相机设置和存储后再开始；若再次发生，请复制测试报告。"), style = MaterialTheme.typography.bodySmall)
+            Text(Utils.t("Check camera settings and storage before starting again. If it repeats, use Settings → Recording diagnostics → Export diagnostics file.",
+                "重新开始前请检查相机设置和存储；若再次发生，请在“设置 → 录像诊断”中导出诊断文件。"), style = MaterialTheme.typography.bodySmall)
     }
 }

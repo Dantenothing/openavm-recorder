@@ -72,7 +72,8 @@ class RecordingStatusOverlay(private val context: Context) {
         if (!show) { remove(); return }
         if (root == null) add()
         val label = switching?.let(RecordingModeOverlayMenu::progressLabel) ?: when (state.status) {
-            RecorderStatus.RECORDING -> RecordingModeOverlayMenu.label(state.recordingMode, state.timeLapseMultiplier)
+            RecorderStatus.RECORDING -> if (state.videoFlowConfirmed) RecordingModeOverlayMenu.label(state.recordingMode, state.timeLapseMultiplier)
+                else Utils.t("Waiting for camera frames…", "正在等待相机画面…")
             RecorderStatus.FINALIZING -> Utils.t("Saving", "正在保存")
             RecorderStatus.STARTING -> Utils.t("Preparing", "正在准备")
             RecorderStatus.RESUMING -> Utils.t("Recovering recording", "正在恢复录像")
@@ -85,7 +86,7 @@ class RecordingStatusOverlay(private val context: Context) {
             lastIncident = state.incidentMessage
             android.widget.Toast.makeText(context, state.incidentMessage, android.widget.Toast.LENGTH_LONG).show()
         }
-        status?.setTextColor(if (switching == null && state.status == RecorderStatus.RECORDING) Color.rgb(157, 231, 188) else Color.rgb(255, 204, 128))
+        status?.setTextColor(if (switching == null && state.status == RecorderStatus.RECORDING && state.videoFlowConfirmed) Color.rgb(157, 231, 188) else Color.rgb(255, 204, 128))
         modeButton?.isEnabled = RecordingModeOverlayMenu.available()
         bookmarkButton?.isEnabled = switching == null && state.status == RecorderStatus.RECORDING &&
             state.recordingMode == com.dante.zeekrcapabilitylab.service.recorder.RecordingMode.NORMAL

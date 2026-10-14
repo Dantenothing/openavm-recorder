@@ -27,6 +27,8 @@ class V5PublicUiAndroidTest {
     @Before fun prepare() {
         assumeTrue(android.os.Build.HARDWARE == "ranchu")
         assertTrue("V5 return feature must ship in a default build", BuildConfig.MIRROR_RETURN_ENABLED)
+        assertTrue("Public releases preserve the field-tested camera handoff", BuildConfig.RETAINED_CAMERA_HANDOFF_ENABLED)
+        assertFalse("Public releases do not enable private remote support", BuildConfig.RECORDER_SUPPORT_ENABLED)
         assertFalse("Run with -PpublicUiCheck=true", BuildConfig.EXPERIMENTAL_TOOLS_ENABLED)
         compose.runOnIdle {
             FloatingMirrorService.close()
@@ -50,7 +52,7 @@ class V5PublicUiAndroidTest {
                 compose.onAllNodesWithText("Copy sleep check report").assertCountEquals(0)
                 capture("${language.storedValue}-${en.substringBefore(' ').lowercase()}")
             }
-            compose.onNodeWithText(AppLanguage.text("When you return", "回车后的行为")).assertIsDisplayed()
+            compose.onNodeWithText(AppLanguage.text("Return, recording & playback", "回车、录像与回放")).performScrollTo().assertIsDisplayed()
             compose.onNodeWithText(AppLanguage.text("About & privacy", "关于与隐私")).performScrollTo()
             compose.onNodeWithText(AppLanguage.text("Check for updates", "检查更新")).performScrollTo().assertIsDisplayed()
             compose.onNodeWithText(AppLanguage.text("Include Beta releases", "包含 Beta 测试版")).assertDoesNotExist()
@@ -58,19 +60,19 @@ class V5PublicUiAndroidTest {
             capture("${language.storedValue}-about")
         }
     }
-    @Test fun sevenGuidePagesRemainNavigableInEveryLanguage() {
+    @Test fun eightGuidePagesRemainNavigableInEveryLanguage() {
         var session by mutableIntStateOf(0)
         var closed = false
         compose.setContent { ZeekrCapabilityLabTheme { key(session) { QuickStartGuide { closed = true } } } }
         languages.forEach { language ->
             compose.runOnIdle { AppLanguage.setMode(context, language); session++; closed = false }
-            repeat(7) { page ->
-                compose.onNodeWithText("${page + 1} / 7").assertIsDisplayed()
+            repeat(8) { page ->
+                compose.onNodeWithText("${page + 1} / 8").assertIsDisplayed()
                 if (page == 3) {
                     compose.onNodeWithText(AppLanguage.text("4 · When you return", "4 · 回车后自动恢复")).assertIsDisplayed()
                     capture("${language.storedValue}-guide-return")
                 }
-                compose.onNodeWithText(AppLanguage.text(if (page == 6) "Done" else "Next", if (page == 6) "完成" else "下一步")).performClick()
+                compose.onNodeWithText(AppLanguage.text(if (page == 7) "Done" else "Next", if (page == 7) "完成" else "下一步")).performClick()
             }
             compose.runOnIdle { assertTrue(closed) }
         }
@@ -82,13 +84,19 @@ class V5PublicUiAndroidTest {
         compose.setContent { ZeekrCapabilityLabTheme { key(session) { MirrorReturnSetupDialog(store, true, {}, {}) } } }
         languages.forEach { language ->
             compose.runOnIdle { AppLanguage.setMode(context, language); session++ }
-            compose.onNodeWithTag("return-save").assertIsDisplayed()
+            compose.onNodeWithTag("return-next").assertIsDisplayed()
             compose.onNodeWithTag("return-cancel").assertIsDisplayed()
             compose.onNodeWithTag("return-auto-record").performScrollTo().assertIsOff()
             capture("${language.storedValue}-return-full")
+            compose.onNodeWithTag("return-next").performClick()
+            listOf("setup-cabin", "setup-infrared", "setup-vehicle-hud", "setup-gps-route", "setup-playback-map")
+                .forEach { compose.onNodeWithTag(it).performScrollTo().assertIsDisplayed() }
+            compose.onNodeWithTag("return-save").assertIsDisplayed()
+            capture("${language.storedValue}-recording-choices")
+            compose.onNodeWithTag("return-back").performClick()
             compose.onNodeWithTag("return-retain").performScrollTo().performClick()
             compose.onNodeWithTag("return-retain").assertIsOff()
-            compose.onNodeWithTag("return-save").assertIsDisplayed()
+            compose.onNodeWithTag("return-next").assertIsDisplayed()
         }
     }
     private fun capture(name: String) {

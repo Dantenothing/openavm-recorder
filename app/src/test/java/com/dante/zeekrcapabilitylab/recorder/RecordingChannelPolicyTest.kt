@@ -13,6 +13,32 @@ class RecordingChannelPolicyTest {
         segmentSeconds = 60, storageLimitBytes = 15L * 1024 * 1024 * 1024,
         auxiliaryChannels = listOf(RecordingSourceRole.CABIN, RecordingSourceRole.IR))
 
+    @Test fun cabinAndInfraredFollowThePrimaryActualStorage() {
+        for (role in listOf(RecordingSourceRole.CABIN, RecordingSourceRole.IR)) {
+            val primary = config().copy(storagePreference = RecordingStoragePreference.USB_PREFERRED)
+            val source = primary.source.copy(sourceRole = role, cameraId = if (role == RecordingSourceRole.CABIN) "1" else "0")
+            val profile = CameraFormatProfile(ProfileSize(1280, 720), 4_000_000)
+            val usb = RecordingChannelPolicy.configuration(primary, source, profile, RecordingStorageKind.USB_MEDIASTORE)
+            assertEquals(RecordingStoragePreference.USB_PREFERRED, usb.storagePreference)
+            assertEquals(role, usb.source.sourceRole)
+            assertEquals(profile, usb.profile)
+            assertTrue(usb.auxiliaryChannels.isEmpty())
+            assertFalse(usb.mirrorPreviewEnabled)
+            assertEquals(primary.usbQuotaBytes, usb.usbQuotaBytes)
+            assertEquals(RecordingStoragePreference.INTERNAL_ONLY,
+                RecordingChannelPolicy.configuration(primary, source, profile, RecordingStorageKind.INTERNAL).storagePreference)
+        }
+    }
+
+    @Test fun simultaneousUsbChannelsNeverShareTheSameFileIdentity() {
+        val ids = RecordingChannelId.all.map { channel ->
+            com.dante.zeekrcapabilitylab.usbexport.UsbExportPolicy.bundleId(session, 1, 1000, channel)
+        }
+        assertEquals(3, ids.toSet().size)
+        val legacy = com.dante.zeekrcapabilitylab.usbexport.UsbExportPolicy.bundleId(session, 1, 1000)
+        assertEquals(legacy, ids.first())
+    }
+
     @Test fun optionalChannelsOnlyApplyToNormalSurroundStarts() {
         val cfg = config()
         assertEquals(listOf(RecordingSourceRole.CABIN, RecordingSourceRole.IR), RecordingChannelPolicy.roles(cfg))

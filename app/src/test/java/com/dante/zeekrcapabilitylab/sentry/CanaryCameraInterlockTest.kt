@@ -7,6 +7,29 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class CanaryCameraInterlockTest {
+    @Test fun retainedPrimaryCanJoinNewCabinGroupOnlyAfterPreviousAuxiliaryActuallyCloses() {
+        val primary = Any(); val oldCabin = Any(); val newCabin = Any(); val cleanup = Any(); val canary = Any()
+        try {
+            assertTrue(CanaryCameraInterlock.beginNormalGroup(mapOf(primary to "2", oldCabin to "1")))
+            assertFalse(CanaryCameraInterlock.normalIdleExcept(primary))
+            assertFalse(CanaryCameraInterlock.beginNormalGroup(mapOf(primary to "2", newCabin to "1"), setOf(primary)))
+            CanaryCameraInterlock.beginCleanup(cleanup, "1")
+            CanaryCameraInterlock.normalClosed(oldCabin)
+            assertFalse(CanaryCameraInterlock.normalIdleExcept(primary))
+            assertFalse(CanaryCameraInterlock.beginNormalGroup(mapOf(primary to "2", newCabin to "1"), setOf(primary)))
+            CanaryCameraInterlock.cleanupComplete(cleanup)
+            assertTrue(CanaryCameraInterlock.normalIdleExcept(primary))
+            assertFalse(CanaryCameraInterlock.normalIdle())
+            assertFalse(CanaryCameraInterlock.reserveCanary(canary))
+            assertFalse(CanaryCameraInterlock.beginNormalGroup(mapOf(primary to "0", newCabin to "1"), setOf(primary)))
+            assertTrue(CanaryCameraInterlock.beginNormalGroup(mapOf(primary to "2", newCabin to "1"), setOf(primary)))
+            CanaryCameraInterlock.normalClosed(oldCabin) // Late old callback cannot clear the new member.
+            assertTrue(CanaryCameraInterlock.ownsNormalReservation(newCabin, "1"))
+        } finally {
+            listOf(primary, oldCabin, newCabin).forEach(CanaryCameraInterlock::normalClosed)
+            CanaryCameraInterlock.cleanupComplete(cleanup); CanaryCameraInterlock.canaryClosed(canary)
+        }
+    }
     @Test fun deviceAckDoesNotClearUnsettledRecorderOwnership() {
         val open = Any(); val cleanup = Any(); val next = Any()
         try {

@@ -44,6 +44,7 @@ internal class ProductContinuousRecorder(
     private val onPreviewUnavailable: (ProductContinuousRecorder, String) -> Unit,
 ) : RecordingEncoder {
     override val name = "SHARED_INPUT_CONTINUOUS_CODEC"
+    @Volatile internal var closeTrace: (String) -> Unit = {}
     override val surface get() = requireNotNull(gl).surface
     val raster = RASTER
     @Volatile var started = false; private set
@@ -57,6 +58,8 @@ internal class ProductContinuousRecorder(
     private var writerLaunched = false
     private val ready = CountDownLatch(1)
     private val writerEnded = CountDownLatch(1)
+    private val inputProducerEnded = CountDownLatch(1)
+    private val codecDrainFinished = CountDownLatch(1)
     private val failure = AtomicReference<Throwable?>()
     private val queue = BoundedEncodedQueue<Item>(32L * 1024 * 1024, 300)
     private val finalizer = RecordingFileFinalizer(SystemClock::elapsedRealtime)
@@ -221,14 +224,15 @@ internal class ProductContinuousRecorder(
                             val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                             val placement = planner.accept(info.presentationTimeUs, key)
                             if (placement != null) {
-                                if (placement.cutBefore) {
+                                val boundary: (() -> Item)? = if (placement.cutBefore) {
                                     cutProgress.keyAccepted(SystemClock.elapsedRealtime())
-                                    check(queue.offer(0) { Item.Cut(info.presentationTimeUs) }) { "PRODUCT_WRITER_QUEUE_FULL" }
-                                }
+                                    val cutPts = info.presentationTimeUs
+                                    { Item.Cut(cutPts) }
+                                } else null
                                 val source = requireNotNull(active.getOutputBuffer(index)).duplicate().apply {
                                     position(info.offset); limit(info.offset + info.size)
                                 }
-                                check(queue.offer(info.size) {
+                                check(offerContinuousSample(queue, info.size, boundary) {
                                     Item.Frame(ByteArray(info.size).also { source.get(it) }, info.presentationTimeUs,
                                         placement.ptsUs, info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv())
                                 }) { "PRODUCT_WRITER_QUEUE_FULL" }
@@ -245,12 +249,13 @@ internal class ProductContinuousRecorder(
         finally {
             ready.countDown()
             // Never destroy the codec input while its GL producer may still be submitting.
-            while (!ending) Thread.sleep(2)
+            inputProducerEnded.await()
             try {
                 if (running) runCatching { codec?.stop() }.onFailure { fail(it, ContinuousFailureStage.CODEC_CLEANUP) }
                 codec?.release(); codec = null; codecReleased = true
             } catch (error: Throwable) { fail(error, ContinuousFailureStage.CODEC_CLEANUP) }
             drainEnded = true
+            codecDrainFinished.countDown()
         }
     }
 
@@ -264,6 +269,9 @@ internal class ProductContinuousRecorder(
     private fun writeLoop() {
         try {
             while (true) {
+                // A failed run no longer admits/writes samples. Retain its bounded queue and
+                // outputs until the real input/codec fences, without polling an empty queue.
+                if (failure.get() != null) break
                 finalizer.failure?.let { throw it }
                 finalizer.problem()?.let { error(it.code) }
                 requestedNext.getAndSet(null)?.let { check(next == null); next = it }
@@ -306,7 +314,8 @@ internal class ProductContinuousRecorder(
         } catch (error: Throwable) { fail(error, ContinuousFailureStage.FILE_WRITER) }
         finally {
             // Keep the ownership graph intact if native release is blocked or throws.
-            while (!ending || !drainEnded) Thread.sleep(2)
+            inputProducerEnded.await()
+            codecDrainFinished.await()
             queue.clear()
             requestedNext.getAndSet(null)?.let { check(next == null); next = it }
             try {
@@ -369,10 +378,17 @@ internal class ProductContinuousRecorder(
     /** Called only after Camera2's producer acknowledgement, also on partial startup failure. */
     override fun stop() {
         prepareForStop()
-        if (!glStopped) { gl?.stopAfterCameraFence(); glStopped = true }
+        if (!glStopped) {
+            closeTrace("INPUT_STOP_ENTER")
+            gl?.stopAfterCameraFence(); glStopped = true
+            closeTrace("INPUT_STOP_RETURN")
+        }
         endPtsUs = (gl?.lastSubmittedPtsUs ?: -1).coerceAtLeast(0) + 1_000_000L / (config?.requestedFrameRate ?: 30)
         ending = true
-        if (codecLaunched) codecThread.join(4_000) else { codecReleased = true; drainEnded = true }
+        inputProducerEnded.countDown()
+        if (codecLaunched) codecThread.join(4_000) else {
+            codecReleased = true; drainEnded = true; codecDrainFinished.countDown()
+        }
         if (writerLaunched) check(writerEnded.await(10, TimeUnit.SECONDS)) { "PRODUCT_WRITER_STOP_UNCONFIRMED" }
         checkHealthy()
     }
@@ -385,7 +401,9 @@ internal class ProductContinuousRecorder(
         observerStopped = true
         if (observerLaunched) observerThread.join(500)
         check(!observerThread.isAlive) { "PRODUCT_WATCHDOG_RELEASE_UNCONFIRMED" }
+        closeTrace("CODEC_INPUT_RELEASE_ENTER")
         codecInput?.release(); codecInput = null
+        closeTrace("CODEC_INPUT_RELEASE_RETURN")
     }
     fun evidence(): EncoderEvidence = queue.snapshot().let { (bytes, items) ->
         val observedFormat = trackFormatState.snapshot()
